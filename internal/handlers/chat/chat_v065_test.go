@@ -6,6 +6,7 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"9router/proxy/internal/db"
@@ -117,6 +118,59 @@ func TestHandleModels_CustomModels(t *testing.T) {
 	}
 	// Cleanup
 	providers.ClearCustomModelCaps()
+}
+
+func TestHandleModels_MapsProviderNodeRowIDToPrefix(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+
+	// Seed providerNode with row ID "openai-compatible-chat-0489217b" and prefix "nara"
+	nodeData := `{"prefix":"nara","apiType":"openai-compatible","baseUrl":"https://nara.example.com/v1"}`
+	_, err := database.Exec(`INSERT INTO providerNodes (id, type, name, data, createdAt, updatedAt) VALUES
+		('openai-compatible-chat-0489217b', 'openai-compatible', 'Nara AI', ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`, nodeData)
+	if err != nil {
+		t.Fatalf("seed providerNode: %v", err)
+	}
+
+	// Seed customModel in kv with providerAlias set to internal node ID
+	customJSON := `{"providerAlias":"openai-compatible-chat-0489217b","id":"glm-5.3","type":"chat","name":"GLM 5.3","caps":{"vision":true}}`
+	_, err = database.Exec(`INSERT INTO kv (scope, key, value) VALUES ('customModels', 'openai-compatible-chat-0489217b|glm-5.3|chat', ?)`, customJSON)
+	if err != nil {
+		t.Fatalf("seed customModels: %v", err)
+	}
+
+	repo := db.NewRepo(database)
+	handler := NewChatHandler(repo)
+
+	// 1. Verify GET /v1/models publishes "nara/glm-5.3" and NOT internal row ID
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	w := httptest.NewRecorder()
+	handler.HandleModels(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"id":"nara/glm-5.3"`) {
+		t.Errorf("expected mapped model id 'nara/glm-5.3', got %s", body)
+	}
+	if strings.Contains(body, "openai-compatible-chat-0489217b/glm-5.3") {
+		t.Errorf("leaked internal node row id in /v1/models: %s", body)
+	}
+	if !strings.Contains(body, `"owned_by":"nara"`) {
+		t.Errorf("expected owned_by 'nara', got %s", body)
+	}
+
+	// 2. Verify GET /v1/models/nara/glm-5.3 succeeds
+	reqLookup := httptest.NewRequest("GET", "/v1/models/nara/glm-5.3", nil)
+	wLookup := httptest.NewRecorder()
+	handler.HandleModelLookup(wLookup, reqLookup)
+	if wLookup.Code != http.StatusOK {
+		t.Fatalf("expected 200 for lookup nara/glm-5.3, got %d: %s", wLookup.Code, wLookup.Body.String())
+	}
+	lookupBody := wLookup.Body.String()
+	if !strings.Contains(lookupBody, `"id":"nara/glm-5.3"`) {
+		t.Errorf("expected lookup id 'nara/glm-5.3', got %s", lookupBody)
+	}
 }
 
 func TestAntigravityQuota_StrikeReassert(t *testing.T) {

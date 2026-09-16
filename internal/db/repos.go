@@ -246,6 +246,30 @@ func (r *Repo) GetProviderNodeByPrefix(prefix string) (*models.ProviderNode, *Pr
 	return nil, nil, nil
 }
 
+// GetProviderNodePrefixMap returns a mapping of providerNode.id -> prefix from the data JSON.
+func (r *Repo) GetProviderNodePrefixMap() (map[string]string, error) {
+	rows, err := r.db.Query("SELECT id, data FROM providerNodes")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	prefixMap := make(map[string]string)
+	for rows.Next() {
+		var id, data string
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		if nd := parseProviderNodeData(data); nd != nil && nd.Prefix != "" {
+			prefixMap[id] = nd.Prefix
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return prefixMap, nil
+}
+
 // parseProviderNodeData extracts the JSON-encoded data field from a providerNode row.
 func parseProviderNodeData(raw string) *ProviderNodeData {
 	if raw == "" {
@@ -339,13 +363,28 @@ func (r *Repo) GetCustomModels() ([]*CustomModel, error) {
 			return nil, err
 		}
 		var cm CustomModel
-		if err := json.Unmarshal([]byte(raw), &cm); err != nil {
-			continue
+		_ = json.Unmarshal([]byte(raw), &cm)
+
+		// Fallback parse from key if fields are missing in JSON value:
+		// key format in Next.js: <providerAlias>|<modelId>|<kind> or <providerAlias>/<modelId>/<kind>
+		if cm.ProviderAlias == "" || cm.ID == "" {
+			parts := strings.Split(key, "|")
+			if len(parts) < 2 {
+				parts = strings.Split(key, "/")
+			}
+			if len(parts) >= 2 {
+				if cm.ProviderAlias == "" {
+					cm.ProviderAlias = parts[0]
+				}
+				if cm.ID == "" {
+					cm.ID = parts[1]
+				}
+				if cm.Type == "" && len(parts) >= 3 {
+					cm.Type = parts[2]
+				}
+			}
 		}
-		// Only LLM custom models are routable (matches Next.js filtering)
-		if cm.Type != "" && cm.Type != "llm" {
-			continue
-		}
+
 		if cm.ID == "" || cm.ProviderAlias == "" {
 			continue
 		}

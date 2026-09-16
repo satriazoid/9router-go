@@ -335,6 +335,12 @@ func (h *ChatHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load providerNode prefix mapping to translate internal node IDs to user-configured prefixes
+	var prefixMap map[string]string
+	if h.Repo != nil {
+		prefixMap, _ = h.Repo.GetProviderNodePrefixMap()
+	}
+
 	// Include custom models with live caps (port of Next.js GET /api/models customModels merge)
 	if customs, err := h.Repo.GetCustomModels(); err == nil {
 		seen := make(map[string]bool, len(data))
@@ -342,11 +348,18 @@ func (h *ChatHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			seen[m.ID] = true
 		}
 		for _, cm := range customs {
-			fullModel := cm.ProviderAlias + "/" + cm.ID
+			prefix := cm.ProviderAlias
+			if mapped, ok := prefixMap[cm.ProviderAlias]; ok && mapped != "" {
+				prefix = mapped
+			}
+			fullModel := prefix + "/" + cm.ID
 			if seen[fullModel] {
 				continue
 			}
 			ctxLen, maxOut := providers.GetModelTokenLimits(fullModel)
+			if ctxLen == 0 && maxOut == 0 {
+				ctxLen, maxOut = providers.GetModelTokenLimits(cm.ID)
+			}
 			// Apply custom caps to provider registry for capability detection
 			if len(cm.Caps) > 0 {
 				var caps providers.Capabilities
@@ -368,14 +381,16 @@ func (h *ChatHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 				if cm.Caps["audio"] {
 					caps.AudioInput = true
 				}
-				providers.SetCustomModelCaps(cm.ProviderAlias, cm.ID, caps)
-				// If custom caps enable vision/reasoning, reflect in token limits display? Keep as is.
+				providers.SetCustomModelCaps(prefix, cm.ID, caps)
+				if prefix != cm.ProviderAlias {
+					providers.SetCustomModelCaps(cm.ProviderAlias, cm.ID, caps)
+				}
 			}
 			data = append(data, modelObj{
 				ID:                  fullModel,
 				Object:              "model",
 				Created:             now,
-				OwnedBy:             cm.ProviderAlias,
+				OwnedBy:             prefix,
 				ContextLength:       ctxLen,
 				ContextWindow:       ctxLen,
 				MaxCompletionTokens: maxOut,
@@ -599,17 +614,28 @@ func (h *ChatHandler) HandleModelLookup(w http.ResponseWriter, r *http.Request) 
 			})
 		}
 	}
+	var lookupPrefixMap map[string]string
+	if h.Repo != nil {
+		lookupPrefixMap, _ = h.Repo.GetProviderNodePrefixMap()
+	}
 	if customs, err := h.Repo.GetCustomModels(); err == nil {
 		seen := make(map[string]bool, len(data))
 		for _, m := range data {
 			seen[m.ID] = true
 		}
 		for _, cm := range customs {
-			fullModel := cm.ProviderAlias + "/" + cm.ID
+			prefix := cm.ProviderAlias
+			if mapped, ok := lookupPrefixMap[cm.ProviderAlias]; ok && mapped != "" {
+				prefix = mapped
+			}
+			fullModel := prefix + "/" + cm.ID
 			if seen[fullModel] {
 				continue
 			}
 			ctxLen, maxOut := providers.GetModelTokenLimits(fullModel)
+			if ctxLen == 0 && maxOut == 0 {
+				ctxLen, maxOut = providers.GetModelTokenLimits(cm.ID)
+			}
 			if len(cm.Caps) > 0 {
 				var caps providers.Capabilities
 				if cm.Caps["vision"] {
@@ -624,13 +650,16 @@ func (h *ChatHandler) HandleModelLookup(w http.ResponseWriter, r *http.Request) 
 				if cm.Caps["tools"] {
 					caps.Tools = true
 				}
-				providers.SetCustomModelCaps(cm.ProviderAlias, cm.ID, caps)
+				providers.SetCustomModelCaps(prefix, cm.ID, caps)
+				if prefix != cm.ProviderAlias {
+					providers.SetCustomModelCaps(cm.ProviderAlias, cm.ID, caps)
+				}
 			}
 			data = append(data, modelObj{
 				ID:                  fullModel,
 				Object:              "model",
 				Created:             now,
-				OwnedBy:             cm.ProviderAlias,
+				OwnedBy:             prefix,
 				ContextLength:       ctxLen,
 				MaxCompletionTokens: maxOut,
 			})
