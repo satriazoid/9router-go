@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.8.12",
+  "latestVersion": "1.8.13",
   "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.8.12: Freebuff executor with session caching and run tracking, Cline/Clinepass OAuth refresh overhaul (/api/v1/auth/refresh endpoint migration, CLI identity headers, token rotation, reactive 401 normalization), Zero-Sleep failover on transient combo errors, Canonical model locking for shared tier quotas (Antigravity tiered locks), provider connection routing strategies (sticky, round-robin, random), SSECopy [DONE] rolling tail keep-alive stall fix, completed stream usage history guarantees, and Solar Pro / LongCat capabilities."
+  "releaseNotes": "v1.8.13: Fix grok-cli BaseURL endpoint to /v1/responses resolving upstream 404 errors on gcli/* models (fixes #2), prioritize custom providerNodes prefixes over built-in aliases to prevent shadowing of oa/cc/etc. (fixes #3), map internal providerNode row IDs to user-configured prefixes in /v1/models and /v1/models/*, and expand customModels catalog ingestion to include all routable model types with key-fallback parsing."
 }
