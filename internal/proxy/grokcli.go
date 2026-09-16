@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"9router/proxy/internal/providers"
@@ -43,7 +44,13 @@ func ForwardGrokCLI(ctx context.Context, client *http.Client, cfg *providers.Pro
 	}
 	setAuth(headers, cfg, apiKey)
 	streamHeaders(headers, isStream)
-	return DoRequest(ctx, client, "POST", cfg.BaseURL, headers, body)
+	targetURL := cfg.BaseURL
+	if targetURL == "" {
+		targetURL = "https://cli-chat-proxy.grok.com/v1/responses"
+	} else if strings.TrimRight(targetURL, "/") == "https://cli-chat-proxy.grok.com" {
+		targetURL = "https://cli-chat-proxy.grok.com/v1/responses"
+	}
+	return DoRequest(ctx, client, "POST", targetURL, headers, body)
 }
 
 // ForwardCodex forwards to codex / perplexity-agent using OpenAI Responses API format.

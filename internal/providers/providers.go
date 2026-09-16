@@ -401,7 +401,7 @@ var KnownProviders = map[string]ProviderConfig{
 		},
 	},
 	"grok-cli": {
-		BaseURL:    "https://cli-chat-proxy.grok.com",
+		BaseURL:    "https://cli-chat-proxy.grok.com/v1/responses",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
