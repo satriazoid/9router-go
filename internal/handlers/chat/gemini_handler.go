@@ -98,6 +98,9 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 	if err != nil {
 		if uErr, ok := err.(*proxy.UpstreamError); ok {
 			if uErr.StatusCode == http.StatusConflict || uErr.StatusCode == http.StatusTooManyRequests {
+				if dur, ok := extractResetDuration(uErr.Body); ok {
+					BlockAntigravityModelUntil(connectionID, modelName, time.Now().UTC().Add(dur))
+				}
 				HandleAntigravityQuotaError(ctx, h.Client, connectionID, uErr.StatusCode, modelName, apiKey, projectID)
 			}
 		}

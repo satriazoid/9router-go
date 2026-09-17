@@ -98,6 +98,37 @@ func ClearAntigravityQuotaCache() {
 	agWeeklyMu.Unlock()
 }
 
+// BlockAntigravityModelUntil caches an exhausted model quota in memory until resetAt.
+func BlockAntigravityModelUntil(connectionID, model string, resetAt time.Time) {
+	if connectionID == "" || model == "" || resetAt.IsZero() {
+		return
+	}
+	checkModels := []string{model}
+	if canonical, exists := translator.AntigravityModelSynonyms[model]; exists && canonical != model {
+		checkModels = append(checkModels, canonical)
+	}
+	if lockKey := canonicalLockModel("antigravity", model); lockKey != "" && lockKey != model {
+		checkModels = append(checkModels, lockKey)
+	}
+
+	agQuotaMu.Lock()
+	defer agQuotaMu.Unlock()
+	if _, ok := agQuotaCache[connectionID]; !ok {
+		agQuotaCache[connectionID] = make(map[string]AntigravityModelQuota)
+	}
+	for _, m := range checkModels {
+		agQuotaCache[connectionID][m] = AntigravityModelQuota{
+			RemainingPercentage: 0,
+			ResetAt:             resetAt,
+		}
+	}
+	shortConn := connectionID
+	if len(shortConn) > 8 {
+		shortConn = shortConn[:8]
+	}
+	log.Warn("ag_quota", "model locked until reset", "connection", shortConn, "model", model, "resetAt", resetAt.Format(time.RFC3339))
+}
+
 // IsAntigravityModelBlocked reports whether connectionID has an exhausted quota for model until resetAt.
 func IsAntigravityModelBlocked(connectionID, model string) bool {
 	if connectionID == "" || model == "" {

@@ -39,11 +39,11 @@ func TestForwardOpencode(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer public" {
 			t.Errorf("expected Bearer public, got %s", r.Header.Get("Authorization"))
 		}
-		if r.Header.Get("x-opencode-client") != "desktop" {
-			t.Errorf("expected desktop client header, got %s", r.Header.Get("x-opencode-client"))
+		if r.Header.Get("x-opencode-client") != "cli" {
+			t.Errorf("expected cli client header, got %s", r.Header.Get("x-opencode-client"))
 		}
-		if r.Header.Get("x-opencode-project") != "global" {
-			t.Errorf("expected x-opencode-project global, got %s", r.Header.Get("x-opencode-project"))
+		if len(r.Header.Get("x-opencode-project")) != 40 {
+			t.Errorf("expected 40-char hex x-opencode-project, got %s", r.Header.Get("x-opencode-project"))
 		}
 		if !strings.HasPrefix(r.Header.Get("x-opencode-session"), "ses_") {
 			t.Errorf("expected ses_ prefix on x-opencode-session, got %s", r.Header.Get("x-opencode-session"))
@@ -260,5 +260,262 @@ func TestNormalizeMuseSparkResponsesBody_ReasoningAndToolChoice(t *testing.T) {
 	fc, _ := inList[1].(map[string]any)
 	if fc["encrypted_content"] != nil {
 		t.Errorf("expected encrypted_content deleted from function_call, got %v", fc["encrypted_content"])
+	}
+}
+
+func TestEnsureMessagesMaxTokens(t *testing.T) {
+	t.Run("missing max_tokens defaults to 4096", func(t *testing.T) {
+		input := []byte(`{"model":"oc/union-alpha","messages":[{"role":"user","content":"hi"}]}`)
+		out := ensureMessagesMaxTokens(input, "union-alpha")
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["model"] != "union-alpha" {
+			t.Errorf("expected model 'union-alpha', got %v", m["model"])
+		}
+		if m["max_tokens"] != float64(4096) {
+			t.Errorf("expected max_tokens 4096, got %v", m["max_tokens"])
+		}
+	})
+
+	t.Run("max_tokens <= 0 defaults to 4096", func(t *testing.T) {
+		input := []byte(`{"model":"union-alpha","max_tokens":0,"messages":[{"role":"user","content":"hi"}]}`)
+		out := ensureMessagesMaxTokens(input, "union-alpha")
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["max_tokens"] != float64(4096) {
+			t.Errorf("expected max_tokens 4096, got %v", m["max_tokens"])
+		}
+	})
+
+	t.Run("max_completion_tokens used when max_tokens missing", func(t *testing.T) {
+		input := []byte(`{"model":"union-alpha","max_completion_tokens":2048,"messages":[{"role":"user","content":"hi"}]}`)
+		out := ensureMessagesMaxTokens(input, "union-alpha")
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["max_tokens"] != float64(2048) {
+			t.Errorf("expected max_tokens 2048, got %v", m["max_tokens"])
+		}
+	})
+
+	t.Run("existing positive max_tokens preserved", func(t *testing.T) {
+		input := []byte(`{"model":"union-alpha","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}`)
+		out := ensureMessagesMaxTokens(input, "union-alpha")
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["max_tokens"] != float64(1024) {
+			t.Errorf("expected max_tokens 1024, got %v", m["max_tokens"])
+		}
+	})
+}
+
+func TestForwardOpencode_UnionAlpha_InjectsMaxTokens(t *testing.T) {
+	var capturedHeader string
+	var capturedBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/messages") {
+			t.Errorf("expected /messages path, got %s", r.URL.Path)
+		}
+		capturedHeader = r.Header.Get("anthropic-version")
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"msg_ua","type":"message","role":"assistant","content":[{"type":"text","text":"hello from union-alpha"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{BaseURL: srv.URL + "/chat/completions"}
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client: srv.Client(),
+		Config: cfg,
+		APIKey: "test-key",
+		Body:   []byte(`{"model":"ag/union-alpha","messages":[{"role":"user","content":"hi"}]}`),
+		IsStream: false,
+	}
+
+	if err := ForwardOpencode(rec, req); err != nil {
+		t.Fatalf("ForwardOpencode union-alpha failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if capturedHeader != "2023-06-01" {
+		t.Errorf("expected anthropic-version 2023-06-01, got %s", capturedHeader)
+	}
+	if capturedBody["model"] != "union-alpha" {
+		t.Errorf("expected model 'union-alpha', got %v", capturedBody["model"])
+	}
+	if capturedBody["max_tokens"] != float64(4096) {
+		t.Errorf("expected max_tokens 4096 injected, got %v", capturedBody["max_tokens"])
+	}
+}
+
+func TestEnsureMessagesMaxTokens_ConvertsOpenAIToolsAndSystem(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "combo-wombo",
+		"messages": [
+			{"role": "system", "content": "You are a helpful assistant."},
+			{"role": "user", "content": "What is the weather?"}
+		],
+		"tools": [
+			{
+				"type": "function",
+				"function": {
+					"name": "read",
+					"description": "Read file",
+					"parameters": {
+						"type": "object",
+						"properties": {
+							"path": {"type": "string"}
+						},
+						"required": ["path"]
+					}
+				}
+			}
+		],
+		"tool_choice": "auto",
+		"max_completion_tokens": 16384,
+		"stream_options": {"include_usage": true},
+		"store": false,
+		"reasoning_effort": "xhigh"
+	}`)
+
+	out := ensureMessagesMaxTokens(inputJSON, "union-alpha")
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// 1. Model normalized
+	if m["model"] != "union-alpha" {
+		t.Errorf("expected model 'union-alpha', got %v", m["model"])
+	}
+
+	// 2. max_tokens converted from max_completion_tokens
+	if m["max_tokens"] != float64(16384) {
+		t.Errorf("expected max_tokens 16384, got %v", m["max_tokens"])
+	}
+	if _, hasMCT := m["max_completion_tokens"]; hasMCT {
+		t.Error("max_completion_tokens should be stripped")
+	}
+
+	// 3. System prompt extracted to top level
+	if m["system"] != "You are a helpful assistant." {
+		t.Errorf("expected system prompt at top level, got %v", m["system"])
+	}
+
+	// 4. Messages only contains user message
+	msgs, ok := m["messages"].([]any)
+	if !ok || len(msgs) != 1 {
+		t.Fatalf("expected 1 message in messages array, got %v", m["messages"])
+	}
+	m0 := msgs[0].(map[string]any)
+	if m0["role"] != "user" {
+		t.Errorf("expected role 'user', got %v", m0["role"])
+	}
+
+	// 5. Tools converted to Claude format: must have "name" and "input_schema"
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %v", m["tools"])
+	}
+	t0 := tools[0].(map[string]any)
+	if t0["name"] != "read" {
+		t.Errorf("expected tool name 'read', got %v", t0["name"])
+	}
+	if t0["description"] != "Read file" {
+		t.Errorf("expected tool description 'Read file', got %v", t0["description"])
+	}
+	if _, hasSchema := t0["input_schema"]; !hasSchema {
+		t.Error("expected input_schema on tool[0]")
+	}
+	if _, hasFunc := t0["function"]; hasFunc {
+		t.Error("function wrapper should be removed from tool[0]")
+	}
+	if _, hasType := t0["type"]; hasType {
+		t.Error("type: function should be removed from tool[0]")
+	}
+
+	// 6. tool_choice converted to Claude object
+	tc, ok := m["tool_choice"].(map[string]any)
+	if !ok || tc["type"] != "auto" {
+		t.Errorf("expected tool_choice {\"type\": \"auto\"}, got %v", m["tool_choice"])
+	}
+
+	// 7. OpenAI-specific fields stripped
+	if _, ok := m["stream_options"]; ok {
+		t.Error("stream_options should be stripped")
+	}
+	if _, ok := m["store"]; ok {
+		t.Error("store should be stripped")
+	}
+	if _, ok := m["reasoning_effort"]; ok {
+		t.Error("reasoning_effort should be stripped")
+	}
+}
+
+func TestForwardOpencode_UnionAlpha_ConvertsOpenAIToolsInRequest(t *testing.T) {
+	var capturedBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"msg_ua","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{BaseURL: srv.URL + "/chat/completions"}
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client: srv.Client(),
+		Config: cfg,
+		APIKey: "test-key",
+		Body: []byte(`{
+			"model": "oc/union-alpha",
+			"messages": [
+				{"role": "system", "content": "system instruction"},
+				{"role": "user", "content": "hi"}
+			],
+			"tools": [
+				{
+					"type": "function",
+					"function": {
+						"name": "read",
+						"parameters": {"type": "object"}
+					}
+				}
+			]
+		}`),
+		IsStream: false,
+	}
+
+	if err := ForwardOpencode(rec, req); err != nil {
+		t.Fatalf("ForwardOpencode failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+
+	// Upstream received Claude-formatted tools
+	tools := capturedBody["tools"].([]any)
+	t0 := tools[0].(map[string]any)
+	if t0["name"] != "read" || t0["input_schema"] == nil {
+		t.Errorf("expected tool with name and input_schema, got %+v", t0)
+	}
+	if capturedBody["system"] != "system instruction" {
+		t.Errorf("expected top-level system, got %v", capturedBody["system"])
 	}
 }

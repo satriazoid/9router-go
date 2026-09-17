@@ -261,4 +261,22 @@ func TestSSECopy_SynthesizesTerminalOnAbruptClose(t *testing.T) {
 			t.Errorf("expected stream to end with 'data: [DONE]\\n\\n', got %q", out)
 		}
 	})
+
+	t.Run("recognizes Claude stop_reason and message_stop without synthesizing network_error", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		claudeStream := bytes.NewReader([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+
+		err := SSECopy(rec, claudeStream, rec, nil)
+		if err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+
+		out := rec.String()
+		if strings.Contains(out, "network_error") {
+			t.Errorf("Claude stream with stop_reason should not gain network_error, got %q", out)
+		}
+		if !strings.Contains(out, "data: [DONE]\n\n") {
+			t.Errorf("expected data: [DONE], got %q", out)
+		}
+	})
 }

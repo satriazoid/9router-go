@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.8.14",
+  "latestVersion": "1.8.15",
   "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.8.14: Port upstream fixes from decolua/9router including Muse Spark 1.3 HTTP 403 FreeTierError resolution, tool_call_id FIFO repair on tool messages, Grok CLI neutral placeholder for tool results, SSE network_error synthesis on abrupt connection drop, tool result image hoisting, and union-alpha routing."
+  "releaseNotes": "v1.8.15: Claude-to-OpenAI response translation for union-alpha, PR #4111 Zen headers (CLI client, 40-hex project IDs), Google RPC quotaResetDelay automatic duration locking with deadlock protection, Anthropic tools schema conversion, and terminal frame detection in SSE streams."
 }

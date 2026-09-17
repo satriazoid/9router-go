@@ -13,8 +13,8 @@ import (
 
 const (
 	// DefaultOpenCodeUA is the official OpenCode fingerprint User-Agent.
-	// Upstream requires version >= 1.17.0 (PR #4105).
-	DefaultOpenCodeUA = "opencode/1.18.31"
+	// Upstream requires version >= 1.17.0 (PR #4105, PR #4111).
+	DefaultOpenCodeUA = "opencode/1.18.31 ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14"
 
 	base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
@@ -74,6 +74,13 @@ func GenerateOpenCodeRequestID() string {
 	return "msg_" + hex.EncodeToString(timeBytes[:]) + unstableRandomBase62(14)
 }
 
+// GenerateOpenCodeProjectID generates a canonical 40-char hex project ID (PR #4111).
+func GenerateOpenCodeProjectID() string {
+	b := make([]byte, 20)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // TranslateOpenCodeSessionID deterministically maps foreign sessions to valid 30-char canonical IDs.
 func TranslateOpenCodeSessionID(sessionID, clientTool string) string {
 	trimmed := strings.TrimSpace(sessionID)
@@ -127,11 +134,12 @@ func BuildOpenCodeHeaders(rawHeaders map[string]string, sessionID string, isStre
 	res := map[string]string{
 		"Content-Type":       "application/json",
 		"Authorization":      "Bearer public",
+		"x-api-key":          "public",
 		"User-Agent":         DefaultOpenCodeUA,
-		"x-opencode-client":  "desktop",
+		"x-opencode-client":  "cli",
 		"x-opencode-session": session,
 		"x-opencode-request": GenerateOpenCodeRequestID(),
-		"x-opencode-project": "global",
+		"x-opencode-project": GenerateOpenCodeProjectID(),
 	}
 	if isStream {
 		res["Accept"] = "text/event-stream"
@@ -151,8 +159,14 @@ func BuildOpenCodeHeaders(rawHeaders map[string]string, sessionID string, isStre
 				res["x-opencode-session"] = TranslateOpenCodeSessionID(trimmed, "")
 			}
 		}
-		if lk == "x-opencode-client" || lk == "x-opencode-project" || lk == "x-opencode-request" {
+		if lk == "x-opencode-client" || lk == "x-opencode-request" {
 			res[k] = v
+		}
+		if lk == "x-opencode-project" {
+			trimmed := strings.TrimSpace(v)
+			if trimmed != "" && trimmed != "global" {
+				res["x-opencode-project"] = trimmed
+			}
 		}
 	}
 	return res

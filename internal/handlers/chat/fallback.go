@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy/executor"
@@ -106,6 +106,9 @@ func (h *ChatHandler) handleAccountFallback(
 			// Classify error to get dynamic cooldown
 			classification := providers.ClassifyError(ue.StatusCode, errorText, currentBackoffLevel)
 			cooldownSec := int((classification.CooldownMs + 999) / 1000) // ceil to seconds
+			if dur, ok := extractResetDuration(ue.Body); ok {
+				cooldownSec = int(dur.Seconds())
+			}
 			errMsg := errorText
 			if errMsg == "" {
 				errMsg = fmt.Sprintf("%d upstream error", ue.StatusCode)
@@ -390,11 +393,79 @@ func extractErrorText(body []byte) string {
 	}
 	return ""
 }
+var resetsInRegex = regexp.MustCompile(`(?i)resets?\s+in\s+([0-9hms\.]+)`)
+
+const (
+	minResetCooldown = 5 * time.Second
+	maxResetCooldown = 2 * time.Hour
+)
+
+// extractResetDuration attempts to extract a structured reset duration from an error payload.
+// It parses:
+// 1. Google RPC ErrorInfo metadata: quotaResetDelay ("1h12m28.109534319s")
+// 2. Text message patterns: "Resets in 1h12m28s."
+// 3. Clamps duration between 5 seconds and 2 hours to prevent deadlock / indefinite lockout.
+func extractResetDuration(body []byte) (time.Duration, bool) {
+	if len(body) == 0 {
+		return 0, false
+	}
+
+	// 1. Google RPC error details
+	var rpcErr struct {
+		Error struct {
+			Message string `json:"message"`
+			Details []struct {
+				Metadata map[string]string `json:"metadata"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &rpcErr); err == nil {
+		for _, d := range rpcErr.Error.Details {
+			if delayStr, ok := d.Metadata["quotaResetDelay"]; ok && delayStr != "" {
+				delayStr = strings.TrimRight(delayStr, ".")
+				if dur, err := time.ParseDuration(delayStr); err == nil && dur > 0 {
+					return clampResetDuration(dur), true
+				}
+			}
+		}
+		if rpcErr.Error.Message != "" {
+			if matches := resetsInRegex.FindStringSubmatch(rpcErr.Error.Message); len(matches) > 1 {
+				raw := strings.TrimRight(matches[1], ".")
+				if dur, err := time.ParseDuration(raw); err == nil && dur > 0 {
+					return clampResetDuration(dur), true
+				}
+			}
+		}
+	}
+
+	// 2. Fallback regex on raw body string
+	if matches := resetsInRegex.FindSubmatch(body); len(matches) > 1 {
+		raw := strings.TrimRight(string(matches[1]), ".")
+		if dur, err := time.ParseDuration(raw); err == nil && dur > 0 {
+			return clampResetDuration(dur), true
+		}
+	}
+
+	return 0, false
+}
+
+func clampResetDuration(dur time.Duration) time.Duration {
+	if dur < minResetCooldown {
+		return minResetCooldown
+	}
+	if dur > maxResetCooldown {
+		return maxResetCooldown
+	}
+	return dur
+}
 
 // extractRetryAfter extracts a retryAfter ISO timestamp from an upstream error JSON body.
-// Checks common field names: retryAfter, retry_after, resetsAt, resets_at.
+// Checks quotaResetDelay, "Resets in X", or common field names: retryAfter, retry_after, resetsAt, resets_at.
 // Returns "" when not found or not parseable.
 func extractRetryAfter(body []byte) string {
+	if dur, ok := extractResetDuration(body); ok {
+		return time.Now().UTC().Add(dur).Format(time.RFC3339)
+	}
 	var parsed struct {
 		RetryAfter string `json:"retryAfter"`
 		RetryAlt   string `json:"retry_after"`

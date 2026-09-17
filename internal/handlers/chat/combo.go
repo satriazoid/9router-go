@@ -781,6 +781,9 @@ func (h *ChatHandler) comboLockRetryable(excludeIDs *[]string, connID, provider,
 		return
 	}
 	cooldownSec := int((cls.CooldownMs + 999) / 1000)
+	if dur, ok := extractResetDuration(ue.Body); ok {
+		cooldownSec = int(dur.Seconds())
+	}
 	lockKey := canonicalLockModel(provider, model)
 	if err := h.Repo.LockConnectionModel(connID, lockKey, cooldownSec, cls.NewBackoffLevel); err != nil {
 		log.Warn("combo", "lock failed", "conn", connID, "provider", provider, "model", lockKey, "error", err)

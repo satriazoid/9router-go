@@ -287,6 +287,8 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	_ = json.Unmarshal(req.Body, &reqObj)
 	cleanModel := strings.TrimPrefix(reqObj.Model, "oc/")
 	cleanModel = strings.TrimPrefix(cleanModel, "opencode/")
+	cleanModel = strings.TrimPrefix(cleanModel, "antigravity/")
+	cleanModel = strings.TrimPrefix(cleanModel, "ag/")
 	if parenIdx := strings.IndexByte(cleanModel, '('); parenIdx != -1 {
 		cleanModel = cleanModel[:parenIdx]
 	}
@@ -338,13 +340,21 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if cleanModel == "union-alpha" {
 		// Route through Messages API format: https://opencode.ai/zen/v1/messages (PR #4099)
 		messagesURL := "https://opencode.ai/zen/v1/messages"
+		if req.Config != nil && req.Config.BaseURL != "" && !strings.Contains(req.Config.BaseURL, "opencode.ai") {
+			base := strings.TrimRight(req.Config.BaseURL, "/")
+			if strings.HasSuffix(base, "/chat/completions") {
+				base = strings.TrimSuffix(base, "/chat/completions")
+			}
+			messagesURL = base + "/messages"
+		}
 		headers := proxy.BuildOpenCodeHeaders(nil, req.SessionID, req.IsStream)
 		headers["anthropic-version"] = "2023-06-01"
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, req.Body)
+		body := ensureMessagesMaxTokens(req.Body, cleanModel)
+		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, body)
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (union-alpha messages route): %w", err)
 		}
@@ -356,9 +366,9 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		}
 
 		if req.IsStream {
-			return execSSEStream(w, resp.Body, req)
+			return handleClaudeMessagesStream(w, req, resp.Body)
 		}
-		return jsonResponse(req.Ctx, w, resp.Body, req.TranslateResp, req.ResponseBuf)
+		return handleClaudeMessagesNonStream(w, req, resp.Body)
 	}
 
 
@@ -392,6 +402,321 @@ var opencodeGoMessagesModels = map[string]bool{
 	"qwen3.7-max":  true,
 	"qwen3.7-plus": true,
 	"qwen3.6-plus": true,
+	"union-alpha":  true,
+}
+
+// ensureMessagesMaxTokens converts an incoming request (OpenAI or Claude) into a spec-compliant
+// Claude Messages API request payload:
+// - Guarantees positive integer max_tokens (fallback from max_completion_tokens or default 4096)
+// - Converts OpenAI tools [{type: "function", function: {name, description, parameters}}] to Claude [{name, description, input_schema}]
+// - Converts OpenAI tool_choice to Claude format
+// - Extracts role: "system" from messages into top-level system prompt
+// - Converts assistant tool_calls to tool_use blocks and role: "tool" to user tool_result blocks
+// - Merges consecutive same-role messages to uphold Claude alternating role invariant
+// - Strips OpenAI-only fields like stream_options, store, max_completion_tokens, reasoning_effort
+func ensureMessagesMaxTokens(body []byte, model string) []byte {
+	var reqMap map[string]any
+	if err := json.Unmarshal(body, &reqMap); err != nil {
+		return body
+	}
+	if model != "" {
+		reqMap["model"] = model
+	}
+
+	// 1. max_tokens
+	maxTokensVal := 0
+	if mt, ok := reqMap["max_tokens"]; ok && mt != nil {
+		switch v := mt.(type) {
+		case float64:
+			maxTokensVal = int(v)
+		case int:
+			maxTokensVal = v
+		case int64:
+			maxTokensVal = int(v)
+		}
+	}
+	if maxTokensVal <= 0 {
+		if mct, ok := reqMap["max_completion_tokens"]; ok && mct != nil {
+			switch v := mct.(type) {
+			case float64:
+				maxTokensVal = int(v)
+			case int:
+				maxTokensVal = v
+			case int64:
+				maxTokensVal = int(v)
+			}
+		}
+	}
+	if maxTokensVal <= 0 {
+		maxTokensVal = 4096
+	}
+	reqMap["max_tokens"] = maxTokensVal
+	delete(reqMap, "max_completion_tokens")
+
+	// 2. tools: convert OpenAI tools to Claude {name, description, input_schema}
+	if tools, ok := reqMap["tools"].([]any); ok && len(tools) > 0 {
+		reqMap["tools"] = convertOpenAIToolsToClaude(tools)
+	}
+
+	// 3. tool_choice: convert OpenAI tool_choice to Claude format
+	if tc, ok := reqMap["tool_choice"]; ok && tc != nil {
+		if convertedTC := convertToolChoiceToClaude(tc); convertedTC != nil {
+			reqMap["tool_choice"] = convertedTC
+		} else {
+			delete(reqMap, "tool_choice")
+		}
+	}
+
+	// 4. messages & system
+	if msgs, ok := reqMap["messages"].([]any); ok && len(msgs) > 0 {
+		extractedSys, claudeMsgs := convertOpenAIMessagesToClaude(msgs)
+		reqMap["messages"] = claudeMsgs
+		if extractedSys != "" {
+			if existingSys, ok := reqMap["system"].(string); ok && existingSys != "" {
+				reqMap["system"] = existingSys + "\n\n" + extractedSys
+			} else if reqMap["system"] == nil {
+				reqMap["system"] = extractedSys
+			}
+		}
+	}
+
+	// 5. Clean OpenAI-specific fields that strict Claude API rejects
+	delete(reqMap, "stream_options")
+	delete(reqMap, "store")
+	delete(reqMap, "reasoning_effort")
+
+	updated, err := json.Marshal(reqMap)
+	if err != nil {
+		return body
+	}
+	return updated
+}
+
+func convertOpenAIToolsToClaude(tools []any) []any {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]any, 0, len(tools))
+	for _, t := range tools {
+		m, ok := t.(map[string]any)
+		if !ok {
+			out = append(out, t)
+			continue
+		}
+		if _, hasName := m["name"]; hasName {
+			if _, hasSchema := m["input_schema"]; hasSchema {
+				out = append(out, t)
+				continue
+			}
+		}
+		if fn, ok := m["function"].(map[string]any); ok {
+			cTool := make(map[string]any)
+			if name, ok := fn["name"].(string); ok {
+				cTool["name"] = name
+			}
+			if desc, ok := fn["description"].(string); ok && desc != "" {
+				cTool["description"] = desc
+			}
+			if params, ok := fn["parameters"]; ok && params != nil {
+				cTool["input_schema"] = params
+			} else {
+				cTool["input_schema"] = map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				}
+			}
+			if cc, ok := m["cache_control"]; ok {
+				cTool["cache_control"] = cc
+			}
+			out = append(out, cTool)
+			continue
+		}
+		if params, ok := m["parameters"]; ok {
+			cTool := make(map[string]any, len(m))
+			for k, v := range m {
+				if k != "type" && k != "parameters" {
+					cTool[k] = v
+				}
+			}
+			cTool["input_schema"] = params
+			out = append(out, cTool)
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func convertToolChoiceToClaude(tc any) any {
+	if tc == nil {
+		return nil
+	}
+	switch v := tc.(type) {
+	case string:
+		switch v {
+		case "auto":
+			return map[string]any{"type": "auto"}
+		case "required":
+			return map[string]any{"type": "any"}
+		case "none":
+			return nil
+		default:
+			return map[string]any{"type": "auto"}
+		}
+	case map[string]any:
+		if tType, _ := v["type"].(string); tType == "function" {
+			if fn, ok := v["function"].(map[string]any); ok {
+				if name, ok := fn["name"].(string); ok {
+					return map[string]any{"type": "tool", "name": name}
+				}
+			}
+		}
+		return v
+	default:
+		return tc
+	}
+}
+
+func convertOpenAIMessagesToClaude(messages []any) (systemText string, claudeMessages []any) {
+	var systemParts []string
+	var intermediate []map[string]any
+
+	for _, m := range messages {
+		msgMap, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msgMap["role"].(string)
+
+		if role == "system" {
+			switch c := msgMap["content"].(type) {
+			case string:
+				if strings.TrimSpace(c) != "" {
+					systemParts = append(systemParts, c)
+				}
+			case []any:
+				for _, block := range c {
+					if bMap, ok := block.(map[string]any); ok {
+						if text, ok := bMap["text"].(string); ok && strings.TrimSpace(text) != "" {
+							systemParts = append(systemParts, text)
+						}
+					}
+				}
+			}
+			continue
+		}
+
+		if role == "tool" {
+			toolCallID, _ := msgMap["tool_call_id"].(string)
+			contentVal := msgMap["content"]
+			intermediate = append(intermediate, map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": toolCallID,
+						"content":     contentVal,
+					},
+				},
+			})
+			continue
+		}
+
+		if role == "assistant" {
+			if toolCalls, hasTC := msgMap["tool_calls"].([]any); hasTC && len(toolCalls) > 0 {
+				var contentBlocks []any
+				if cStr, ok := msgMap["content"].(string); ok && cStr != "" {
+					contentBlocks = append(contentBlocks, map[string]any{
+						"type": "text",
+						"text": cStr,
+					})
+				} else if cArr, ok := msgMap["content"].([]any); ok && len(cArr) > 0 {
+					contentBlocks = append(contentBlocks, cArr...)
+				}
+				for _, tc := range toolCalls {
+					tcMap, ok := tc.(map[string]any)
+					if !ok {
+						continue
+					}
+					id, _ := tcMap["id"].(string)
+					fn, _ := tcMap["function"].(map[string]any)
+					name := ""
+					var inputMap any = map[string]any{}
+					if fn != nil {
+						name, _ = fn["name"].(string)
+						if argsStr, ok := fn["arguments"].(string); ok && strings.TrimSpace(argsStr) != "" {
+							var parsed any
+							if err := json.Unmarshal([]byte(argsStr), &parsed); err == nil && parsed != nil {
+								inputMap = parsed
+							}
+						}
+					}
+					contentBlocks = append(contentBlocks, map[string]any{
+						"type":  "tool_use",
+						"id":    id,
+						"name":  name,
+						"input": inputMap,
+					})
+				}
+				newMsg := make(map[string]any)
+				for k, v := range msgMap {
+					if k != "tool_calls" && k != "content" {
+						newMsg[k] = v
+					}
+				}
+				newMsg["role"] = "assistant"
+				newMsg["content"] = contentBlocks
+				intermediate = append(intermediate, newMsg)
+				continue
+			}
+		}
+
+		newMsg := make(map[string]any, len(msgMap))
+		for k, v := range msgMap {
+			newMsg[k] = v
+		}
+		intermediate = append(intermediate, newMsg)
+	}
+
+	var merged []any
+	for _, m := range intermediate {
+		if len(merged) == 0 {
+			merged = append(merged, m)
+			continue
+		}
+		prev := merged[len(merged)-1].(map[string]any)
+		if prev["role"] == m["role"] {
+			prev["content"] = combineClaudeContent(prev["content"], m["content"])
+		} else {
+			merged = append(merged, m)
+		}
+	}
+
+	systemText = strings.Join(systemParts, "\n\n")
+	return systemText, merged
+}
+
+func combineClaudeContent(c1, c2 any) any {
+	return append(normalizeClaudeBlocks(c1), normalizeClaudeBlocks(c2)...)
+}
+
+func normalizeClaudeBlocks(c any) []any {
+	if c == nil {
+		return []any{}
+	}
+	switch v := c.(type) {
+	case string:
+		if v == "" {
+			return []any{}
+		}
+		return []any{map[string]any{"type": "text", "text": v}}
+	case []any:
+		return v
+	case map[string]any:
+		return []any{v}
+	default:
+		return []any{map[string]any{"type": "text", "text": fmt.Sprint(v)}}
+	}
 }
 
 func isOpencodeResponsesModel(model string) bool {
@@ -477,6 +802,8 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	cleanModel := strings.TrimPrefix(reqObj.Model, "oc/")
 	cleanModel = strings.TrimPrefix(cleanModel, "opencode-go/")
 	cleanModel = strings.TrimPrefix(cleanModel, "opencode/")
+	cleanModel = strings.TrimPrefix(cleanModel, "antigravity/")
+	cleanModel = strings.TrimPrefix(cleanModel, "ag/")
 	if parenIdx := strings.IndexByte(cleanModel, '('); parenIdx != -1 {
 		cleanModel = cleanModel[:parenIdx]
 	}
@@ -540,9 +867,16 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		return handleCodexStream(w, req, resp.Body)
 	}
 
-	if opencodeGoMessagesModels[reqObj.Model] {
+	if opencodeGoMessagesModels[reqObj.Model] || opencodeGoMessagesModels[cleanModel] || cleanModel == "union-alpha" {
 		// Route to /zen/go/v1/messages (Anthropic/Claude format)
 		messagesURL := "https://opencode.ai/zen/go/v1/messages"
+		if req.Config != nil && req.Config.BaseURL != "" && !strings.Contains(req.Config.BaseURL, "opencode.ai") {
+			base := strings.TrimRight(req.Config.BaseURL, "/")
+			if strings.HasSuffix(base, "/chat/completions") {
+				base = strings.TrimSuffix(base, "/chat/completions")
+			}
+			messagesURL = base + "/messages"
+		}
 		headers := map[string]string{
 			"Content-Type":       "application/json",
 			"x-api-key":          req.APIKey,
@@ -556,16 +890,17 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, body)
+		messagesBody := ensureMessagesMaxTokens(body, cleanModel)
+		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, messagesBody)
 		if err != nil {
 			return fmt.Errorf("ForwardOpencodeGo (messages route): %w", err)
 		}
 		defer resp.Body.Close()
 
 		if req.IsStream {
-			return execSSEStream(w, resp.Body, req)
+			return handleClaudeMessagesStream(w, req, resp.Body)
 		}
-		return jsonResponse(req.Ctx, w, resp.Body, req.TranslateResp, req.ResponseBuf)
+		return handleClaudeMessagesNonStream(w, req, resp.Body)
 	}
 
 	// Default OpenAI format endpoint: https://opencode.ai/zen/go/v1/chat/completions

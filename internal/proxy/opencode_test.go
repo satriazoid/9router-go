@@ -11,11 +11,11 @@ func TestBuildOpenCodeHeaders(t *testing.T) {
 	if headers["User-Agent"] != proxy.DefaultOpenCodeUA {
 		t.Errorf("expected User-Agent %s, got %s", proxy.DefaultOpenCodeUA, headers["User-Agent"])
 	}
-	if headers["x-opencode-client"] != "desktop" {
-		t.Errorf("expected x-opencode-client desktop, got %s", headers["x-opencode-client"])
+	if headers["x-opencode-client"] != "cli" {
+		t.Errorf("expected x-opencode-client cli, got %s", headers["x-opencode-client"])
 	}
-	if headers["x-opencode-project"] != "global" {
-		t.Errorf("expected x-opencode-project global, got %s", headers["x-opencode-project"])
+	if len(headers["x-opencode-project"]) != 40 {
+		t.Errorf("expected 40-char hex x-opencode-project, got %s", headers["x-opencode-project"])
 	}
 	if !proxy.OpenCodeSessionRegex.MatchString(headers["x-opencode-session"]) {
 		t.Errorf("expected canonical x-opencode-session matching regex, got %s", headers["x-opencode-session"])

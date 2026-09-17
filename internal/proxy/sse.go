@@ -35,7 +35,7 @@ func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, on
 	// to the pool, and the pool would add a race window between ReleaseByteSlice
 	// and the next iteration's write/flush completing.
 	buf := make([]byte, 4096)
-	var tail [16]byte
+	var tail [64]byte
 	tailLen := 0
 	hasTerminal := false
 	hasDone := false
@@ -71,10 +71,16 @@ func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, on
 			if bytes.Contains(checkBuf, []byte(`"finish_reason":`)) && !bytes.Contains(checkBuf, []byte(`"finish_reason":null`)) {
 				hasTerminal = true
 			}
+			if bytes.Contains(checkBuf, []byte(`"stop_reason":`)) && !bytes.Contains(checkBuf, []byte(`"stop_reason":null`)) {
+				hasTerminal = true
+			}
+			if bytes.Contains(checkBuf, []byte(`"message_stop"`)) {
+				hasTerminal = true
+			}
 
-			if n >= 16 {
-				copy(tail[:], chunk[n-16:])
-				tailLen = 16
+			if n >= 64 {
+				copy(tail[:], chunk[n-64:])
+				tailLen = 64
 			} else {
 				copy(tail[:], chunk)
 				tailLen = n
