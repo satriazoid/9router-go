@@ -8,9 +8,10 @@ import (
 
 // ProviderStrategy defines routing and proxy pool options for a specific provider.
 type ProviderStrategy struct {
-	ProxyPoolID    string `json:"proxyPoolId"`
-	RotateStrategy string `json:"rotateStrategy"` // "none", "round-robin", "random", "sticky"
-	StickyLimit    int    `json:"stickyLimit,omitempty"`
+	ProxyPoolID           string `json:"proxyPoolId"`
+	RotateStrategy        string `json:"rotateStrategy"` // "none", "round-robin", "random", "sticky"
+	StickyLimit           int    `json:"stickyLimit,omitempty"`
+	StrictModelAssignment bool   `json:"strictModelAssignment"`
 }
 
 // SettingsData represents token saver and general settings stored in the settings table.
@@ -97,6 +98,9 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 				}
 				if sl, ok := vm["stickyLimit"].(float64); ok && sl > 0 {
 					strat.StickyLimit = int(sl)
+				}
+				if sma, ok := vm["strictModelAssignment"].(bool); ok {
+					strat.StrictModelAssignment = sma
 				}
 				s.ProviderStrategies[k] = strat
 			}
