@@ -186,6 +186,56 @@ func TestFixMissingToolResponsesOpenAI(t *testing.T) {
 	})
 }
 
+func TestEnsureToolCallIDs_MissingIDRepaired(t *testing.T) {
+	t.Run("pairs id-less tool message with pending assistant call (PR #4090)", func(t *testing.T) {
+		msgs := []OpenAIMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []OpenAIToolCall{
+					{ID: "call_abc", Type: "function", Function: OpenAIFunctionCall{Name: "shell", Arguments: "{}"}},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "", // client omitted tool_call_id!
+				Content:    "ok",
+			},
+		}
+
+		got := EnsureToolCallIDs(msgs)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(got))
+		}
+		if got[1].ToolCallID != "call_abc" {
+			t.Errorf("expected tool_call_id to be repaired to 'call_abc', got %q", got[1].ToolCallID)
+		}
+	})
+
+	t.Run("mints deterministic id when both assistant and tool lack id", func(t *testing.T) {
+		msgs := []OpenAIMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []OpenAIToolCall{
+					{ID: "", Type: "function", Function: OpenAIFunctionCall{Name: "shell", Arguments: "{}"}},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "",
+				Content:    "ok",
+			},
+		}
+
+		got := EnsureToolCallIDs(msgs)
+		if got[0].ToolCalls[0].ID == "" {
+			t.Errorf("expected assistant tool call to have minted id, got empty")
+		}
+		if got[1].ToolCallID != got[0].ToolCalls[0].ID {
+			t.Errorf("expected tool message id %q to match assistant call id %q", got[1].ToolCallID, got[0].ToolCalls[0].ID)
+		}
+	})
+}
+
 // --- convertClaudeMessage tool_result edge ---
 
 func TestConvertClaudeMessage_ToolResultArrayContent(t *testing.T) {
@@ -219,6 +269,49 @@ func TestConvertClaudeMessage_ToolResultRawContent(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Content.(string), `{"raw":true}`) {
 		t.Errorf("expected raw JSON content, got %v", results[0].Content)
+	}
+}
+
+func TestConvertClaudeMessage_ToolResultImageHoisting(t *testing.T) {
+	// Image inside tool_result should emit tool message (text) + follow-up user message with image_url (PR #4083)
+	msg := ClaudeMessage{
+		Role: "user",
+		Content: jsontext.Value(`[
+			{
+				"type": "tool_result",
+				"tool_use_id": "call_screenshot_1",
+				"content": [
+					{"type": "text", "text": "Screenshot captured"},
+					{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}}
+				]
+			}
+		]`),
+	}
+
+	results, err := convertClaudeMessage(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 messages (tool + follow-up user image), got %d", len(results))
+	}
+	// 1. Tool message
+	if results[0].Role != "tool" || results[0].ToolCallID != "call_screenshot_1" || results[0].Content != "Screenshot captured" {
+		t.Errorf("unexpected tool message: %#v", results[0])
+	}
+	// 2. Follow-up user message with image
+	if results[1].Role != "user" {
+		t.Errorf("expected follow-up message to have role 'user', got %s", results[1].Role)
+	}
+	blocks, ok := results[1].Content.([]OpenAIContentBlock)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("expected 2 content blocks in follow-up, got %#v", results[1].Content)
+	}
+	if blocks[0].Text != "[Image from tool result call_screenshot_1]" {
+		t.Errorf("expected tag block, got %s", blocks[0].Text)
+	}
+	if blocks[1].Type != "image_url" || blocks[1].ImageUrl == nil || !strings.Contains(blocks[1].ImageUrl.URL, "base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB") {
+		t.Errorf("expected image_url block with base64 data, got %#v", blocks[1])
 	}
 }
 

@@ -36,6 +36,7 @@ func (h *ChatHandler) handleAccountFallback(
 	translateResponse bool,
 	endpoint string,
 ) error {
+	body = repairToolCallIDsInJSON(body)
 	if pinnedConnectionID != "" {
 		connObj, connData, err := h.getBestConnection(provider, pinnedConnectionID, nil, model)
 		if err != nil {

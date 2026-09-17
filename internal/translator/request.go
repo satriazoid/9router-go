@@ -166,6 +166,7 @@ func convertClaudeMessage(msg ClaudeMessage) ([]OpenAIMessage, error) {
 			})
 		case "tool_result":
 			var resultContent string
+			var resultImages []OpenAIContentBlock
 			if err := json.Unmarshal(block.Content, &resultContent); err != nil {
 				var contentArr []ClaudeContentBlock
 				if err2 := json.Unmarshal(block.Content, &contentArr); err2 == nil {
@@ -173,6 +174,17 @@ func convertClaudeMessage(msg ClaudeMessage) ([]OpenAIMessage, error) {
 					for _, c := range contentArr {
 						if c.Type == "text" {
 							parts = append(parts, c.Text)
+						} else if c.Type == "image" && c.Source != nil && c.Source.Type == "base64" {
+							mediaType := c.Source.MediaType
+							if mediaType == "" {
+								mediaType = "image/png"
+							}
+							resultImages = append(resultImages, OpenAIContentBlock{
+								Type: "image_url",
+								ImageUrl: &OpenAIImageUrl{
+									URL: "data:" + mediaType + ";base64," + c.Source.Data,
+								},
+							})
 						}
 					}
 					resultContent = strings.Join(parts, "\n")
@@ -185,6 +197,13 @@ func convertClaudeMessage(msg ClaudeMessage) ([]OpenAIMessage, error) {
 				ToolCallID: block.ToolUseID,
 				Content:    resultContent,
 			})
+			if len(resultImages) > 0 {
+				textParts = append(textParts, OpenAIContentBlock{
+					Type: "text",
+					Text: fmt.Sprintf("[Image from tool result %s]", block.ToolUseID),
+				})
+				textParts = append(textParts, resultImages...)
+			}
 		}
 	}
 
@@ -222,7 +241,45 @@ func convertClaudeMessage(msg ClaudeMessage) ([]OpenAIMessage, error) {
 	return nil, nil
 }
 
+// EnsureToolCallIDs validates and repairs tool_call_id on assistant tool_calls and tool messages.
+// It pairs orphaned or id-less tool messages with pending assistant tool calls (PR #4090).
+func EnsureToolCallIDs(messages []OpenAIMessage) []OpenAIMessage {
+	var pendingToolCallIds []string
+	toolSeq := 0
+	for i := range messages {
+		msg := &messages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for k := range msg.ToolCalls {
+				tc := &msg.ToolCalls[k]
+				if tc.ID == "" {
+					tc.ID = fmt.Sprintf("call_%d_%d", toolSeq, k)
+				}
+				pendingToolCallIds = append(pendingToolCallIds, tc.ID)
+			}
+			toolSeq++
+		} else if msg.Role == "tool" {
+			if msg.ToolCallID != "" {
+				for idx, id := range pendingToolCallIds {
+					if id == msg.ToolCallID {
+						pendingToolCallIds = append(pendingToolCallIds[:idx], pendingToolCallIds[idx+1:]...)
+						break
+					}
+				}
+			} else {
+				if len(pendingToolCallIds) > 0 {
+					msg.ToolCallID = pendingToolCallIds[0]
+					pendingToolCallIds = pendingToolCallIds[1:]
+				} else {
+					msg.ToolCallID = fmt.Sprintf("call_tool_%d", i)
+				}
+			}
+		}
+	}
+	return messages
+}
+
 func fixMissingToolResponsesOpenAI(messages []OpenAIMessage) []OpenAIMessage {
+	messages = EnsureToolCallIDs(messages)
 	result := make([]OpenAIMessage, len(messages))
 	copy(result, messages)
 	for i := 0; i < len(result); i++ {

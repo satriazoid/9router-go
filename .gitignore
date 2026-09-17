@@ -2,6 +2,7 @@
 /9router-go
 /9router-go-*
 *.exe
+web/dist/
 
 # Test binaries
 *.test
@@ -26,3 +27,7 @@ docker-compose.local.yml
 .vscode/
 .DS_Store
 graphify-out
+node_modules/
+web/node_modules/
+stitch-screens/
+stitch-screenshots/

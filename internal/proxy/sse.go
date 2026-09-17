@@ -37,6 +37,9 @@ func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, on
 	buf := make([]byte, 4096)
 	var tail [16]byte
 	tailLen := 0
+	hasTerminal := false
+	hasDone := false
+	seenSSE := false
 
 	for {
 		n, err := upstream.Read(buf)
@@ -58,8 +61,15 @@ func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, on
 			} else {
 				checkBuf = chunk
 			}
+			if bytes.Contains(chunk, []byte("data:")) {
+				seenSSE = true
+			}
 			if bytes.Contains(checkBuf, []byte("[DONE]")) {
+				hasDone = true
 				return nil
+			}
+			if bytes.Contains(checkBuf, []byte(`"finish_reason":`)) && !bytes.Contains(checkBuf, []byte(`"finish_reason":null`)) {
+				hasTerminal = true
 			}
 
 			if n >= 16 {
@@ -72,6 +82,26 @@ func SSECopy(w http.ResponseWriter, upstream io.Reader, flusher http.Flusher, on
 		}
 		if err != nil {
 			if err == io.EOF {
+				if seenSSE && !hasDone {
+					// PR #4079: If stream tail was not terminated with double newline, emit one
+					// so [DONE] or the synthesized terminal does not merge with prior line.
+					if tailLen > 0 && !bytes.HasSuffix(tail[:tailLen], []byte("\n\n")) {
+						if bytes.HasSuffix(tail[:tailLen], []byte("\n")) {
+							_, _ = w.Write([]byte("\n"))
+						} else {
+							_, _ = w.Write([]byte("\n\n"))
+						}
+					}
+					// If upstream ended without finish_reason, synthesize network_error terminal
+					// so clients like Oh My Pi do not fail with "Stream ended without finish_reason"
+					if !hasTerminal {
+						_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"network_error\"}]}\n\n"))
+					}
+					_, _ = w.Write([]byte("data: [DONE]\n\n"))
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
 				return nil
 			}
 			return fmt.Errorf("read upstream stream: %w", err)

@@ -444,7 +444,7 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 					return
 				}
 				upstreamBody["model"] = modelInfo.Model
-
+				repairToolCallIDsInMap(upstreamBody)
 				upstreamJSON, err := json.Marshal(upstreamBody)
 				if err != nil {
 					break

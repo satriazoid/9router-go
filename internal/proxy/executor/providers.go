@@ -298,26 +298,9 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			return fmt.Errorf("transform body for muse-spark: %w", err)
 		}
 
-		var m map[string]any
-		if err := json.Unmarshal(transformedBody, &m); err == nil {
-			if rEffort, ok := m["reasoning_effort"].(string); ok {
-				if rEffort == "max" {
-					rEffort = "xhigh"
-				}
-				m["reasoning"] = map[string]any{
-					"effort":  rEffort,
-					"summary": "auto",
-				}
-				delete(m, "reasoning_effort")
-			} else if rMap, ok := m["reasoning"].(map[string]any); ok {
-				if eff, ok := rMap["effort"].(string); ok && eff == "max" {
-					rMap["effort"] = "xhigh"
-				}
-				rMap["summary"] = "auto"
-			}
-			if transformedBody, err = json.Marshal(m); err != nil {
-				return fmt.Errorf("marshal muse-spark body: %w", err)
-			}
+		transformedBody, err = normalizeMuseSparkResponsesBody(transformedBody, cleanModel)
+		if err != nil {
+			return fmt.Errorf("normalize muse-spark body: %w", err)
 		}
 
 		cfg := *req.Config
@@ -352,6 +335,32 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		}
 		return handleCodexStream(w, req, resp.Body)
 	}
+	if cleanModel == "union-alpha" {
+		// Route through Messages API format: https://opencode.ai/zen/v1/messages (PR #4099)
+		messagesURL := "https://opencode.ai/zen/v1/messages"
+		headers := proxy.BuildOpenCodeHeaders(nil, req.SessionID, req.IsStream)
+		headers["anthropic-version"] = "2023-06-01"
+		ctx := req.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, req.Body)
+		if err != nil {
+			return fmt.Errorf("ForwardOpencode (union-alpha messages route): %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+		}
+
+		if req.IsStream {
+			return execSSEStream(w, resp.Body, req)
+		}
+		return jsonResponse(req.Ctx, w, resp.Body, req.TranslateResp, req.ResponseBuf)
+	}
+
 
 	body := InjectReasoningContent(req.Body, "opencode")
 
@@ -386,7 +395,11 @@ var opencodeGoMessagesModels = map[string]bool{
 }
 
 func isOpencodeResponsesModel(model string) bool {
-	return strings.Contains(model, "muse-spark") || model == "grok-4.6" || model == "gpt-5.6-luna"
+	base := model
+	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
+		base = base[:parenIdx]
+	}
+	return strings.Contains(base, "muse-spark") || base == "grok-4.6" || base == "gpt-5.6-luna"
 }
 
 func deriveOpencodeSession(rawSession, clientTool, connID string) string {
@@ -397,16 +410,55 @@ func deriveOpencodeSession(rawSession, clientTool, connID string) string {
 	if raw == "" {
 		raw = "default"
 	}
-	// Preserve valid native session
-	if strings.HasPrefix(raw, "ses_") && len(raw) == 36 {
-		return raw
+	return proxy.TranslateOpenCodeSessionID(raw, clientTool)
+}
+
+func normalizeMuseSparkResponsesBody(body []byte, cleanModel string) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body, nil
 	}
-	tool := clientTool
-	if tool == "" {
-		tool = "generic"
+	if rEffort, ok := m["reasoning_effort"].(string); ok {
+		if rEffort == "max" {
+			rEffort = "xhigh"
+		}
+		m["reasoning"] = map[string]any{
+			"effort":  rEffort,
+			"summary": "auto",
+		}
+		delete(m, "reasoning_effort")
+	} else if rMap, ok := m["reasoning"].(map[string]any); ok {
+		if eff, ok := rMap["effort"].(string); ok && eff == "max" {
+			rMap["effort"] = "xhigh"
+		}
+		rMap["summary"] = "auto"
 	}
-	h := sha256.Sum256([]byte("opencode-go\x00" + tool + "\x00" + raw))
-	return "ses_" + hex.EncodeToString(h[:16])
+	// PR #4061: Strip prior reasoning items & continuity properties
+	if inList, ok := m["input"].([]any); ok {
+		cleanInput := make([]any, 0, len(inList))
+		for _, item := range inList {
+			if itemMap, ok := item.(map[string]any); ok {
+				if itemMap["type"] == "reasoning" {
+					continue
+				}
+				delete(itemMap, "encrypted_content")
+				delete(itemMap, "reasoning_encrypted_content")
+				cleanInput = append(cleanInput, itemMap)
+			} else {
+				cleanInput = append(cleanInput, item)
+			}
+		}
+		m["input"] = cleanInput
+	}
+	// PR #4062: Normalize explicit non-auto tool_choice to "auto" on muse-spark-1.3
+	if strings.Contains(cleanModel, "muse-spark-1.3") {
+		if tc, ok := m["tool_choice"]; ok && tc != nil {
+			if tcStr, ok := tc.(string); !ok || tcStr != "auto" {
+				m["tool_choice"] = "auto"
+			}
+		}
+	}
+	return json.Marshal(m)
 }
 
 // ForwardOpencodeGo handles requests for opencode-go (paid tier).
@@ -436,26 +488,9 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 			return fmt.Errorf("transform body for opencode-go muse-spark: %w", err)
 		}
 
-		var m map[string]any
-		if err := json.Unmarshal(transformedBody, &m); err == nil {
-			if rEffort, ok := m["reasoning_effort"].(string); ok {
-				if rEffort == "max" {
-					rEffort = "xhigh"
-				}
-				m["reasoning"] = map[string]any{
-					"effort":  rEffort,
-					"summary": "auto",
-				}
-				delete(m, "reasoning_effort")
-			} else if rMap, ok := m["reasoning"].(map[string]any); ok {
-				if eff, ok := rMap["effort"].(string); ok && eff == "max" {
-					rMap["effort"] = "xhigh"
-				}
-				rMap["summary"] = "auto"
-			}
-			if transformedBody, err = json.Marshal(m); err != nil {
-				return fmt.Errorf("marshal opencode-go muse-spark body: %w", err)
-			}
+		transformedBody, err = normalizeMuseSparkResponsesBody(transformedBody, cleanModel)
+		if err != nil {
+			return fmt.Errorf("normalize opencode-go muse-spark body: %w", err)
 		}
 
 		cfg := *req.Config
@@ -469,6 +504,15 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		headers := make(map[string]string)
 		for k, v := range cfg.StaticHeaders {
 			headers[k] = v
+		}
+		if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeVersion(headers["User-Agent"]) {
+			headers["User-Agent"] = proxy.DefaultOpenCodeUA
+		}
+		if headers["x-opencode-client"] == "" {
+			headers["x-opencode-client"] = "desktop"
+		}
+		if headers["x-opencode-request"] == "" {
+			headers["x-opencode-request"] = proxy.GenerateOpenCodeRequestID()
 		}
 		headers["x-opencode-session"] = sessionHeader
 		cfg.StaticHeaders = headers
@@ -529,6 +573,15 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	headers := make(map[string]string)
 	for k, v := range cfg.StaticHeaders {
 		headers[k] = v
+	}
+	if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeVersion(headers["User-Agent"]) {
+		headers["User-Agent"] = proxy.DefaultOpenCodeUA
+	}
+	if headers["x-opencode-client"] == "" {
+		headers["x-opencode-client"] = "desktop"
+	}
+	if headers["x-opencode-request"] == "" {
+		headers["x-opencode-request"] = proxy.GenerateOpenCodeRequestID()
 	}
 	headers["x-opencode-session"] = sessionHeader
 	cfg.StaticHeaders = headers

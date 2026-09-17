@@ -289,7 +289,7 @@ func TestForwardRequest_StreamSetsAcceptHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeEventStream)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("data: ok\n\n"))
+		w.Write([]byte("data: ok\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
@@ -311,7 +311,7 @@ func TestForwardRequest_StreamSetsAcceptHeader(t *testing.T) {
 	if rec.Header().Get(constants.HeaderContentType) != constants.ContentTypeEventStream {
 		t.Errorf("expected event-stream content type on client response, got %q", rec.Header().Get(constants.HeaderContentType))
 	}
-	if rec.Body.String() != "data: ok\n\n" {
+	if !strings.HasPrefix(rec.Body.String(), "data: ok\n\n") {
 		t.Errorf("expected streamed body, got %q", rec.Body.String())
 	}
 }

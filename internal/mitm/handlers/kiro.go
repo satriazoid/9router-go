@@ -32,6 +32,24 @@ func HandleKiro(w http.ResponseWriter, r *http.Request, body []byte) {
 		delete(cs, "agentTaskType")
 	}
 
+	// PR #4109: normalize user turns carrying only tool results
+	if uim, ok := reqBody["userInputMessage"].(map[string]any); ok {
+		content, _ := uim["content"].(string)
+		if strings.TrimSpace(content) == "" {
+			var hasToolResults bool
+			if ctx, ok := uim["userInputMessageContext"].(map[string]any); ok {
+				if tr, ok := ctx["toolResults"].([]any); ok && len(tr) > 0 {
+					hasToolResults = true
+				}
+			}
+			if hasToolResults {
+				uim["content"] = "Tool results provided."
+			} else {
+				uim["content"] = "continue"
+			}
+		}
+	}
+
 	// Fix(kiro): preserve inline images in OpenAI MITM (userInputMessage.images -> image_url parts)
 	if uim, ok := reqBody["userInputMessage"].(map[string]any); ok {
 		if imagesRaw, ok := uim["images"].([]any); ok && len(imagesRaw) > 0 {

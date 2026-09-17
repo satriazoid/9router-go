@@ -76,7 +76,7 @@ func (h *ChatHandler) handleSingleModel(ctx context.Context, w http.ResponseWrit
 		return
 	}
 	upstreamBody["model"] = modelInfo.Model
-
+	repairToolCallIDsInMap(upstreamBody)
 	upstreamJSON, err := json.Marshal(upstreamBody)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to marshal upstream request")

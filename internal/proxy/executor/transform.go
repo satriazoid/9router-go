@@ -120,12 +120,47 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 			delete(m, "max_tokens")
 			delete(m, "max_completion_tokens")
 
-			// Clamp call_id in existing input items
+			// PR #4090: Repair missing call_id and clamp call_id in existing input items
 			if inList, ok := m["input"].([]any); ok {
+				var pendingCallIDs []string
+				toolSeq := 0
 				for _, item := range inList {
 					if itemMap, ok := item.(map[string]any); ok {
-						if cid, ok := itemMap["call_id"].(string); ok && len(cid) > 64 {
-							itemMap["call_id"] = cid[:64]
+						itemType, _ := itemMap["type"].(string)
+						switch itemType {
+						case "function_call", "custom_tool_call":
+							cid, _ := itemMap["call_id"].(string)
+							if cid == "" {
+								cid = fmt.Sprintf("call_%d", toolSeq)
+								toolSeq++
+								itemMap["call_id"] = cid
+							}
+							if len(cid) > 64 {
+								cid = cid[:64]
+								itemMap["call_id"] = cid
+							}
+							pendingCallIDs = append(pendingCallIDs, cid)
+						case "function_call_output", "custom_tool_call_output":
+							cid, _ := itemMap["call_id"].(string)
+							if cid != "" {
+								for idx, p := range pendingCallIDs {
+									if p == cid {
+										pendingCallIDs = append(pendingCallIDs[:idx], pendingCallIDs[idx+1:]...)
+										break
+									}
+								}
+							} else if len(pendingCallIDs) > 0 {
+								cid = pendingCallIDs[0]
+								pendingCallIDs = pendingCallIDs[1:]
+								itemMap["call_id"] = cid
+							} else {
+								cid = fmt.Sprintf("call_%d", toolSeq)
+								toolSeq++
+								itemMap["call_id"] = cid
+							}
+							if len(cid) > 64 {
+								itemMap["call_id"] = cid[:64]
+							}
 						}
 					}
 				}
@@ -185,8 +220,10 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 
 	var inputItems []map[string]interface{}
 	instructions := oreq.Instructions
+	var pendingToolCallIDs []string
+	toolSeq := 0
 
-	for _, msg := range messages {
+	for i, msg := range messages {
 		switch msg.Role {
 		case "system", "developer":
 			if instructions == "" {
@@ -228,23 +265,43 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 			}
 
 			// Add assistant tool calls
-			for _, tc := range msg.ToolCalls {
+			for tcIdx, tc := range msg.ToolCalls {
 				name := strings.TrimSpace(tc.Function.Name)
 				if name == "" {
 					continue // Skip nameless calls — strict Responses upstreams reject them (#444)
 				}
+				cid := tc.ID
+				if cid == "" {
+					cid = fmt.Sprintf("call_%d_%d", toolSeq, tcIdx)
+				}
+				pendingToolCallIDs = append(pendingToolCallIDs, cid)
 				inputItems = append(inputItems, map[string]interface{}{
 					"type":      "function_call",
-					"call_id":   clampCallID(tc.ID),
+					"call_id":   clampCallID(cid),
 					"name":      name,
 					"arguments": tc.Function.Arguments,
 				})
 			}
+			toolSeq++
 		case "tool":
 			text := ExtractSimpleText(msg.Content)
+			cid := msg.ToolCallID
+			if cid != "" {
+				for idx, p := range pendingToolCallIDs {
+					if p == cid {
+						pendingToolCallIDs = append(pendingToolCallIDs[:idx], pendingToolCallIDs[idx+1:]...)
+						break
+					}
+				}
+			} else if len(pendingToolCallIDs) > 0 {
+				cid = pendingToolCallIDs[0]
+				pendingToolCallIDs = pendingToolCallIDs[1:]
+			} else {
+				cid = fmt.Sprintf("call_tool_%d", i)
+			}
 			inputItems = append(inputItems, map[string]interface{}{
 				"type":    "function_call_output",
-				"call_id": clampCallID(msg.ToolCallID),
+				"call_id": clampCallID(cid),
 				"output":  text,
 			})
 		}

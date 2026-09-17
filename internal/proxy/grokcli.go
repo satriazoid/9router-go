@@ -111,6 +111,33 @@ func ForwardKiro(ctx context.Context, client *http.Client, cfg *providers.Provid
 	return DoRequest(ctx, client, "POST", cfg.BaseURL, headers, clean)
 }
 
+const (
+	// KiroToolResultsPlaceholder is a neutral placeholder for user turns carrying only tool results.
+	// Prevents models from answering "Nothing in progress to continue" (decolua/9router #4109).
+	KiroToolResultsPlaceholder = "Tool results provided."
+	KiroEmptyUserPlaceholder   = "continue"
+)
+
+func kiroEmptyUserContent(hasToolResults bool) string {
+	if hasToolResults {
+		return KiroToolResultsPlaceholder
+	}
+	return KiroEmptyUserPlaceholder
+}
+
+func normalizeKiroUserMessage(uim map[string]any) {
+	content, _ := uim["content"].(string)
+	if strings.TrimSpace(content) == "" {
+		var hasToolResults bool
+		if ctx, ok := uim["userInputMessageContext"].(map[string]any); ok {
+			if tr, ok := ctx["toolResults"].([]any); ok && len(tr) > 0 {
+				hasToolResults = true
+			}
+		}
+		uim["content"] = kiroEmptyUserContent(hasToolResults)
+	}
+}
+
 func cleanKiroBody(body []byte) []byte {
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -118,9 +145,28 @@ func cleanKiroBody(body []byte) []byte {
 	}
 	delete(m, "systemPrompt")
 	delete(m, "agentMode")
+
+	// PR #4109: normalize user turns carrying only tool results
+	if uim, ok := m["userInputMessage"].(map[string]any); ok {
+		normalizeKiroUserMessage(uim)
+	}
 	if cs, ok := m["conversationState"].(map[string]any); ok {
 		delete(cs, "agentContinuationId")
 		delete(cs, "agentTaskType")
+		if cur, ok := cs["currentMessage"].(map[string]any); ok {
+			if uim, ok := cur["userInputMessage"].(map[string]any); ok {
+				normalizeKiroUserMessage(uim)
+			}
+		}
+		if history, ok := cs["history"].([]any); ok {
+			for _, turn := range history {
+				if tMap, ok := turn.(map[string]any); ok {
+					if uim, ok := tMap["userInputMessage"].(map[string]any); ok {
+						normalizeKiroUserMessage(uim)
+					}
+				}
+			}
+		}
 	}
 	if out, err := json.Marshal(m); err == nil {
 		return out

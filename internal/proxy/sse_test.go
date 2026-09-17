@@ -202,3 +202,63 @@ func TestHeartbeatWriter_ClosesOnContextCancel(t *testing.T) {
 		t.Errorf("expected write error on closed writer, got nil")
 	}
 }
+
+func TestSSECopy_SynthesizesTerminalOnAbruptClose(t *testing.T) {
+	t.Run("synthesizes network_error and DONE when stream ends without finish_reason", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		// Stream delivers content but EOF arrives before finish_reason or [DONE]
+		rawStream := bytes.NewReader([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+
+		err := SSECopy(rec, rawStream, rec, nil)
+		if err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+
+		out := rec.String()
+		if !strings.Contains(out, "\"finish_reason\":\"network_error\"") {
+			t.Errorf("expected synthesized network_error finish_reason, got %q", out)
+		}
+		if !strings.Contains(out, "data: [DONE]\n\n") {
+			t.Errorf("expected data: [DONE], got %q", out)
+		}
+	})
+
+	t.Run("preserves native finish_reason and DONE without duplicate terminal", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		normalStream := bytes.NewReader([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+
+		err := SSECopy(rec, normalStream, rec, nil)
+		if err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+
+		out := rec.String()
+		if strings.Contains(out, "network_error") {
+			t.Errorf("normal stream should not gain network_error, got %q", out)
+		}
+		// Should only have one [DONE]
+		if strings.Count(out, "[DONE]") != 1 {
+			t.Errorf("expected exactly 1 [DONE], got %d in %q", strings.Count(out, "[DONE]"), out)
+		}
+	})
+
+	t.Run("separates un-terminated tail from DONE cleanly", func(t *testing.T) {
+		rec := &mockResponseWriter{}
+		// Stream ends mid-line without trailing \n\n
+		unterminated := bytes.NewReader([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"tail\"}}]}"))
+
+		err := SSECopy(rec, unterminated, rec, nil)
+		if err != nil {
+			t.Fatalf("SSECopy failed: %v", err)
+		}
+
+		out := rec.String()
+		// Must not collapse tail with [DONE]
+		if strings.Contains(out, "}}data: [DONE]") || strings.Contains(out, "}}\ndata: [DONE]") {
+			t.Errorf("expected blank line separation before [DONE], got %q", out)
+		}
+		if !strings.HasSuffix(out, "data: [DONE]\n\n") {
+			t.Errorf("expected stream to end with 'data: [DONE]\\n\\n', got %q", out)
+		}
+	})
+}

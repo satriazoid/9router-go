@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.8.13",
+  "latestVersion": "1.8.14",
   "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.8.13: Fix grok-cli BaseURL endpoint to /v1/responses resolving upstream 404 errors on gcli/* models (fixes #2), prioritize custom providerNodes prefixes over built-in aliases to prevent shadowing of oa/cc/etc. (fixes #3), map internal providerNode row IDs to user-configured prefixes in /v1/models and /v1/models/*, and expand customModels catalog ingestion to include all routable model types with key-fallback parsing."
+  "releaseNotes": "v1.8.14: Port upstream fixes from decolua/9router including Muse Spark 1.3 HTTP 403 FreeTierError resolution, tool_call_id FIFO repair on tool messages, Grok CLI neutral placeholder for tool results, SSE network_error synthesis on abrupt connection drop, tool result image hoisting, and union-alpha routing."
 }

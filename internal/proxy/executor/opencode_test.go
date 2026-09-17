@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
 )
 
 func TestInjectReasoningContent(t *testing.T) {
@@ -51,8 +51,8 @@ func TestForwardOpencode(t *testing.T) {
 		if !strings.HasPrefix(r.Header.Get("x-opencode-request"), "msg_") {
 			t.Errorf("expected msg_ prefix on x-opencode-request, got %s", r.Header.Get("x-opencode-request"))
 		}
-		if r.Header.Get("User-Agent") != "opencode" {
-			t.Errorf("expected User-Agent opencode, got %s", r.Header.Get("User-Agent"))
+		if r.Header.Get("User-Agent") != proxy.DefaultOpenCodeUA {
+			t.Errorf("expected User-Agent %s, got %s", proxy.DefaultOpenCodeUA, r.Header.Get("User-Agent"))
 		}
 		body, _ := io.ReadAll(r.Body)
 		if !strings.Contains(string(body), `"reasoning_content":" "`) {
@@ -216,5 +216,49 @@ func TestForwardOpencode_MuseSpark_OCPrefix(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestNormalizeMuseSparkResponsesBody_ReasoningAndToolChoice(t *testing.T) {
+	raw := []byte(`{
+		"model": "muse-spark-1.3-contributor-free",
+		"reasoning_effort": "max",
+		"tool_choice": {"type": "function", "function": {"name": "shell"}},
+		"input": [
+			{"type": "message", "role": "user", "content": "hi"},
+			{"type": "reasoning", "encrypted_content": "ENCRYPTED_BLOB", "text": "thinking"},
+			{"type": "function_call", "name": "read", "encrypted_content": "BLOB_2"}
+		]
+	}`)
+
+	out, err := normalizeMuseSparkResponsesBody(raw, "muse-spark-1.3-contributor-free")
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+
+	// tool_choice should be auto
+	if parsed["tool_choice"] != "auto" {
+		t.Errorf("expected tool_choice 'auto', got %v", parsed["tool_choice"])
+	}
+
+	// reasoning effort max -> xhigh
+	rMap, _ := parsed["reasoning"].(map[string]any)
+	if rMap["effort"] != "xhigh" || rMap["summary"] != "auto" {
+		t.Errorf("expected reasoning effort xhigh, got %v", rMap)
+	}
+
+	// input reasoning stripped and encrypted_content removed
+	inList, _ := parsed["input"].([]any)
+	if len(inList) != 2 {
+		t.Fatalf("expected 2 items in input (reasoning stripped), got %d", len(inList))
+	}
+	fc, _ := inList[1].(map[string]any)
+	if fc["encrypted_content"] != nil {
+		t.Errorf("expected encrypted_content deleted from function_call, got %v", fc["encrypted_content"])
 	}
 }
