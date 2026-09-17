@@ -578,3 +578,43 @@ func mergeCapabilities(base, overlay Capabilities) Capabilities {
 		Reasoning:   base.Reasoning || overlay.Reasoning,
 	}
 }
+
+// CapabilitiesDetail matches the serializable capabilities object expected by clients in /v1/models.
+type CapabilitiesDetail struct {
+	Vision                  bool `json:"vision"`
+	PDF                     bool `json:"pdf"`
+	AudioInput              bool `json:"audioInput"`
+	VideoInput              bool `json:"videoInput"`
+	ImageOutput             bool `json:"imageOutput"`
+	AudioOutput             bool `json:"audioOutput"`
+	ThinkingCanDisable      bool `json:"thinkingCanDisable"`
+	ThinkingRange           any  `json:"thinkingRange"`
+	ThinkingEffortSupported bool `json:"thinkingEffortSupported"`
+	ContextWindows          int  `json:"contextWindows,omitempty"`
+	ContextWindow           int  `json:"contextWindow,omitempty"`
+}
+
+// GetCapabilitiesDetailForModel returns the full JSON-serializable capabilities map for /v1/models.
+func GetCapabilitiesDetailForModel(provider, model string) CapabilitiesDetail {
+	caps := GetCapabilitiesForModel(provider, model)
+	cw, _ := GetModelTokenLimits(model)
+	if cw == 0 {
+		cw, _ = GetModelTokenLimits(provider + "/" + model)
+	}
+	if cw == 0 {
+		cw = 128000
+	}
+	return CapabilitiesDetail{
+		Vision:                  caps.Vision,
+		PDF:                     caps.PDF,
+		AudioInput:              caps.AudioInput,
+		VideoInput:              caps.VideoInput,
+		ImageOutput:             caps.ImageOutput,
+		AudioOutput:             caps.AudioOutput,
+		ThinkingCanDisable:      true,
+		ThinkingRange:           nil,
+		ThinkingEffortSupported: false,
+		ContextWindows:          cw,
+		ContextWindow:           cw,
+	}
+}

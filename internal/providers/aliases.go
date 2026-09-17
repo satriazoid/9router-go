@@ -96,3 +96,22 @@ func ResolveAlias(alias string) string {
 	}
 	return alias
 }
+
+// ProviderToAliasMap maps canonical provider IDs to their primary short alias.
+var ProviderToAliasMap = map[string]string{}
+
+func init() {
+	for alias, provider := range ProviderAliasMap {
+		if _, exists := ProviderToAliasMap[provider]; !exists {
+			ProviderToAliasMap[provider] = alias
+		}
+	}
+}
+
+// GetProviderAlias returns the primary short alias for a canonical provider ID, or providerID itself.
+func GetProviderAlias(providerID string) string {
+	if alias, ok := ProviderToAliasMap[providerID]; ok && alias != "" {
+		return alias
+	}
+	return providerID
+}
