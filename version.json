@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.8.15",
+  "latestVersion": "1.8.16",
   "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.8.15: Claude-to-OpenAI response translation for union-alpha, PR #4111 Zen headers (CLI client, 40-hex project IDs), Google RPC quotaResetDelay automatic duration locking with deadlock protection, Anthropic tools schema conversion, and terminal frame detection in SSE streams."
+  "releaseNotes": "v1.8.16: Fix missing model list in /v1/models and /api/models by dynamically populating models from active provider connections, adding CapabilitiesDetail metadata (vision, pdf, audioInput, contextWindows, contextWindow), and routing /api/models (fixes #7)."
 }
