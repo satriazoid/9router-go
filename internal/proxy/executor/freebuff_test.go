@@ -322,7 +322,7 @@ func TestFreebuff_RequestSession_ModelLocked_Recovery(t *testing.T) {
 			"currentModel": "z-ai/glm-5.3-flash",
 			"requestedModel": "z-ai/glm-5.3-flash",
 			"instanceId": "inst-recovered-123",
-			"expiresAt": "2026-09-17T02:00:00Z"
+			"expiresAt": "2099-01-01T00:00:00Z"
 		}`))
 	}))
 	defer srv.Close()
