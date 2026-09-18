@@ -246,7 +246,7 @@ func TranslateOpenAIToGemini(openaiBody []byte) ([]byte, error) {
 				}
 				ts := extractThoughtSig(tc.ID)
 				if ts == "" {
-					ts = GetGeminiThoughtSignature(tc.ID, "")
+					ts = GetGeminiThoughtSignature(tc.ID, "", oreq.Model)
 				}
 				if ts == "" && !firstFunctionCallSeen {
 					ts = DefaultThinkingSignature
@@ -627,7 +627,7 @@ func TranslateGeminiChunkToOpenAI(chunk []byte, state *GeminiStreamState) ([]byt
 						sig = state.LastThoughtSignature
 					}
 					if sig != "" {
-						StoreGeminiThoughtSignature(id, sig, state.MessageId)
+						StoreGeminiThoughtSignature(id, sig, state.MessageId, state.Model)
 						id += "__ts__" + sig
 					}
 					delta["tool_calls"] = []map[string]interface{}{
