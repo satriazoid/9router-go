@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"9router/proxy/internal/proxy"
+	"9router/proxy/internal/translator"
 )
 
 // ---- Provider-specific executors ----
@@ -347,13 +348,20 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			}
 			messagesURL = base + "/messages"
 		}
-		headers := proxy.BuildOpenCodeHeaders(nil, req.SessionID, req.IsStream)
+		headers := proxy.BuildOpenCodeHeaders(nil, req.SessionID, true)
 		headers["anthropic-version"] = "2023-06-01"
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		body := ensureMessagesMaxTokens(req.Body, cleanModel)
+		var msgMap map[string]any
+		if err := json.Unmarshal(body, &msgMap); err == nil {
+			msgMap["stream"] = true
+			if b, err := json.Marshal(msgMap); err == nil {
+				body = b
+			}
+		}
 		resp, err := proxy.DoRequest(ctx, req.Client, "POST", messagesURL, headers, body)
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (union-alpha messages route): %w", err)
@@ -368,29 +376,61 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		if req.IsStream {
 			return handleClaudeMessagesStream(w, req, resp.Body)
 		}
-		return handleClaudeMessagesNonStream(w, req, resp.Body)
+		var sseChunks []byte
+		var state translator.ClaudeToOpenAIStreamState
+		_ = proxy.ScanStream(resp.Body, func(payload []byte) {
+			if oaiChunk, cErr := translator.TranslateClaudeChunkToOpenAI(payload, &state); cErr == nil && oaiChunk != nil {
+				sseChunks = append(sseChunks, oaiChunk...)
+			}
+		})
+		converted, ok := sseToOpenAIJSON(sseChunks)
+		if !ok {
+			converted = sseChunks
+		}
+		return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
 	}
-
 
 	body := InjectReasoningContent(req.Body, "opencode")
 
+	// Upstream OpenCode free tier strictly requires stream=true.
+	// Non-streaming calls are blocked with 403 FreeTierError.
+	var reqMap map[string]any
+	if err := json.Unmarshal(body, &reqMap); err == nil {
+		reqMap["stream"] = true
+		if b, err := json.Marshal(reqMap); err == nil {
+			body = b
+		}
+	}
+
 	cfg := *req.Config
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, req.IsStream)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, apiKey, body, req.IsStream)
+	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, apiKey, body, true)
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+	}
+
 	if req.IsStream {
 		return execSSEStream(w, resp.Body, req)
 	}
-	return jsonResponse(req.Ctx, w, resp.Body, req.TranslateResp, req.ResponseBuf)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return fmt.Errorf("read opencode response: %w", err)
+	}
+	if converted, ok := sseToOpenAIJSON(data); ok {
+		data = converted
+	}
+	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 
 var opencodeGoMessagesModels = map[string]bool{

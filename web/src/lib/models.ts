@@ -3009,14 +3009,62 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "oc": [
     {
+      "id": "mimo-v2.5-free",
+      "name": "mimo-v2.5-free",
+      "supportedFormats": ["openai"],
+      "capabilities": ["vision"]
+    },
+    {
+      "id": "nemotron-3-ultra-free",
+      "name": "nemotron-3-ultra-free",
+      "supportedFormats": ["openai"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "laguna-s-2.1-free",
+      "name": "laguna-s-2.1-free",
+      "supportedFormats": ["openai"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "big-pickle",
+      "name": "big-pickle",
+      "supportedFormats": ["openai"]
+    },
+    {
+      "id": "north-mini-code-free",
+      "name": "north-mini-code-free",
+      "supportedFormats": ["openai"]
+    },
+    {
+      "id": "ling-3.0-flash-free",
+      "name": "ling-3.0-flash-free",
+      "supportedFormats": ["openai"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "nemotron-3.5-lightning-free",
+      "name": "nemotron-3.5-lightning-free",
+      "supportedFormats": ["openai"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "union-alpha",
+      "name": "union-alpha",
+      "supportedFormats": ["openai"],
+      "capabilities": ["vision", "reasoning"]
+    },
+    {
       "id": "muse-spark-1.2-contributor-free",
       "name": "Muse Spark 1.2 Contributor Free",
-      "targetFormat": "openai-responses"
+      "supportedFormats": ["openai"],
+      "capabilities": ["vision", "reasoning"]
     },
     {
       "id": "muse-spark-1.3-contributor-free",
       "name": "Muse Spark 1.3 Contributor Free",
-      "targetFormat": "openai-responses"
+      "supportedFormats": ["openai"],
+      "capabilities": ["vision", "reasoning"]
     }
   ],
   "openrouter": [

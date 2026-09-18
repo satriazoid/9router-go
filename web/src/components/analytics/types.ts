@@ -26,6 +26,13 @@ export interface RecentRequestItem {
   completionTokens?: number
   timestamp?: string
 }
+export interface ActiveRequestItem {
+  model?: string
+  provider?: string
+  account?: string
+  count?: number
+}
+
 
 export interface RequestDetailItem {
   id?: string
@@ -56,7 +63,7 @@ export interface StatsData {
   byAccount?: Record<string, UsageItem>
   byApiKey?: Record<string, UsageItem>
   byEndpoint?: Record<string, UsageItem>
-  activeRequests?: RecentRequestItem[]
+  activeRequests?: ActiveRequestItem[]
   recentRequests?: RecentRequestItem[]
   errorProvider?: string
   pending?: unknown

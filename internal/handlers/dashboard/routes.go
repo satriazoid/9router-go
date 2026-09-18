@@ -35,6 +35,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/connections/{id}", h.HandleUpdateConnection)
 		r.Put("/providers/{id}", h.HandleUpdateConnection)
 		r.Delete("/connections/{id}", h.HandleDeleteConnection)
+		r.Delete("/providers/{id}", h.HandleDeleteConnection)
+		r.Post("/connections/{id}/test", h.HandleTestConnection)
+		r.Post("/providers/{id}/test", h.HandleTestConnection)
 
 		// Provider Nodes (Custom Endpoints)
 		r.Get("/provider-nodes", h.HandleGetProviderNodes)
@@ -46,6 +49,13 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/combos", h.HandleCreateCombo)
 		r.Put("/combos/{id}", h.HandleUpdateCombo)
 		r.Delete("/combos/{id}", h.HandleDeleteCombo)
+
+		// Proxy Pools
+		r.Get("/proxy-pools", h.HandleGetProxyPools)
+		r.Post("/proxy-pools", h.HandleCreateProxyPool)
+		r.Put("/proxy-pools/{id}", h.HandleUpdateProxyPool)
+		r.Delete("/proxy-pools/{id}", h.HandleDeleteProxyPool)
+		r.Post("/proxy-pools/{id}/test", h.HandleTestProxyPool)
 
 		// API Keys
 		r.Get("/keys", h.HandleGetApiKeys)
@@ -63,5 +73,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// Settings
 		r.Get("/settings", h.HandleGetSettings)
 		r.Put("/settings", h.HandleUpdateSettings)
+
+		// Usage & Quotas
+		r.Get("/usage/providers", h.HandleGetUsageProviders)
+		r.Get("/usage/{connectionId}", h.HandleGetConnectionUsage)
 	})
 }

@@ -3,6 +3,7 @@
   import Badge from '../../lib/ui/Badge.svelte'
   import Button from '../../lib/ui/Button.svelte'
   import Card from '../../lib/ui/Card.svelte'
+  import { getIconPath } from '../connections/types'
   import { fmt, timeAgo, type RequestDetailItem } from './types'
 
   interface Props {
@@ -74,10 +75,36 @@
                 {timeAgo(item.timestamp)}
               </td>
               <td class="py-3 px-4">
-                <Badge variant="neutral" size="sm">{item.provider || 'unknown'}</Badge>
+                <div class="flex items-center gap-1.5">
+                  {#if item.provider}
+                    <img
+                      src={getIconPath(item.provider)}
+                      alt={item.provider}
+                      class="w-3.5 h-3.5 object-contain rounded shrink-0"
+                      onerror={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none'
+                      }}
+                      loading="lazy"
+                    />
+                  {/if}
+                  <Badge variant="neutral" size="sm">{item.provider || 'unknown'}</Badge>
+                </div>
               </td>
               <td class="py-3 px-4 font-bold text-text-main max-w-[140px] truncate">
-                {item.model}
+                <div class="flex items-center gap-1.5">
+                  {#if item.provider}
+                    <img
+                      src={getIconPath(item.provider)}
+                      alt={item.model}
+                      class="w-3.5 h-3.5 object-contain rounded shrink-0 bg-surface-2 p-0.5 border border-border/40"
+                      onerror={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none'
+                      }}
+                      loading="lazy"
+                    />
+                  {/if}
+                  <span class="truncate">{item.model}</span>
+                </div>
               </td>
               <td class="py-3 px-4 text-right text-text-muted">
                 {item.latency?.ttft ? `${item.latency.ttft}ms` : '—'}

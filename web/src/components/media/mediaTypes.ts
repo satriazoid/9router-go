@@ -1,6 +1,6 @@
 import type { ProviderConnection } from '../../api/client'
 
-export type MediaKind = 'embedding' | 'image' | 'tts' | 'stt' | 'video'
+export type MediaKind = 'embedding' | 'image' | 'tts' | 'stt' | 'video' | 'webSearch' | 'webFetch'
 
 export interface MediaKindInfo {
   kind: MediaKind
@@ -45,6 +45,20 @@ export const MEDIA_KIND_INFO: Record<MediaKind, MediaKindInfo> = {
     singular: 'Video',
     description: 'Text-to-video generation, video extension, and motion synthesis models.',
     emptyMessage: 'No video generation providers found.',
+  },
+  webSearch: {
+    kind: 'webSearch',
+    title: 'Web Search Providers',
+    singular: 'Web Search',
+    description: 'Web search APIs and live search endpoints.',
+    emptyMessage: 'No web search providers found.',
+  },
+  webFetch: {
+    kind: 'webFetch',
+    title: 'Web Fetch Providers',
+    singular: 'Web Fetch',
+    description: 'URL content extraction, scraper, and web reader endpoints.',
+    emptyMessage: 'No web fetch providers found.',
   },
 }
 

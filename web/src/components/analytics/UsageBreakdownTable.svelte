@@ -1,6 +1,7 @@
 <script lang="ts">
   import Badge from '../../lib/ui/Badge.svelte'
   import Card from '../../lib/ui/Card.svelte'
+  import { getIconPath } from '../connections/types'
   import {
     fmt,
     fmtCost,
@@ -108,10 +109,36 @@
             {#each tableData() as row}
               <tr class="hover:bg-surface-2/60 transition-colors">
                 <td class="py-3 px-4 font-mono font-medium text-text-main text-xs">
-                  {row.rawModel || row.accountName || row.keyName || row.endpoint || row.key}
+                  <div class="flex items-center gap-2">
+                    {#if row.provider}
+                      <img
+                        src={getIconPath(row.provider)}
+                        alt={row.provider}
+                        class="w-4 h-4 object-contain rounded shrink-0 bg-surface-2 p-0.5 border border-border/40"
+                        onerror={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = 'none'
+                        }}
+                        loading="lazy"
+                      />
+                    {/if}
+                    <span class="truncate">{row.rawModel || row.accountName || row.keyName || row.endpoint || row.key}</span>
+                  </div>
                 </td>
                 <td class="py-3 px-4">
-                  <Badge variant="neutral" size="sm">{row.provider || 'unknown'}</Badge>
+                  <div class="flex items-center gap-1.5">
+                    {#if row.provider}
+                      <img
+                        src={getIconPath(row.provider)}
+                        alt={row.provider}
+                        class="w-3.5 h-3.5 object-contain rounded shrink-0"
+                        onerror={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = 'none'
+                        }}
+                        loading="lazy"
+                      />
+                    {/if}
+                    <Badge variant="neutral" size="sm">{row.provider || 'unknown'}</Badge>
+                  </div>
                 </td>
                 <td class="py-3 px-4 text-right font-mono font-semibold text-text-main">
                   {fmt(row.requests)}

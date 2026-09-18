@@ -12,7 +12,7 @@ const MEDIA_KINDS: Record<string, true> = {
 
 function isChatModel(m: unknown): boolean {
   const kind = getModelKind(m)
-  if (!kind || kind === 'llm') {
+  if (!kind || kind === 'llm' || kind === 'chat') {
     const obj = typeof m === 'object' && m !== null ? (m as { kind?: string; type?: string }) : null
     return !(obj?.kind && MEDIA_KINDS[obj.kind]) && !(obj?.type && MEDIA_KINDS[obj.type])
   }
@@ -54,7 +54,7 @@ export function resolveModelPickerGroups(
     }
     const isConnected =
       activeProviderIds.has(catItem.id) || (catItem.alias && activeProviderIds.has(catItem.alias))
-    const isNoAuth = catItem.noAuth === true
+    const isNoAuth = catItem.noAuth === true || catItem.category === 'free'
     if (!isConnected && !isNoAuth) {
       continue
     }

@@ -99,6 +99,7 @@ To prevent maintenance bottlenecks and "god components", every single subcompone
 | **Phase 4** | [x] Selesai | Strict Model Assignment & Multi-Account Model Binding (mencegah error 409 `model_locked`) |
 | **Phase 5** | [x] Selesai | Combos Modal Redesign (Combos pills di atas, nested combos, capability badges 👁️/🧠) |
 | **Phase 6** | [x] Selesai | Pemisahan Format Chat/LLM vs Media Providers (Accordion Media, Embedding, TTS, STT, Image, Video, Web) |
+| **Phase 7** | [x] Selesai | Freebuff OAuth Device Flow, Auth Modal & Auth-Type Segregation (Penanganan spesifik No-Auth, Device Flow, Web OAuth & API Key) |
 
 ---
 
@@ -177,6 +178,24 @@ To prevent maintenance bottlenecks and "god components", every single subcompone
     - `pickerData.ts` mengecualikan media provider dari pemilihan model chat combo.
   - **Komponen Tampilan Khusus**: `MediaKindView.svelte`, `MediaWebView.svelte`, `MediaProviderCard.svelte`, dan `MediaModelCard.svelte`.
 
+---
+
+### Phase 7: Freebuff OAuth Device Flow, Auth Modal & Auth-Type Segregation
+- **Tujuan**: Memperbaiki alur otentikasi CLI Device Flow untuk Freebuff upstream, mengintegrasikan modal otentikasi interaktif (copy link, browser open, auto-polling indicator, dan manual check), serta memisahkan logika klasifikasi provider (*No-Auth*, *Free Device Flow*, *Web OAuth*, dan *API Key*) agar tidak dipukul rata.
+- **Implementasi Backend (`internal/handlers/oauth/freebuff.go`)**:
+  - `HandleFreebuffInitiate`: Memanggil endpoint resmi `POST https://freebuff.com/api/auth/cli/code` untuk mendaftarkan session secara upstream dan memperoleh `loginUrl` serta `fingerprintHash` resmi. Menyimpan `expiresAt` ke `freebuffPendingSessions` in-memory map.
+  - `HandleFreebuffPoll`: Menggunakan `GET https://freebuff.com/api/auth/cli/status?fingerprintId=...&fingerprintHash=...&expiresAt=...` dengan query params resmi.
+  - Mengatasi bug fatal `unexpected EOF` (502 Bad Gateway) dengan mengenali respon HTTP 401 dan empty body sebagai status `pending` (HTTP 200).
+  - Menangani fleksibilitas token upstream (`accessToken`, `access_token`, `authToken`, `token`) serta metadata user (`userId`, `email`, `name`).
+- **Implementasi Frontend Catalog (`web/src/lib/providers.ts`)**:
+  - Memastikan `freebuff` dikategorikan sebagai `"oauth"` (bukan `"free"` no-auth dan bukan `"apikey"`), sehingga form koneksi dan alur device flow muncul sesuai peruntukannya.
+- **Implementasi Frontend UI & Modal (`web/src/components/connections/ProviderDetailView.svelte`)**:
+  - Menghilangkan asumsi "pukul rata" bahwa semua provider kategori free tidak memiliki otentikasi; `isNoAuth` dibatasi khusus untuk provider yang memang `noAuth === true` (seperti `mimo`, `opencode`).
+  - Menyediakan **Freebuff Auth Modal** terintegrasi:
+    - Step 1: URL login dengan tombol `Open` dan `Copy`.
+    - Live auto-polling status spinner.
+    - Step 2: Input box manual untuk URL redirect (`/onboard?auth_code=...`) atau raw token dengan tombol `Check & Connect`.
+  - Menyematkan kembali `<FreebuffSessionBanner>` dan badge visual status sesi aktif pada daftar model.
 ---
 
 ## 3. Struktur Berkas Utama (Key File Structure)

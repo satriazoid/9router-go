@@ -1,5 +1,6 @@
 import { api, type ProviderConnection } from '../../api/client'
 import { getModelCaps, getModelKind } from '../../lib/models'
+import { PROVIDER_CATALOG, PROVIDER_CATALOG_MAP } from '../../lib/providers'
 
 export const MEDIA_KINDS: Record<string, true> = {
   image: true,
@@ -11,7 +12,7 @@ export const MEDIA_KINDS: Record<string, true> = {
 
 export function isChatModel(m: unknown): boolean {
   const kind = getModelKind(m)
-  if (!kind || kind === 'llm') {
+  if (!kind || kind === 'llm' || kind === 'chat') {
     const obj = typeof m === 'object' && m !== null ? (m as { kind?: string; type?: string }) : null
     return !(obj?.kind && MEDIA_KINDS[obj.kind]) && !(obj?.type && MEDIA_KINDS[obj.type])
   }
@@ -42,14 +43,23 @@ export interface CustomModelData {
   type?: string
 }
 
-export function getIconPath(id: string, apiType?: string): string {
-  if (id.startsWith('openai-compatible')) {
+export function getIconPath(id?: string | null, apiType?: string): string {
+  if (!id) return '/providers/oai-cc.png'
+  const clean = id.trim()
+  if (clean.startsWith('openai-compatible')) {
     return apiType === 'responses' ? '/providers/oai-r.png' : '/providers/oai-cc.png'
   }
-  if (id.startsWith('anthropic-compatible')) {
+  if (clean.startsWith('anthropic-compatible') || clean.includes('anthropic')) {
     return '/providers/anthropic-m.png'
   }
-  return `/providers/${id}.png`
+  if (PROVIDER_CATALOG_MAP.has(clean)) {
+    return `/providers/${clean}.png`
+  }
+  const byAlias = PROVIDER_CATALOG.find((p) => p.alias === clean)
+  if (byAlias) {
+    return `/providers/${byAlias.id}.png`
+  }
+  return apiType === 'responses' ? '/providers/oai-r.png' : '/providers/oai-cc.png'
 }
 
 export function getProviderStats(

@@ -1017,14 +1017,25 @@ func (h *ChatHandler) HandleTestModel(w http.ResponseWriter, r *http.Request) {
 		"messages": []map[string]string{
 			{"role": "user", "content": "hi"},
 		},
-		"max_tokens": 1,
+		"max_tokens": 1024,
 		"stream":     false,
 	}
 	b, _ := json.Marshal(payload)
 
 	testReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
 	testReq.Header.Set("Content-Type", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		if keys, err := h.Repo.GetApiKeys(); err == nil {
+			for _, k := range keys {
+				if k.IsActive == 1 && k.Key != "" {
+					auth = "Bearer " + k.Key
+					break
+				}
+			}
+		}
+	}
+	if auth != "" {
 		testReq.Header.Set("Authorization", auth)
 	}
 	rec := httptest.NewRecorder()
@@ -1033,11 +1044,30 @@ func (h *ChatHandler) HandleTestModel(w http.ResponseWriter, r *http.Request) {
 	if rec.Code == http.StatusOK {
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 	} else {
-		errMsg := rec.Body.String()
-		if rec.Code == http.StatusTooManyRequests {
-			errMsg = "429: Rate limit or quota exhausted"
-		} else if rec.Code == http.StatusUnauthorized {
-			errMsg = "401: Unauthorized / Invalid key"
+		errMsg := strings.TrimSpace(rec.Body.String())
+		var errObj struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    any    `json:"code"`
+			} `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(errMsg), &errObj) == nil {
+			if errObj.Error.Message != "" {
+				errMsg = errObj.Error.Message
+			} else if errObj.Message != "" {
+				errMsg = errObj.Message
+			}
+		}
+
+		if rec.Code == http.StatusTooManyRequests && !strings.HasPrefix(errMsg, "429") {
+			errMsg = "429: " + errMsg
+		} else if rec.Code == http.StatusUnauthorized && !strings.HasPrefix(errMsg, "401") {
+			errMsg = "401: " + errMsg
+		} else if rec.Code == http.StatusServiceUnavailable && !strings.HasPrefix(errMsg, "503") {
+			errMsg = "503: " + errMsg
+		} else if rec.Code == http.StatusNotFound && !strings.HasPrefix(errMsg, "404") {
+			errMsg = "404: " + errMsg
 		}
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": false, "error": errMsg})
 	}

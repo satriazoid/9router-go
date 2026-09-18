@@ -53,6 +53,22 @@
       (conn as unknown as { freebuffModel?: string }).freebuffModel ||
       ''
   )
+  let isRateLimited = $derived.by(() => {
+    const errCode = (conn as unknown as { errorCode?: number }).errorCode
+    const lastErr = conn.lastError || ''
+    return (
+      errCode === 429 ||
+      lastErr.includes('429') ||
+      lastErr.toLowerCase().includes('quota') ||
+      lastErr.toLowerCase().includes('exhausted')
+    )
+  })
+  let cooldownLabel = $derived.by(() => {
+    const lastErr = conn.lastError || ''
+    const match = lastErr.match(/Resets in ([^.]+)/i)
+    if (match) return `Resets in ${match[1].trim()}`
+    return 'Quota Exhausted (429)'
+  })
 </script>
 <div class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 group hover:bg-black/[0.01] dark:hover:bg-white/[0.01] px-2 rounded-lg transition-colors">
   <div class="flex items-center gap-3 min-w-0 flex-1">
@@ -83,6 +99,15 @@
         {/if}
         <Badge variant="outline" size="sm">{isOAuth ? 'OAuth' : (conn.authType || 'API Key')}</Badge>
         <span class="text-xs text-text-muted font-mono">#{index + 1}</span>
+        {#if isRateLimited}
+          <span
+            class="inline-flex items-center gap-1 rounded-full font-semibold px-2 py-0.5 text-[10px] bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30"
+            title={conn.lastError || 'Rate limit / Quota exhausted'}
+          >
+            <span class="material-symbols-outlined text-[10px] animate-pulse">hourglass_top</span>
+            {cooldownLabel}
+          </span>
+        {/if}
         {#if latency != null}
           <span class="text-xs font-mono text-emerald-500 font-medium">{latency}ms</span>
         {/if}

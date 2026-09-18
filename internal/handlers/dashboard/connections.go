@@ -25,6 +25,20 @@ func (h *DashboardHandler) HandleGetConnections(w http.ResponseWriter, r *http.R
 	handlerutil.WriteJSON(w, http.StatusOK, conns)
 }
 
+// HandleGetProvidersClient handles GET /api/providers and GET /api/providers/client.
+// Upstream Next.js wraps connections in a root object: {"connections": [...]}.
+func (h *DashboardHandler) HandleGetProvidersClient(w http.ResponseWriter, r *http.Request) {
+	conns, err := h.Repo.GetProviderConnections("", false)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if conns == nil {
+		conns = []*models.ProviderConnection{}
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"connections": conns})
+}
+
 // HandleCreateConnection handles POST /api/connections.
 // Parses id, provider, authType, name, apiKey, data and calls CreateProviderConnection.
 func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http.Request) {
@@ -264,4 +278,19 @@ func (h *DashboardHandler) HandleDeleteConnection(w http.ResponseWriter, r *http
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
+}
+
+// HandleTestConnection handles POST /api/providers/{id}/test and POST /api/connections/{id}/test.
+func (h *DashboardHandler) HandleTestConnection(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing connection id")
+		return
+	}
+	conn, err := h.Repo.GetProviderConnectionByID(id)
+	if err != nil || conn == nil {
+		handlerutil.WriteJSON(w, http.StatusNotFound, map[string]any{"valid": false, "error": "Connection not found"})
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"valid": true})
 }

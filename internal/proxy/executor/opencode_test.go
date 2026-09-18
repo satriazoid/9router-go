@@ -519,3 +519,51 @@ func TestForwardOpencode_UnionAlpha_ConvertsOpenAIToolsInRequest(t *testing.T) {
 		t.Errorf("expected top-level system, got %v", capturedBody["system"])
 	}
 }
+
+func TestForwardOpencode_BigPickle_ForcesStreamAndAggregatesSSE(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &capturedBody)
+		// OpenCode free tier requires stream: true
+		if capturedBody["stream"] != true {
+			t.Errorf("expected stream: true in upstream body, got %v", capturedBody["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pickle response\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{
+		BaseURL: srv.URL,
+	}
+
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client:        srv.Client(),
+		Config:        cfg,
+		Body:          []byte(`{"model":"big-pickle","messages":[{"role":"user","content":"hi"}],"stream":false}`),
+		IsStream:      false, // non-streaming request
+		TranslateResp: false,
+	}
+
+	err := ForwardOpencode(rec, req)
+	if err != nil {
+		t.Fatalf("ForwardOpencode failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal non-streaming response: %v", err)
+	}
+	choices := resp["choices"].([]any)
+	c0 := choices[0].(map[string]any)
+	msg := c0["message"].(map[string]any)
+	if msg["content"] != "pickle response" {
+		t.Errorf("expected 'pickle response', got %v", msg["content"])
+	}
+}

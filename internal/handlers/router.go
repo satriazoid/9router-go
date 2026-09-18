@@ -88,6 +88,7 @@ func SetupRoutes(r interface {
 
 	// CLI Tools Status Domain (dashboard batch status for installed CLI tools)
 	r.Get("/cli-tools/all-statuses", media.NewCLIToolsHandler().HandleAllStatuses)
+	r.Get("/api/cli-tools/all-statuses", media.NewCLIToolsHandler().HandleAllStatuses)
 
 	// Headroom Management Domain (token-compression proxy lifecycle + dashboard proxy)
 	headroomH := media.NewHeadroomHandler(repo)
@@ -125,16 +126,23 @@ func SetupRoutes(r interface {
 	r.Get("/usage/stats", HandleUsageStats(repo))
 	r.Get("/api/usage/stats", HandleUsageStats(repo))
 	r.Get("/api/usage/request-details", HandleRequestDetails(repo))
+	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
+	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
 
 	// Debug Tracing Domain (p50/p95 latency per provider+model)
 	r.Get("/debug/traces", HandleDebugTraces)
 
 	// Dashboard REST API Domain
 	r.Get("/api/connections", dashH.HandleGetConnections)
+	r.Get("/api/providers", dashH.HandleGetProvidersClient)
+	r.Get("/api/providers/client", dashH.HandleGetProvidersClient)
 	r.Post("/api/connections", dashH.HandleCreateConnection)
 	r.Put("/api/connections/{id}", dashH.HandleUpdateConnection)
 	r.Put("/api/providers/{id}", dashH.HandleUpdateConnection)
 	r.Delete("/api/connections/{id}", dashH.HandleDeleteConnection)
+	r.Delete("/api/providers/{id}", dashH.HandleDeleteConnection)
+	r.Post("/api/connections/{id}/test", dashH.HandleTestConnection)
+	r.Post("/api/providers/{id}/test", dashH.HandleTestConnection)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)
@@ -144,6 +152,12 @@ func SetupRoutes(r interface {
 	r.Post("/api/combos", dashH.HandleCreateCombo)
 	r.Put("/api/combos/{id}", dashH.HandleUpdateCombo)
 	r.Delete("/api/combos/{id}", dashH.HandleDeleteCombo)
+
+	r.Get("/api/proxy-pools", dashH.HandleGetProxyPools)
+	r.Post("/api/proxy-pools", dashH.HandleCreateProxyPool)
+	r.Put("/api/proxy-pools/{id}", dashH.HandleUpdateProxyPool)
+	r.Delete("/api/proxy-pools/{id}", dashH.HandleDeleteProxyPool)
+	r.Post("/api/proxy-pools/{id}/test", dashH.HandleTestProxyPool)
 
 	r.Get("/api/keys", dashH.HandleGetApiKeys)
 	r.Post("/api/keys", dashH.HandleCreateApiKey)
@@ -194,12 +208,27 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	r.Get("/quota", webH.ServeHTTP)
 	r.HandleFunc("/assets/*", webH.ServeHTTP)
 	r.HandleFunc("/providers/*", webH.ServeHTTP)
-	r.Get("/favicon.ico", webH.ServeHTTP)
+	r.HandleFunc("/icons/*", webH.ServeHTTP)
+	r.HandleFunc("/favicon.ico", webH.ServeHTTP)
+	r.HandleFunc("/favicon.svg", webH.ServeHTTP)
+	r.HandleFunc("/icons.svg", webH.ServeHTTP)
 	r.HandleFunc("/api/hello", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
 			w.Write([]byte(`{"status":"ok","message":"hello"}`))
 		}
+	})
+	r.Get("/api/auth/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		w.Write([]byte(`{"requireLogin":false,"authMode":"password","ssoType":"oidc","oidcConfigured":false,"oidcLoginLabel":"Sign in with OIDC","samlConfigured":false,"samlLoginLabel":"Sign in with SAML SSO","hasPassword":true,"displayName":"9router-go","loginMethod":"Password","authenticated":true}`))
+	})
+	r.Get("/api/settings/require-login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		w.Write([]byte(`{"requireLogin":false,"tunnelDashboardAccess":true,"tunnelUrl":"","tailscaleUrl":""}`))
+	})
+	r.Get("/api/tunnel/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		w.Write([]byte(`{"tunnel":{"enabled":false,"settingsEnabled":false,"tunnelUrl":"","shortId":"","publicUrl":"","running":false},"tailscale":{"enabled":false,"settingsEnabled":false,"tunnelUrl":"","running":false,"loggedIn":false},"download":{"downloading":false,"progress":0}}`))
 	})
 
 	// Profiling endpoints (pprof)

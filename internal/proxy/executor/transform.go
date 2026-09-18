@@ -117,6 +117,11 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 					m["max_output_tokens"] = *quickCheck.MaxTokens
 				}
 			}
+			if mot, ok := m["max_output_tokens"].(float64); ok && mot < 16 && mot > 0 {
+				m["max_output_tokens"] = 16
+			} else if mot, ok := m["max_output_tokens"].(int); ok && mot < 16 && mot > 0 {
+				m["max_output_tokens"] = 16
+			}
 			delete(m, "max_tokens")
 			delete(m, "max_completion_tokens")
 
@@ -324,6 +329,9 @@ func buildResponsesBody(body []byte) ([]byte, string, error) {
 		respReq["max_output_tokens"] = *oreq.MaxCompletionTokens
 	} else if oreq.MaxTokens != nil {
 		respReq["max_output_tokens"] = *oreq.MaxTokens
+	}
+	if mot, ok := respReq["max_output_tokens"].(int); ok && mot < 16 && mot > 0 {
+		respReq["max_output_tokens"] = 16
 	}
 
 	if oreq.Temperature != nil {

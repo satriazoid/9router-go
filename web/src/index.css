@@ -21,6 +21,9 @@
   --color-brand-700: #a64027;
   --color-brand-800: #7a2f1d;
   --color-brand-900: #4d1e12;
+  --color-primary: #e56a4a;
+  --color-primary-hover: #cc5236;
+  --color-vibrancy: var(--app-sidebar);
 
   /* Semantic surfaces */
   --color-bg: var(--app-bg);
@@ -151,4 +154,25 @@ body {
 }
 .animate-disco {
   animation: disco-glow 3s infinite ease-in-out;
+}
+
+/* Material Symbols styling */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+.material-symbols-outlined.fill-1 {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }

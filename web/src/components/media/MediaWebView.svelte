@@ -1,31 +1,20 @@
 <script lang="ts">
   import { ChevronRight, Globe, Layers, Plus, Search, Trash2, X } from 'lucide-svelte'
   import { api, type Combo, type ProviderConnection } from '../../api/client'
+  import { getProvidersByKind, type ProviderCatalogItem } from '../../lib/providers'
   import Badge from '../../lib/ui/Badge.svelte'
   import Button from '../../lib/ui/Button.svelte'
-
   interface Props {
     connections?: ProviderConnection[]
     combos?: Combo[]
     onRefresh: () => void
-    onSelectProvider: (providerId: string) => void
+    onSelectProvider: (kind: 'webSearch' | 'webFetch', providerId: string) => void
   }
 
   let { connections = [], combos = [], onRefresh, onSelectProvider }: Props = $props()
 
-  interface ProviderDef { id: string; name: string; color: string; noAuth?: boolean }
-
-  const SEARCH_PROVIDERS: ProviderDef[] = [
-    { id: 'brave-search', name: 'Brave Search', color: '#FB542B' },
-    { id: 'google-pse', name: 'Google PSE', color: '#4285F4' },
-    { id: 'perplexity', name: 'Perplexity Web', color: '#20B2AA' },
-    { id: 'tavily', name: 'Tavily AI', color: '#5B21B6' },
-  ]
-  const FETCH_PROVIDERS: ProviderDef[] = [
-    { id: 'jina-reader', name: 'Jina Reader', color: '#000000' },
-    { id: 'firecrawl', name: 'Firecrawl Scrape', color: '#F59E0B' },
-  ]
-
+  let searchProviders = $derived(getProvidersByKind('webSearch'))
+  let fetchProviders = $derived(getProvidersByKind('webFetch'))
   let searchCombos = $derived(combos.filter((c) => c.kind === 'webSearch'))
   let fetchCombos = $derived(combos.filter((c) => c.kind === 'webFetch'))
   let creatingKind = $state<'webSearch' | 'webFetch' | null>(null)
@@ -116,7 +105,7 @@
   }
 </script>
 
-{#snippet sectionBlock(title: string, Icon: any, kind: 'webSearch' | 'webFetch', providers: ProviderDef[], sectionCombos: Combo[])}
+{#snippet sectionBlock(title: string, Icon: any, kind: 'webSearch' | 'webFetch', providers: ProviderCatalogItem[], sectionCombos: Combo[])}
   <div class="space-y-4">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div class="flex items-center gap-2.5">
@@ -172,19 +161,20 @@
       <p class="text-xs text-text-muted italic py-1">No combos yet.</p>
     {/if}
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pt-1">
       {#each providers as p (p.id)}
         {@const stats = getStats(p.id, p.noAuth)}
-        <div
-          role="button"
-          tabindex="0"
-          onclick={() => onSelectProvider(p.id)}
-          onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelectProvider(p.id)}
-          class="group cursor-pointer text-left focus:outline-none"
+        <a
+          href="/dashboard/media-providers/{kind}/{p.id}"
+          onclick={(e) => {
+            e.preventDefault()
+            onSelectProvider(kind, p.id)
+          }}
+          class="group block text-left focus:outline-none"
         >
           <div class="p-3 rounded-xl border border-border bg-surface hover:border-brand-500/40 hover:bg-black/[0.01] dark:hover:bg-white/[0.01] transition-all {stats.allDisabled ? 'opacity-50' : ''}">
             <div class="flex min-w-0 items-center gap-3">
-              <div class="size-8 rounded-lg flex items-center justify-center shrink-0 border border-border/40 overflow-hidden" style="background-color: {p.color}18">
+              <div class="size-8 rounded-lg flex items-center justify-center shrink-0 border border-border/40 overflow-hidden" style="background-color: {p.color && p.color.length > 7 ? p.color : (p.color ?? '#888') + '15'}">
                 <img src="/providers/{p.id}.png" alt={p.name} class="size-5 object-contain rounded" onerror={(e) => { (e.currentTarget as HTMLElement).style.display = 'none' }} />
               </div>
               <div class="min-w-0 flex-1">
@@ -211,16 +201,16 @@
               </div>
             </div>
           </div>
-        </div>
+        </a>
       {/each}
     </div>
   </div>
 {/snippet}
 
 <div class="flex flex-col gap-8 animate-fade-in">
-  {@render sectionBlock('Web Search', Search, 'webSearch', SEARCH_PROVIDERS, searchCombos)}
+  {@render sectionBlock('Web Search', Search, 'webSearch', searchProviders, searchCombos)}
   <div class="border-t border-border"></div>
-  {@render sectionBlock('Web Fetch', Globe, 'webFetch', FETCH_PROVIDERS, fetchCombos)}
+  {@render sectionBlock('Web Fetch', Globe, 'webFetch', fetchProviders, fetchCombos)}
 </div>
 
 {#if creatingKind}
@@ -268,7 +258,7 @@
           </div>
         {/if}
         <div class="flex flex-wrap gap-2">
-          {#each (managingCombo.kind === 'webFetch' ? FETCH_PROVIDERS : SEARCH_PROVIDERS) as p}
+          {#each (managingCombo.kind === 'webFetch' ? fetchProviders : searchProviders) as p}
             <button type="button" onclick={() => addModelToManage(p.id)} class="px-2.5 py-1 text-xs rounded-lg border border-border bg-surface-2 hover:bg-surface-3 text-text-main flex items-center gap-1.5 cursor-pointer">
               <Plus class="w-3.5 h-3.5" /> {p.name}
             </button>

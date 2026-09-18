@@ -7,6 +7,7 @@ export interface ProviderCatalogItem {
   color: string
   icon: string
   noAuth?: boolean
+  priority?: number
   serviceKinds?: string[]
 }
 
@@ -28,8 +29,11 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#F59E0B",
     "icon": "rocket_launch",
     "noAuth": false,
+    "priority": 20,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "image",
+      "webSearch"
     ]
   },
   {
@@ -172,8 +176,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#1E3A8A",
     "icon": "psychology",
     "noAuth": false,
+    "priority": 170,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webSearch"
     ]
   },
   {
@@ -208,10 +214,12 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#1DA1F2",
     "icon": "auto_awesome",
     "noAuth": false,
+    "priority": 280,
     "serviceKinds": [
       "llm",
       "image",
-      "video"
+      "video",
+      "webSearch"
     ]
   },
   {
@@ -242,7 +250,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   {
     "id": "freebuff",
     "name": "Freebuff",
-    "category": "free",
+    "category": "oauth",
     "alias": "fb",
     "color": "#0a0a0b",
     "icon": "bolt",
@@ -380,12 +388,14 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#4285F4",
     "icon": "diamond",
     "noAuth": false,
+    "priority": 50,
     "serviceKinds": [
       "llm",
       "image",
       "tts",
       "stt",
-      "embedding"
+      "embedding",
+      "webSearch"
     ]
   },
   {
@@ -459,8 +469,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#ffffffff",
     "icon": "cloud",
     "noAuth": false,
+    "priority": 30,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webFetch"
     ]
   },
   {
@@ -495,9 +507,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#3B82F6",
     "icon": "saved_search",
     "noAuth": true,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -692,9 +704,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#FB542B",
     "icon": "travel_explore",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -771,30 +783,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
-    "id": "content-type",
-    "name": "content-type",
-    "category": "apikey",
-    "alias": "content-type",
-    "color": "#888888",
-    "icon": "dns",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
-    "id": "copilot-integration-id",
-    "name": "copilot-integration-id",
-    "category": "apikey",
-    "alias": "copilot-integration-id",
-    "color": "#888888",
-    "icon": "dns",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
     "id": "deepgram",
     "name": "Deepgram",
     "category": "apikey",
@@ -831,30 +819,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
-    "id": "editor-plugin-version",
-    "name": "editor-plugin-version",
-    "category": "apikey",
-    "alias": "editor-plugin-version",
-    "color": "#888888",
-    "icon": "dns",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
-    "id": "editor-version",
-    "name": "editor-version",
-    "category": "apikey",
-    "alias": "editor-version",
-    "color": "#888888",
-    "icon": "dns",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
     "id": "elevenlabs",
     "name": "ElevenLabs",
     "category": "apikey",
@@ -874,8 +838,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#2563EB",
     "icon": "manage_search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
       "webSearch",
+      "webFetch",
       "web"
     ]
   },
@@ -912,9 +878,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#F59E0B",
     "icon": "local_fire_department",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webFetch",
-      "web"
+      "webFetch"
     ]
   },
   {
@@ -961,8 +927,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#2563EB",
     "icon": "code",
     "noAuth": false,
+    "priority": 140,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webSearch"
     ]
   },
   {
@@ -973,9 +941,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#4285F4",
     "icon": "search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1039,8 +1007,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "blur_on",
     "noAuth": false,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "embedding"
     ]
   },
   {
@@ -1051,9 +1018,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#000000",
     "icon": "menu_book",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webFetch",
-      "web"
+      "webFetch"
     ]
   },
   {
@@ -1076,9 +1043,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#0EA5E9",
     "icon": "link",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1115,10 +1082,12 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#7C3AED",
     "icon": "memory",
     "noAuth": false,
+    "priority": 90,
     "serviceKinds": [
       "llm",
       "image",
-      "tts"
+      "tts",
+      "webSearch"
     ]
   },
   {
@@ -1191,9 +1160,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#ffffff",
     "icon": "cloud",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1204,12 +1173,14 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#10A37F",
     "icon": "auto_awesome",
     "noAuth": false,
+    "priority": 30,
     "serviceKinds": [
       "llm",
       "image",
       "tts",
       "stt",
-      "embedding"
+      "embedding",
+      "webSearch"
     ]
   },
   {
@@ -1260,8 +1231,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#20808D",
     "icon": "search",
     "noAuth": false,
+    "priority": 180,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webSearch"
     ]
   },
   {
@@ -1272,8 +1245,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#20808D",
     "icon": "travel_explore",
     "noAuth": false,
+    "priority": 181,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webSearch"
     ]
   },
   {
@@ -1345,9 +1320,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#0EA5A4",
     "icon": "search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1358,9 +1333,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#4F46E5",
     "icon": "search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1396,8 +1371,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#5B21B6",
     "icon": "search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
       "webSearch",
+      "webFetch",
       "web"
     ]
   },
@@ -1497,8 +1474,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#111827",
     "icon": "deployed_code",
     "noAuth": false,
+    "priority": 160,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "webSearch"
     ]
   },
   {
@@ -1618,9 +1597,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#5C3327",
     "icon": "tag",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1631,9 +1610,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#7C3AED",
     "icon": "search",
     "noAuth": false,
+    "priority": 999,
     "serviceKinds": [
-      "webSearch",
-      "web"
+      "webSearch"
     ]
   },
   {
@@ -1645,8 +1624,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "dns",
     "noAuth": false,
     "serviceKinds": [
-      "webSearch",
-      "web"
+
     ]
   },
   {

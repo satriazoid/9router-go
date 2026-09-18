@@ -1,0 +1,2061 @@
+<script lang="ts">
+  import { onMount } from 'svelte'
+  import {
+    api,
+    type ConnectionUsageResponse,
+    type FreebuffSessionStatusResponse,
+    type ProviderConnection,
+    type ProviderNode,
+    type ProxyPool,
+    type Settings
+  } from '../../api/client'
+  import { PROVIDER_CATALOG, type ProviderCatalogItem } from '../../lib/providers'
+  import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
+  import {
+    buildAvailableModels,
+    fetchProviderModelsData,
+    getIconPath,
+    isChatModel,
+    type CustomModelData,
+    type ProviderModelItem
+  } from './types'
+  import AddConnectionModal from './AddConnectionModal.svelte'
+  import AddCustomModelModal from './AddCustomModelModal.svelte'
+  import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
+  import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
+
+  interface Props {
+    providerId: string
+    connections: ProviderConnection[]
+    providerNodes: ProviderNode[]
+    onBack: () => void
+    onRefresh: () => void
+  }
+
+  let {
+    providerId,
+    connections = [],
+    providerNodes = [],
+    onBack,
+    onRefresh
+  }: Props = $props()
+
+  // Catalog & Node resolution
+  let selectedCatalogItem = $derived<ProviderCatalogItem | undefined>(
+    PROVIDER_CATALOG.find((p) => p.id === providerId)
+  )
+  let selectedNode = $derived<ProviderNode | undefined>(
+    providerNodes.find((n) => n.id === providerId)
+  )
+  let providerName = $derived(selectedNode?.name || selectedCatalogItem?.name || providerId)
+  let providerIcon = $derived(getIconPath(providerId, selectedNode?.apiType))
+  let providerColor = $derived(selectedCatalogItem?.color || '#f59e0b')
+  let providerWebsite = $derived(
+    selectedCatalogItem?.website || (providerId === 'antigravity' ? 'https://antigravity.google' : '')
+  )
+  let isOAuth = $derived(selectedCatalogItem?.category === 'oauth' || providerId === 'antigravity')
+  let isNoAuth = $derived((selectedCatalogItem?.noAuth === true || providerId === 'opencode') && providerId !== 'antigravity')
+  let hasRiskNotice = $derived(!isNoAuth && (isOAuth || providerId === 'antigravity'))
+
+  // Free provider proxy & rotation state
+  let freeProxyPoolId = $state('none')
+  let freeRotateStrategy = $state<'none' | 'round-robin' | 'random'>('none')
+  let isSavingFreeProxy = $state(false)
+  let savedFreeProxy = $state(false)
+  // Quota & Cooldown tracking state
+  let connectionQuotas = $state<Record<string, ConnectionUsageResponse>>({})
+  let currentTime = $state(Date.now())
+
+  onMount(() => {
+    const timer = setInterval(() => {
+      currentTime = Date.now()
+    }, 1000)
+    return () => {
+      clearInterval(timer)
+      if (freebuffPollTimer) {
+        clearInterval(freebuffPollTimer)
+        freebuffPollTimer = null
+      }
+    }
+  })
+
+  // Storage alias
+  let storageAlias = $derived(
+    selectedNode?.id || selectedCatalogItem?.alias || PROVIDER_ID_TO_ALIAS[providerId] || providerId
+  )
+
+  // Filtered connections for this provider, sorted by priority ASC
+  let providerConnections = $derived(
+    connections
+      .filter((c) => c.provider === providerId)
+      .sort((a, b) => (a.priority ?? 999999) - (b.priority ?? 999999))
+  )
+
+  // Models state
+  let customModels = $state<CustomModelData[]>([])
+  let disabledModelIds = $state<string[]>([])
+  let builtInModels = $derived(getModelsByProviderId(providerId).filter(isChatModel))
+  let providerCustomModels = $derived(
+    customModels.filter(
+      (m) => (m.providerAlias === storageAlias || m.providerAlias === providerId) && isChatModel(m)
+    )
+  )
+  let allAvailableModels = $derived<ProviderModelItem[]>(
+    buildAvailableModels(builtInModels, providerCustomModels)
+  )
+  let visibleModels = $derived(allAvailableModels.filter((m) => !disabledModelIds.includes(m.id)))
+  let allDisabled = $derived(
+    allAvailableModels.length > 0 && disabledModelIds.length >= allAvailableModels.length
+  )
+
+  // Settings & Strategies
+  let settings = $state<Settings | null>(null)
+  let isRoundRobin = $state(false)
+  let stickyLimit = $state('1')
+  let thinkingLevel = $state('auto')
+
+  // Proxy Pools
+  let proxyPools = $state<ProxyPool[]>([])
+  let activeProxyPools = $derived(proxyPools.filter((p) => p.isActive))
+
+  // Selection state
+  let selectedConnIds = $state<string[]>([])
+  let isAllSelected = $derived(
+    providerConnections.length > 0 && selectedConnIds.length === providerConnections.length
+  )
+
+  // One-by-One Health Check state
+  let isTestingOneByOne = $state(false)
+  let isStopTesting = $state(false)
+  let oneByOneStatuses = $state<
+    Record<string, { state: 'queued' | 'testing' | 'success' | 'failed'; error?: string | null }>
+  >({})
+
+  // Row UI state
+  let activeProxyDropdownId = $state<string | null>(null)
+  let copiedModelId = $state<string | null>(null)
+  let modelTestStatuses = $state<Record<string, 'ok' | 'error' | 'testing'>>({})
+  let modelTestErrors = $state<Record<string, string | null>>({})
+  let activeModelTestError = $state<string | null>(null)
+
+  // Modals state
+  let showRiskNoticeModal = $state(false)
+  let showOAuthModal = $state(false)
+  let oauthAuthUrl = $state('')
+  let copiedAuthUrl = $state(false)
+  let callbackInput = $state('')
+  let oauthError = $state<string | null>(null)
+  let isConnecting = $state(false)
+
+  let showApplyProxyModal = $state(false)
+  let isApplyingProxy = $state(false)
+
+  let editingConnection = $state<ProviderConnection | null>(null)
+  let editName = $state('')
+  let editPriority = $state<number>(1)
+  let editTestStatus = $state<'ok' | 'error' | null>(null)
+  let editTestError = $state<string | null>(null)
+  let isTestingEdit = $state(false)
+  let isSavingEdit = $state(false)
+
+  let showAddKeyModal = $state(false)
+  let showAddCustomModelModal = $state(false)
+  let showEditNodeModal = $state(false)
+  // Freebuff specific state & session tracking
+  let isFreebuff = $derived(
+    providerId === 'freebuff' || storageAlias === 'fb' || storageAlias === 'freebuff'
+  )
+  let freebuffSession = $state<FreebuffSessionStatusResponse | null>(null)
+  let isLoadingSession = $state(false)
+  let isAuthorizingFreebuff = $state(false)
+  let freebuffPollTimer = $state<ReturnType<typeof setInterval> | null>(null)
+  let currentFreebuffInit = $state<{
+    fingerprintId: string
+    fingerprintHash: string
+    expiresAt: number
+    loginUrl: string
+  } | null>(null)
+
+  async function loadFreebuffSession() {
+    if (!isFreebuff) {
+      freebuffSession = null
+      return
+    }
+    isLoadingSession = true
+    try {
+      const firstConn = providerConnections[0]
+      freebuffSession = await api.getFreebuffSessionStatus(firstConn?.id)
+    } catch (err) {
+      console.error('Failed to fetch Freebuff session status:', err)
+      freebuffSession = null
+    } finally {
+      isLoadingSession = false
+    }
+  }
+
+  let sessionExpiresInMin = $derived.by(() => {
+    if (!freebuffSession?.expiresAt) return null
+    const exp = new Date(freebuffSession.expiresAt).getTime()
+    const diffMs = exp - Date.now()
+    return Math.max(0, Math.round(diffMs / 60000))
+  })
+
+  function checkIsActiveSession(modelId: string): boolean {
+    if (!isFreebuff || freebuffSession?.status !== 'active' || !freebuffSession?.currentModel) {
+      return false
+    }
+    const cur = freebuffSession.currentModel.toLowerCase().trim()
+    const mid = modelId.toLowerCase().trim()
+    return mid === cur || mid.endsWith('/' + cur) || cur.endsWith('/' + mid)
+  }
+
+  function checkIsLockedBySession(modelId: string): boolean {
+    if (!isFreebuff || freebuffSession?.status !== 'active' || !freebuffSession?.currentModel) {
+      return false
+    }
+    return !checkIsActiveSession(modelId)
+  }
+
+  async function startFreebuffFlow() {
+    try {
+      isAuthorizingFreebuff = true
+      oauthError = null
+      callbackInput = ''
+      copiedAuthUrl = false
+      const init = await api.initiateFreebuff()
+      currentFreebuffInit = {
+        fingerprintId: init.fingerprintId,
+        fingerprintHash: init.fingerprintHash,
+        expiresAt: init.expiresAt,
+        loginUrl: init.loginUrl
+      }
+      oauthAuthUrl = init.loginUrl
+      showOAuthModal = true
+
+      if (typeof window !== 'undefined' && init.loginUrl) {
+        window.open(init.loginUrl, '_blank')
+      }
+
+      if (freebuffPollTimer) clearInterval(freebuffPollTimer)
+      freebuffPollTimer = setInterval(async () => {
+        try {
+          if (!showOAuthModal) {
+            if (freebuffPollTimer) {
+              clearInterval(freebuffPollTimer)
+              freebuffPollTimer = null
+            }
+            isAuthorizingFreebuff = false
+            return
+          }
+          const res = await api.pollFreebuff(init.fingerprintId, init.fingerprintHash, init.expiresAt)
+          if (res?.status === 'authorized') {
+            if (freebuffPollTimer) {
+              clearInterval(freebuffPollTimer)
+              freebuffPollTimer = null
+            }
+            isAuthorizingFreebuff = false
+            showOAuthModal = false
+            onRefresh()
+            loadFreebuffSession()
+          }
+        } catch {}
+      }, 2500)
+    } catch (err) {
+      isAuthorizingFreebuff = false
+      alert(`Failed to start Freebuff flow: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Load models, settings, proxy pools
+  async function loadData() {
+    try {
+      const [modelsData, settingsData, poolsData] = await Promise.all([
+        fetchProviderModelsData(providerId, storageAlias),
+        api.getSettings().catch(() => ({})),
+        api.getProxyPools().catch(() => [])
+      ])
+      customModels = modelsData.customModels
+      disabledModelIds = modelsData.disabledModelIds
+      settings = settingsData
+      proxyPools = poolsData
+
+      // Extract Round Robin strategy
+      const strategy = settingsData?.providerStrategies?.[providerId]
+      isRoundRobin = strategy?.fallbackStrategy === 'round-robin'
+      stickyLimit = String(strategy?.stickyRoundRobinLimit ?? 1)
+
+      // Extract Thinking Level
+      const thinking = (settingsData as any)?.providerThinking?.[providerId]
+      thinkingLevel = thinking?.mode || 'auto'
+      // Extract free provider proxy & rotation settings
+      if (strategy) {
+        freeProxyPoolId = strategy.proxyPoolId || 'none'
+        freeRotateStrategy = (strategy.rotateStrategy as 'none' | 'round-robin' | 'random') || 'none'
+      }
+      // Fetch quota info for each connection
+      for (const c of providerConnections) {
+        api.getConnectionUsage(c.id).then((usage) => {
+          if (usage && !usage.error) {
+            connectionQuotas[c.id] = usage
+          }
+        }).catch(() => {})
+      }
+      if (isFreebuff) {
+        loadFreebuffSession()
+      }
+    } catch (err) {
+      console.error('Failed to load provider details:', err)
+    }
+  }
+
+  async function handleFreeProxyChange(newPool: string, newRotate: 'none' | 'round-robin' | 'random') {
+    freeProxyPoolId = newPool
+    freeRotateStrategy = newRotate
+    isSavingFreeProxy = true
+    try {
+      const currentStrategies = { ...(settings?.providerStrategies || {}) }
+      const currentStrat = { ...(currentStrategies[providerId] || {}) }
+      if (newPool === 'none' || !newPool) {
+        delete currentStrat.proxyPoolId
+      } else {
+        currentStrat.proxyPoolId = newPool
+      }
+      if (newRotate === 'none' || !newRotate) {
+        delete currentStrat.rotateStrategy
+      } else {
+        currentStrat.rotateStrategy = newRotate
+      }
+      if (Object.keys(currentStrat).length === 0) {
+        delete currentStrategies[providerId]
+      } else {
+        currentStrategies[providerId] = currentStrat
+      }
+      await api.updateSettings({ providerStrategies: currentStrategies })
+      if (settings) settings.providerStrategies = currentStrategies
+      savedFreeProxy = true
+      setTimeout(() => (savedFreeProxy = false), 1500)
+    } catch (err) {
+      console.error('Failed to save proxy config:', err)
+    } finally {
+      isSavingFreeProxy = false
+    }
+  }
+  function getCooldownInfo(conn: ProviderConnection): { label: string; title: string; isExhausted: boolean; isLock?: boolean } | null {
+    // 1. Check modelLock_* and rateLimitedUntil across conn, conn.data, and providerSpecificData (matching upstream ⏱ {timeLeft})
+    const dataObj = conn.providerSpecificData as Record<string, unknown> | undefined
+    const rawData = (conn as unknown as { data?: Record<string, unknown> }).data
+    const allProps = {
+      ...(typeof rawData === 'object' && rawData ? rawData : {}),
+      ...(typeof dataObj === 'object' && dataObj ? dataObj : {}),
+      ...conn
+    }
+    const locks = Object.entries(allProps).filter(
+      ([k, v]) => (k.startsWith('modelLock_') || k === 'rateLimitedUntil') && v && new Date(v as string).getTime() > currentTime
+    )
+    if (locks.length > 0) {
+      let maxLock = 0
+      for (const [_, v] of locks) {
+        const t = new Date(v as string).getTime()
+        if (t > maxLock) maxLock = t
+      }
+      const diff = Math.max(0, Math.floor((maxLock - currentTime) / 1000))
+      const timeLeft =
+        diff < 60
+          ? `${diff}s`
+          : diff < 3600
+            ? `${Math.floor(diff / 60)}m ${diff % 60}s`
+            : `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`
+      return {
+        label: `⏱ ${timeLeft}`,
+        title: `Model rate limit lock active until ${new Date(maxLock).toLocaleTimeString()}`,
+        isExhausted: false,
+        isLock: true
+      }
+    }
+
+    // 2. Check live quota data for exhausted models (remaining <= 0) and resetAt
+    const usage = connectionQuotas[conn.id]
+    if (usage?.quotas) {
+      const quotaEntries = Object.entries(usage.quotas)
+      const exhausted = quotaEntries.filter(
+        ([_, q]) =>
+          (q.remainingPercentage !== undefined && q.remainingPercentage <= 0) ||
+          (q.remaining !== undefined && q.remaining <= 0)
+      )
+      if (exhausted.length > 0) {
+        let earliestReset = 0
+        let resetModel = ''
+        for (const [m, q] of exhausted) {
+          if (q.resetAt) {
+            const t = new Date(q.resetAt).getTime()
+            if (t > currentTime && (earliestReset === 0 || t < earliestReset)) {
+              earliestReset = t
+              resetModel = q.displayName || m
+            }
+          }
+        }
+        if (earliestReset > currentTime) {
+          const diff = earliestReset - currentTime
+          const hours = Math.floor(diff / (1000 * 60 * 60))
+          const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+          const secs = Math.floor((diff % (1000 * 60)) / 1000)
+          const timeStr =
+            hours >= 24
+              ? `${Math.floor(hours / 24)}d ${hours % 24}h`
+              : hours > 0
+                ? `${hours}h ${mins}m`
+                : `${mins}m ${secs}s`
+          return {
+            label: `Quota Exhausted (0%): Resets in ${timeStr}`,
+            title: `Quota exhausted for ${resetModel}. Reset at ${new Date(earliestReset).toLocaleString()}`,
+            isExhausted: true
+          }
+        }
+      }
+    }
+    // 4. Check errorCode 429 or lastError indicating rate limit / quota
+    const errCode = (conn as unknown as { errorCode?: number }).errorCode
+    const lastErr = conn.lastError || ''
+    if (
+      errCode === 429 ||
+      lastErr.includes('429') ||
+      lastErr.toLowerCase().includes('quota') ||
+      lastErr.toLowerCase().includes('exhausted')
+    ) {
+      const match = lastErr.match(/Resets in ([^.]+)/i)
+      if (match) {
+        return {
+          label: `Quota Exhausted (429): Resets in ${match[1].trim()}`,
+          title: lastErr,
+          isExhausted: true
+        }
+      }
+      return {
+        label: 'Quota Exhausted (429)',
+        title: lastErr || 'HTTP 429 Rate Limit / Quota Exhausted',
+        isExhausted: true
+      }
+    }
+
+    return null
+  }
+
+  $effect(() => {
+    if (providerId) {
+      loadData()
+    }
+  })
+
+  // Strategy saves
+  async function saveProviderStrategy(fallback: 'round-robin' | null, sticky: string) {
+    try {
+      const current = settings?.providerStrategies || {}
+      const updated = { ...current }
+      if (fallback === 'round-robin') {
+        updated[providerId] = {
+          ...(updated[providerId] || {}),
+          fallbackStrategy: 'round-robin',
+          stickyRoundRobinLimit: Number(sticky) || 1
+        }
+      } else {
+        delete updated[providerId]
+      }
+      if (settings) settings.providerStrategies = updated
+      await api.updateSettings({ providerStrategies: updated })
+    } catch (err) {
+      console.error('Error saving provider strategy:', err)
+    }
+  }
+
+  async function toggleRoundRobin() {
+    isRoundRobin = !isRoundRobin
+    if (isRoundRobin && !stickyLimit) {
+      stickyLimit = '1'
+    }
+    await saveProviderStrategy(isRoundRobin ? 'round-robin' : null, stickyLimit)
+  }
+
+  async function handleStickyLimitChange() {
+    if (isRoundRobin) {
+      await saveProviderStrategy('round-robin', stickyLimit)
+    }
+  }
+
+  async function handleThinkingChange(event: Event) {
+    const val = (event.target as HTMLSelectElement).value
+    thinkingLevel = val
+    try {
+      const current = (settings as any)?.providerThinking || {}
+      const updated = { ...current }
+      if (val && val !== 'auto') {
+        updated[providerId] = { mode: val }
+      } else {
+        delete updated[providerId]
+      }
+      if (settings) (settings as any).providerThinking = updated
+      await api.updateSettings({ providerThinking: updated })
+    } catch (err) {
+      console.error('Error saving provider thinking:', err)
+    }
+  }
+
+  // Selection handlers
+  function toggleSelectAll() {
+    if (isAllSelected) {
+      selectedConnIds = []
+    } else {
+      selectedConnIds = providerConnections.map((c) => c.id)
+    }
+  }
+
+  function toggleSelect(id: string) {
+    if (selectedConnIds.includes(id)) {
+      selectedConnIds = selectedConnIds.filter((x) => x !== id)
+    } else {
+      selectedConnIds = [...selectedConnIds, id]
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedConnIds.length === 0) return
+    if (!confirm(`Delete ${selectedConnIds.length} selected connection(s)? This cannot be undone.`)) return
+    let failed = 0
+    for (const id of selectedConnIds) {
+      try {
+        await api.deleteConnection(id)
+      } catch (e) {
+        console.error('Error deleting connection:', e)
+        failed++
+      }
+    }
+    selectedConnIds = []
+    onRefresh()
+    if (failed > 0) {
+      alert(`Deleted with ${failed} failed request(s).`)
+    }
+  }
+
+  // One-by-One Health Test
+  async function runOneByOneTest() {
+    if (isTestingOneByOne || providerConnections.length === 0) return
+    isTestingOneByOne = true
+    isStopTesting = false
+
+    const initial: Record<string, { state: 'queued' | 'testing' | 'success' | 'failed'; error?: string | null }> = {}
+    for (const c of providerConnections) {
+      initial[c.id] = { state: 'queued', error: null }
+    }
+    oneByOneStatuses = initial
+
+    for (const conn of providerConnections) {
+      if (isStopTesting) break
+      oneByOneStatuses[conn.id] = { state: 'testing', error: null }
+      try {
+        const res = await api.testConnection(conn.id)
+        if (res?.valid) {
+          oneByOneStatuses[conn.id] = { state: 'success', error: null }
+        } else {
+          oneByOneStatuses[conn.id] = { state: 'failed', error: res?.error || 'Test failed' }
+        }
+      } catch (err) {
+        oneByOneStatuses[conn.id] = {
+          state: 'failed',
+          error: err instanceof Error ? err.message : 'Test failed'
+        }
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+
+    isTestingOneByOne = false
+  }
+
+  function stopOneByOneTest() {
+    isStopTesting = true
+  }
+
+  // Priority reordering
+  async function swapPriority(idxA: number, idxB: number) {
+    const connA = providerConnections[idxA]
+    const connB = providerConnections[idxB]
+    if (!connA || !connB) return
+    const priorityA = connA.priority ?? idxA + 1
+    const priorityB = connB.priority ?? idxB + 1
+    try {
+      await Promise.all([
+        api.updateConnection(connA.id, { priority: priorityB }),
+        api.updateConnection(connB.id, { priority: priorityA })
+      ])
+      onRefresh()
+    } catch (err) {
+      console.error('Error swapping priority:', err)
+    }
+  }
+
+  // Single connection toggling & deleting
+  async function toggleConnectionActive(conn: ProviderConnection) {
+    try {
+      await api.updateConnection(conn.id, { isActive: conn.isActive === 1 ? 0 : 1 })
+      onRefresh()
+    } catch (err) {
+      alert(`Toggle failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleDeleteConnection(conn: ProviderConnection) {
+    if (!confirm(`Delete connection "${conn.name || conn.id}"? This cannot be undone.`)) return
+    try {
+      await api.deleteConnection(conn.id)
+      onRefresh()
+    } catch (err) {
+      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Proxy assignment
+  async function assignProxyPool(conn: ProviderConnection, poolId: string | null) {
+    activeProxyDropdownId = null
+    try {
+      await api.updateConnection(conn.id, {
+        proxyPoolId: poolId,
+        providerSpecificData: {
+          ...(conn.providerSpecificData as Record<string, unknown> || {}),
+          proxyPoolId: poolId
+        }
+      })
+      onRefresh()
+    } catch (err) {
+      alert(`Failed to update proxy: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleApplyProxyPool(poolId: string | null) {
+    isApplyingProxy = true
+    const targets = selectedConnIds.length > 0
+      ? providerConnections.filter((c) => selectedConnIds.includes(c.id))
+      : providerConnections
+
+    let failed = 0
+    for (const conn of targets) {
+      try {
+        await api.updateConnection(conn.id, {
+          proxyPoolId: poolId,
+          providerSpecificData: {
+            ...(conn.providerSpecificData as Record<string, unknown> || {}),
+            proxyPoolId: poolId
+          }
+        })
+      } catch {
+        failed++
+      }
+    }
+    isApplyingProxy = false
+    showApplyProxyModal = false
+    onRefresh()
+    if (failed > 0) {
+      alert(`Applied with ${failed} failed update(s).`)
+    }
+  }
+
+  async function handleApplyProxyRotate() {
+    if (activeProxyPools.length === 0) {
+      alert('No active proxy pools available.')
+      return
+    }
+    isApplyingProxy = true
+    const targets = selectedConnIds.length > 0
+      ? providerConnections.filter((c) => selectedConnIds.includes(c.id))
+      : providerConnections
+
+    let failed = 0
+    for (let i = 0; i < targets.length; i++) {
+      const conn = targets[i]
+      const pool = activeProxyPools[i % activeProxyPools.length]
+      try {
+        await api.updateConnection(conn.id, {
+          proxyPoolId: pool.id,
+          providerSpecificData: {
+            ...(conn.providerSpecificData as Record<string, unknown> || {}),
+            proxyPoolId: pool.id
+          }
+        })
+      } catch {
+        failed++
+      }
+    }
+    isApplyingProxy = false
+    showApplyProxyModal = false
+    onRefresh()
+    if (failed > 0) {
+      alert(`Applied with ${failed} failed update(s).`)
+    }
+  }
+
+  // Edit connection modal
+  function openEditConnection(conn: ProviderConnection) {
+    editingConnection = conn
+    editName = conn.name || ''
+    editPriority = conn.priority ?? 1
+    editTestStatus = null
+    editTestError = null
+  }
+
+  async function testEditingConnection() {
+    if (!editingConnection) return
+    isTestingEdit = true
+    editTestStatus = null
+    editTestError = null
+    try {
+      const res = await api.testConnection(editingConnection.id)
+      if (res?.valid) {
+        editTestStatus = 'ok'
+      } else {
+        editTestStatus = 'error'
+        editTestError = res?.error || 'Test failed'
+      }
+    } catch (err) {
+      editTestStatus = 'error'
+      editTestError = err instanceof Error ? err.message : 'Test failed'
+    } finally {
+      isTestingEdit = false
+    }
+  }
+
+  async function saveEditingConnection() {
+    if (!editingConnection) return
+    isSavingEdit = true
+    try {
+      await api.updateConnection(editingConnection.id, {
+        name: editName.trim() || undefined,
+        priority: editPriority
+      })
+      editingConnection = null
+      onRefresh()
+    } catch (err) {
+      alert(`Failed to save connection: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isSavingEdit = false
+    }
+  }
+
+  // Add Connection Button flow
+  async function handleAddConnectionClick() {
+    if (providerId === 'antigravity') {
+      const confirmed = typeof window !== 'undefined' && localStorage.getItem('ag_risk_confirmed') === 'true'
+      if (!confirmed) {
+        showRiskNoticeModal = true
+      } else {
+        openAntigravityOAuth()
+      }
+    } else if (providerId === 'freebuff') {
+      startFreebuffFlow()
+    } else if (isOAuth) {
+      openGenericOAuth()
+    } else {
+      showAddKeyModal = true
+    }
+  }
+
+  function confirmRiskAndProceed() {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ag_risk_confirmed', 'true')
+    }
+    showRiskNoticeModal = false
+    openAntigravityOAuth()
+  }
+
+  async function openAntigravityOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    try {
+      const res = await api.getAntigravityAuthorizeUrl()
+      oauthAuthUrl = res.url || res.redirectUrl
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
+      }
+    } catch (err) {
+      alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  function openGenericOAuth() {
+    openAntigravityOAuth()
+  }
+
+  function copyAuthUrl() {
+    if (!oauthAuthUrl) return
+    navigator.clipboard.writeText(oauthAuthUrl)
+    copiedAuthUrl = true
+    setTimeout(() => (copiedAuthUrl = false), 2000)
+  }
+
+  async function submitManualCallback() {
+    const raw = callbackInput.trim()
+    isConnecting = true
+    oauthError = null
+    try {
+      if (providerId === 'freebuff') {
+        // Direct manual token input
+        if (raw && !raw.includes('http') && !raw.includes('auth_code=') && raw.length >= 24 && !raw.includes('/')) {
+          await api.createConnection({
+            provider: 'freebuff',
+            authType: 'oauth',
+            name: 'Freebuff (manual)',
+            apiKey: raw,
+          })
+          if (freebuffPollTimer) {
+            clearInterval(freebuffPollTimer)
+            freebuffPollTimer = null
+          }
+          isAuthorizingFreebuff = false
+          showOAuthModal = false
+          onRefresh()
+          loadFreebuffSession()
+          return
+        }
+
+        // Immediate poll verification
+        if (currentFreebuffInit) {
+          const res = await api.pollFreebuff(
+            currentFreebuffInit.fingerprintId,
+            currentFreebuffInit.fingerprintHash,
+            currentFreebuffInit.expiresAt
+          )
+          if (res?.status === 'authorized') {
+            if (freebuffPollTimer) {
+              clearInterval(freebuffPollTimer)
+              freebuffPollTimer = null
+            }
+            isAuthorizingFreebuff = false
+            showOAuthModal = false
+            onRefresh()
+            loadFreebuffSession()
+            return
+          } else if (res?.status === 'pending') {
+            oauthError = 'Status masih pending. Jika tab Freebuff terbuka di halaman /onboard, pastikan selesaikan langkah onboarding di tab tersebut, lalu klik Check & Connect lagi.'
+          } else if (res?.status === 'expired') {
+            oauthError = 'Sesi otorisasi telah kedaluwarsa. Silakan tutup modal ini dan klik Authorize Freebuff CLI ulang.'
+          } else {
+            oauthError = `Status: ${res?.status || 'pending'}. Pastikan login di browser sudah selesai.`
+          }
+        } else {
+          oauthError = 'Sesi Freebuff belum diinisiasi. Silakan klik Authorize Freebuff CLI ulang.'
+        }
+        return
+      }
+
+      if (!raw) return
+      let code = raw
+      let redirectUri: string | undefined
+      if (raw.includes('code=')) {
+        try {
+          const u = new URL(raw)
+          code = u.searchParams.get('code') || raw
+          redirectUri = `${u.origin}${u.pathname}`
+        } catch {
+          const match = raw.match(/code=([^&]+)/)
+          if (match) code = decodeURIComponent(match[1])
+        }
+      }
+      const res = await api.antigravityCallback(code, redirectUri)
+      if (res?.success === false) {
+        oauthError = res?.error || 'Authorization failed'
+      } else {
+        showOAuthModal = false
+        onRefresh()
+      }
+    } catch (err) {
+      oauthError = err instanceof Error ? err.message : String(err)
+    } finally {
+      isConnecting = false
+    }
+  }
+
+  // Model actions
+  function copyModelId(modelId: string) {
+    const suffix = thinkingLevel !== 'auto' && thinkingLevel ? `(${thinkingLevel})` : ''
+    const full = `${storageAlias}/${modelId}${suffix}`
+    navigator.clipboard.writeText(full)
+    copiedModelId = modelId
+    setTimeout(() => (copiedModelId = null), 2000)
+  }
+
+  async function testModel(modelId: string) {
+    modelTestStatuses[modelId] = 'testing'
+    modelTestErrors[modelId] = null
+    activeModelTestError = null
+    try {
+      const res = await api.testModel(`${storageAlias}/${modelId}`)
+      if (res.ok) {
+        modelTestStatuses[modelId] = 'ok'
+        modelTestErrors[modelId] = null
+      } else {
+        modelTestStatuses[modelId] = 'error'
+        const err = res.error || 'Model test failed'
+        modelTestErrors[modelId] = err
+        activeModelTestError = `${modelId}: ${err}`
+      }
+    } catch (err) {
+      modelTestStatuses[modelId] = 'error'
+      const msg = err instanceof Error ? err.message : 'Model test failed'
+      modelTestErrors[modelId] = msg
+      activeModelTestError = `${modelId}: ${msg}`
+    }
+  }
+
+  async function handleDisableModel(modelId: string) {
+    const updated = Array.from(new Set([...disabledModelIds, modelId]))
+    disabledModelIds = updated
+    try {
+      await api.saveDisabledModels(storageAlias, updated)
+    } catch (err) {
+      console.error('Failed to disable model:', err)
+    }
+  }
+
+  async function handleEnableModel(modelId: string) {
+    const updated = disabledModelIds.filter((id) => id !== modelId)
+    disabledModelIds = updated
+    try {
+      await api.saveDisabledModels(storageAlias, updated)
+    } catch (err) {
+      console.error('Failed to enable model:', err)
+    }
+  }
+
+  async function handleToggleAllModels() {
+    if (allDisabled) {
+      disabledModelIds = []
+      try {
+        await api.saveDisabledModels(storageAlias, [])
+      } catch (err) {
+        console.error('Failed to enable all models:', err)
+      }
+    } else {
+      if (!confirm(`Disable all ${allAvailableModels.length} model(s)?`)) return
+      const updated = allAvailableModels.map((m) => m.id)
+      disabledModelIds = updated
+      try {
+        await api.saveDisabledModels(storageAlias, updated)
+      } catch (err) {
+        console.error('Failed to disable all models:', err)
+      }
+    }
+  }
+
+  // Custom Model & Node handlers
+  async function submitAddCustomModel(modelId: string, modelName: string) {
+    try {
+      await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
+        id: modelId,
+        name: modelName || modelId,
+        providerAlias: storageAlias,
+        type: 'llm'
+      })
+      showAddCustomModelModal = false
+      const modelsData = await fetchProviderModelsData(providerId, storageAlias)
+      customModels = modelsData.customModels
+    } catch (err) {
+      alert(`Failed to add custom model: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleAddKeyConnection(keyName: string, apiKey: string) {
+    try {
+      await api.createConnection({
+        provider: providerId,
+        authType: selectedNode ? 'compatible' : 'apikey',
+        name: keyName || `${providerName} Key`,
+        apiKey
+      })
+      showAddKeyModal = false
+      onRefresh()
+    } catch (err) {
+      alert(`Add connection failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleDeleteProviderNode(nodeId: string) {
+    if (!confirm('Delete custom provider endpoint and all attached credentials?')) return
+    try {
+      await api.deleteProviderNode(nodeId)
+      onBack()
+      onRefresh()
+    } catch (err) {
+      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+</script>
+
+<div class="flex min-w-0 flex-col gap-6 px-1 sm:gap-8 sm:px-0">
+  <!-- 0. Header: Back button + Provider Icon & Name -->
+  <div class="min-w-0">
+    <button
+      type="button"
+      onclick={onBack}
+      class="inline-flex items-center gap-1 text-sm text-text-muted hover:text-primary transition-colors mb-4 cursor-pointer"
+    >
+      <span class="material-symbols-outlined text-lg">arrow_back</span>
+      Back to Providers
+    </button>
+
+    <div class="flex min-w-0 items-center gap-3 sm:gap-4">
+      <div
+        class="flex size-12 shrink-0 items-center justify-center rounded-lg"
+        style="background-color: {providerColor}15;"
+      >
+        <img
+          alt={providerName}
+          loading="lazy"
+          width="48"
+          height="48"
+          decoding="async"
+          class="max-h-12 max-w-12 rounded-lg object-contain"
+          src={providerIcon}
+        />
+      </div>
+
+      <div class="min-w-0">
+        <div class="flex items-center gap-3 flex-wrap">
+          <h1 class="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
+            {providerName}
+          </h1>
+          {#if providerWebsite}
+            <a
+              href={providerWebsite}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-xs text-primary hover:underline inline-flex items-center gap-1"
+            >
+              <span class="material-symbols-outlined text-sm">open_in_new</span>
+              Sign up / Learn more
+            </a>
+          {/if}
+        </div>
+        <p class="text-text-muted">
+          {providerConnections.length} connection{providerConnections.length === 1 ? '' : 's'}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. Risk Notice (for OAuth / subscription providers) -->
+  {#if hasRiskNotice}
+    <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+      <span class="material-symbols-outlined text-[16px] text-yellow-500 mt-0.5 shrink-0">warning</span>
+      <p class="text-xs text-red-600 dark:text-yellow-400 leading-relaxed">
+        ⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.
+      </p>
+    </div>
+  {/if}
+
+  <!-- 2. Compatible Node details (if custom node) -->
+  {#if selectedNode}
+    <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+          <h2 class="text-lg font-semibold">
+            {selectedNode.apiType === 'responses' ? 'Anthropic' : 'OpenAI'} Compatible Details
+          </h2>
+          <p class="break-all text-sm text-text-muted">{selectedNode.baseUrl}</p>
+        </div>
+        <div class="grid grid-cols-1 gap-2 sm:flex sm:items-center">
+          <button
+            onclick={() => handleDeleteProviderNode(selectedNode!.id)}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/30 h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+          >
+            <span class="material-symbols-outlined text-[18px]">delete</span>
+            Delete Node
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if isNoAuth}
+    <!-- Free Provider: NoAuthProxyCard -->
+    <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6 flex flex-col gap-4">
+      <div class="flex items-start gap-3">
+        <span class="material-symbols-outlined text-[20px] text-primary mt-0.5">lock_open</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium text-text-main">No authentication required</p>
+          <p class="text-xs text-text-muted mt-0.5">
+            This provider is ready to use. Optionally route requests through a proxy pool to bypass IP-based limits.
+          </p>
+        </div>
+        {#if savedFreeProxy}
+          <span class="px-2 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+            Saved
+          </span>
+        {/if}
+      </div>
+
+      <!-- Proxy Pool Selector -->
+      <div class="flex flex-col gap-1.5">
+        <label for="free-proxy-pool" class="text-sm font-medium text-text-main">Proxy Pool</label>
+        <select
+          id="free-proxy-pool"
+          value={freeProxyPoolId}
+          onchange={(e) => handleFreeProxyChange(e.currentTarget.value, freeRotateStrategy)}
+          disabled={isSavingFreeProxy || freeRotateStrategy !== 'none'}
+          class="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-primary disabled:opacity-50 cursor-pointer"
+        >
+          <option value="none">None (direct)</option>
+          {#each activeProxyPools as pool}
+            <option value={pool.id}>{pool.name}</option>
+          {/each}
+        </select>
+        {#if freeRotateStrategy !== 'none'}
+          <p class="text-xs text-text-muted">
+            Pool selector is ignored when rotation is active — all active pools are used.
+          </p>
+        {/if}
+      </div>
+
+      <!-- Rotation Strategy -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-sm font-medium text-text-main">Rotation Strategy</span>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onclick={() => handleFreeProxyChange(freeProxyPoolId, 'none')}
+            class="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer {freeRotateStrategy === 'none'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-surface-2 text-text-main border-border hover:bg-surface-3'}"
+          >
+            None (single pool)
+          </button>
+          <button
+            type="button"
+            onclick={() => handleFreeProxyChange(freeProxyPoolId, 'round-robin')}
+            disabled={activeProxyPools.length < 2}
+            class="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed {freeRotateStrategy === 'round-robin'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-surface-2 text-text-main border-border hover:bg-surface-3'}"
+          >
+            Round-robin
+          </button>
+          <button
+            type="button"
+            onclick={() => handleFreeProxyChange(freeProxyPoolId, 'random')}
+            disabled={activeProxyPools.length < 2}
+            class="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed {freeRotateStrategy === 'random'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-surface-2 text-text-main border-border hover:bg-surface-3'}"
+          >
+            Random
+          </button>
+        </div>
+        {#if activeProxyPools.length < 2}
+          <p class="text-xs text-text-muted">
+            Need at least 2 active proxy pools for rotation.
+          </p>
+        {/if}
+      </div>
+    </div>
+  {:else}
+  <!-- 3. Connections Card -->
+  <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
+    <!-- Header -->
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <h2 class="text-lg font-semibold">Connections</h2>
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        {#if selectedConnIds.length > 0}
+          <button
+            type="button"
+            onclick={handleDeleteSelected}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/30 h-7 px-3 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">delete</span>
+            Delete Selected ({selectedConnIds.length})
+          </button>
+        {/if}
+
+        <button
+          type="button"
+          onclick={() => (showApplyProxyModal = true)}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+        >
+          <span class="material-symbols-outlined text-[18px]">lan</span>
+          Apply Proxy
+        </button>
+
+        <button
+          type="button"
+          onclick={runOneByOneTest}
+          disabled={isTestingOneByOne || providerConnections.length === 0}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+        >
+          <span class="material-symbols-outlined text-[18px] {isTestingOneByOne ? 'animate-spin text-primary' : ''}">sync</span>
+          {isTestingOneByOne ? 'Testing Connection One-by-One...' : 'Test Connection One-by-One'}
+        </button>
+
+        {#if isTestingOneByOne}
+          <button
+            type="button"
+            onclick={stopOneByOneTest}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-transparent hover:bg-surface-2 text-text-muted hover:text-text-main h-7 px-3 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">stop</span>
+            Stop
+          </button>
+        {/if}
+
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs text-text-muted font-medium">Round Robin</span>
+          <button
+            type="button"
+            role="switch"
+            aria-label="Toggle Round Robin"
+            aria-checked={isRoundRobin}
+            onclick={toggleRoundRobin}
+            class="relative inline-flex shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-500/30 {isRoundRobin ? 'bg-brand-500' : 'bg-surface-3'} w-11 h-6"
+          >
+            <span
+              class="pointer-events-none inline-block rounded-full bg-white shadow-sm transform transition duration-200 ease-in-out {isRoundRobin ? 'translate-x-5' : 'translate-x-0.5'} size-5 mt-0.5"
+            ></span>
+          </button>
+          {#if isRoundRobin}
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-text-muted">Sticky:</span>
+              <input
+                type="number"
+                min="1"
+                bind:value={stickyLimit}
+                onchange={handleStickyLimitChange}
+                placeholder="1"
+                class="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+              />
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <!-- Select All Checkbox -->
+    {#if providerConnections.length > 0}
+      <div class="mb-3 flex items-center gap-2 border-b border-black/[0.03] pb-2 dark:border-white/[0.03]">
+        <label class="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted hover:text-primary">
+          <input
+            type="checkbox"
+            checked={isAllSelected}
+            onchange={toggleSelectAll}
+            class="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+          />
+          Select All
+        </label>
+      </div>
+    {/if}
+
+    <!-- Connections List -->
+    {#if providerConnections.length === 0}
+      <div class="py-8 text-center text-xs text-text-muted flex flex-col items-center justify-center gap-3">
+        <p>No connections found. Authorize an account to get started.</p>
+        {#if providerId === 'freebuff'}
+          <button
+            type="button"
+            onclick={startFreebuffFlow}
+            disabled={isAuthorizingFreebuff}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">vpn_key</span>
+            {isAuthorizingFreebuff ? 'Polling Authorization...' : 'Authorize Freebuff CLI'}
+          </button>
+        {:else if providerId === 'antigravity'}
+          <button
+            type="button"
+            onclick={handleAddConnectionClick}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">login</span>
+            Connect Google Account
+          </button>
+        {:else}
+          <button
+            type="button"
+            onclick={handleAddConnectionClick}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">add</span>
+            Add Connection
+          </button>
+        {/if}
+      </div>
+    {:else}
+      <div class="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
+        {#each providerConnections as conn, idx (conn.id)}
+          {@const isFirst = idx === 0}
+          {@const isLast = idx === providerConnections.length - 1}
+          {@const isSelected = selectedConnIds.includes(conn.id)}
+          {@const status = oneByOneStatuses[conn.id]}
+          {@const specificData = conn.providerSpecificData as Record<string, unknown> | undefined}
+          {@const assignedPoolId = (typeof specificData?.proxyPoolId === 'string' ? specificData.proxyPoolId : null)}
+          {@const assignedPool = proxyPools.find((p) => p.id === assignedPoolId)}
+          {@const lastErr = conn.lastError || status?.error}
+          {@const priorityNum = conn.priority ?? idx + 1}
+          {@const isConnActive = conn.isActive === 1}
+          {@const cooldownInfo = getCooldownInfo(conn)}
+          <div class="flex min-w-0 items-stretch">
+            <!-- Multi-select checkbox -->
+            <div class="flex shrink-0 items-center pl-1 sm:pl-2">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onchange={() => toggleSelect(conn.id)}
+                class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+              />
+            </div>
+
+            <!-- Connection Row Content -->
+            <div class="flex-1 min-w-0">
+              <div class="group flex min-w-0 flex-col gap-3 rounded-lg p-2 transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between">
+                <!-- Left info -->
+                <div class="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
+                  <!-- Reorder buttons -->
+                  <div class="flex shrink-0 flex-col">
+                    <button
+                      type="button"
+                      disabled={isFirst}
+                      onclick={() => swapPriority(idx, idx - 1)}
+                      class="p-0.5 rounded {isFirst ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
+                    >
+                      <span class="material-symbols-outlined text-sm">keyboard_arrow_up</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLast}
+                      onclick={() => swapPriority(idx, idx + 1)}
+                      class="p-0.5 rounded {isLast ? 'text-text-muted/30 cursor-not-allowed' : 'hover:bg-sidebar text-text-muted hover:text-primary cursor-pointer'}"
+                    >
+                      <span class="material-symbols-outlined text-sm">keyboard_arrow_down</span>
+                    </button>
+                  </div>
+
+                  <!-- Lock icon -->
+                  <span class="material-symbols-outlined shrink-0 text-base text-text-muted">lock</span>
+
+                  <!-- Title & badges -->
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium truncate">
+                      {conn.name || conn.email || (conn.authType === 'oauth' ? 'OAuth Account' : 'API Key Slot')}
+                    </p>
+                    <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
+                      <!-- Status badge -->
+                      {#if status?.state === 'testing'}
+                        <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 text-[10px]">
+                          <span class="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>
+                          testing
+                        </span>
+                      {:else if status?.state === 'failed' || conn.testStatus === 'failed' || conn.testStatus === 'error'}
+                        <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 text-[10px]">
+                          <span class="size-1.5 rounded-full bg-red-500"></span>
+                          error
+                        </span>
+                      {:else}
+                        <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 text-[10px]">
+                          <span class="size-1.5 rounded-full bg-green-500"></span>
+                          active
+                        </span>
+                      {/if}
+                      <!-- Cooldown & Exhausted Quota badge with live timer -->
+                      {#if cooldownInfo}
+                        {#if cooldownInfo.isLock}
+                          <span class="text-xs text-orange-500 font-mono" title={cooldownInfo.title}>
+                            {cooldownInfo.label}
+                          </span>
+                        {:else}
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full font-semibold px-2 py-0.5 text-[10px] border {cooldownInfo.isExhausted
+                              ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'}"
+                            title={cooldownInfo.title}
+                          >
+                            <span class="material-symbols-outlined text-[12px] animate-pulse">hourglass_top</span>
+                            {cooldownInfo.label}
+                          </span>
+                        {/if}
+                      {/if}
+
+                      <!-- Auth type badge -->
+                      <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-surface-2 text-text-muted px-2 py-0.5 text-[10px]">
+                        {conn.authType === 'oauth' ? 'OAuth' : 'API Key'}
+                      </span>
+                      <!-- Last error tooltip -->
+                      {#if lastErr}
+                        <span class="max-w-full truncate text-xs text-red-500 sm:max-w-[300px]" title={lastErr}>
+                          {lastErr.length > 50 ? lastErr.slice(0, 50) + '...' : lastErr}
+                        </span>
+                      {/if}
+
+                      <!-- Priority tag -->
+                      <span class="text-xs text-text-muted">#{priorityNum}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Right actions -->
+                <div class="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+                  <div class="grid flex-1 grid-cols-3 gap-1 sm:flex sm:flex-none">
+                    <!-- Proxy dropdown -->
+                    <div class="relative">
+                      <button
+                        type="button"
+                        onclick={() => (activeProxyDropdownId = activeProxyDropdownId === conn.id ? null : conn.id)}
+                        class="flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 {assignedPool ? 'text-primary' : 'text-text-muted hover:text-primary'} cursor-pointer"
+                      >
+                        <span class="material-symbols-outlined text-[18px]">lan</span>
+                        <span class="text-[10px] leading-tight">Proxy</span>
+                      </button>
+
+                      {#if activeProxyDropdownId === conn.id}
+                        <!-- Backdrop -->
+                        <div
+                          class="fixed inset-0 z-40"
+                          onclick={() => (activeProxyDropdownId = null)}
+                          role="presentation"
+                        ></div>
+                        <div class="absolute right-0 top-full z-50 mt-1 max-w-[78vw] min-w-[160px] rounded-lg border border-border bg-bg py-1 shadow-lg">
+                          <button
+                            type="button"
+                            onclick={() => assignProxyPool(conn, null)}
+                            class="flex w-full items-center px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {!assignedPoolId ? 'text-primary font-medium' : 'text-text-main'}"
+                          >
+                            None
+                          </button>
+                          {#each activeProxyPools as pool}
+                            <button
+                              type="button"
+                              onclick={() => assignProxyPool(conn, pool.id)}
+                              class="flex w-full items-center px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {assignedPoolId === pool.id ? 'text-primary font-medium' : 'text-text-main'}"
+                            >
+                              {pool.name}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+
+                    <!-- Edit button -->
+                    <button
+                      type="button"
+                      onclick={() => openEditConnection(conn)}
+                      class="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5 cursor-pointer"
+                    >
+                      <span class="material-symbols-outlined text-[18px]">edit</span>
+                      <span class="text-[10px] leading-tight">Edit</span>
+                    </button>
+
+                    <!-- Delete button -->
+                    <button
+                      type="button"
+                      onclick={() => handleDeleteConnection(conn)}
+                      class="flex flex-col items-center rounded px-2 py-1 text-red-500 hover:bg-red-500/10 cursor-pointer"
+                    >
+                      <span class="material-symbols-outlined text-[18px]">delete</span>
+                      <span class="text-[10px] leading-tight">Delete</span>
+                    </button>
+                  </div>
+
+                  <!-- Active toggle switch -->
+                  <div class="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-label="Toggle connection active"
+                      aria-checked={isConnActive}
+                      onclick={() => toggleConnectionActive(conn)}
+                      class="relative inline-flex shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-500/30 {isConnActive ? 'bg-brand-500' : 'bg-surface-3'} w-8 h-4"
+                    >
+                      <span
+                        class="pointer-events-none inline-block rounded-full bg-white shadow-sm transform transition duration-200 ease-in-out {isConnActive ? 'translate-x-4' : 'translate-x-0.5'} size-3 mt-0.5"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Bottom Add Button -->
+    <div class="mt-4 grid grid-cols-1 gap-2 sm:flex">
+      {#if providerId === 'freebuff'}
+        <button
+          type="button"
+          onclick={startFreebuffFlow}
+          disabled={isAuthorizingFreebuff}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+        >
+          <span class="material-symbols-outlined text-[18px]">vpn_key</span>
+          {isAuthorizingFreebuff ? 'Polling Authorization...' : 'Authorize Freebuff CLI'}
+        </button>
+      {:else}
+        <button
+          type="button"
+          onclick={handleAddConnectionClick}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+        >
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          Add
+        </button>
+      {/if}
+    </div>
+  </div>
+  {/if}
+
+  <!-- 4. Available Models Card -->
+  <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
+    <!-- Header -->
+    <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex items-center gap-3">
+        <h2 class="text-lg font-semibold">Available Models</h2>
+        <select
+          title="Appends (level) suffix to copied model names"
+          value={thinkingLevel}
+          onchange={handleThinkingChange}
+          class="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none cursor-pointer"
+        >
+          <option value="auto">Thinking: Auto</option>
+          <option value="minimal">Thinking: Minimal</option>
+          <option value="low">Thinking: Low</option>
+          <option value="medium">Thinking: Medium</option>
+          <option value="high">Thinking: High</option>
+          <option value="max">Thinking: Max</option>
+          <option value="xhigh">Thinking: Xhigh</option>
+        </select>
+      </div>
+
+      <div class="flex gap-2">
+        <button
+          type="button"
+          onclick={handleToggleAllModels}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+        >
+          <span class="material-symbols-outlined text-[18px]">block</span>
+          {allDisabled ? 'Enable All' : 'Disable All'}
+        </button>
+      </div>
+    </div>
+
+    {#if activeModelTestError}
+      <div class="mb-3 flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-600 dark:text-red-400">
+        <span class="material-symbols-outlined shrink-0 text-base">error</span>
+        <div class="flex-1 font-medium leading-relaxed">
+          {activeModelTestError}
+        </div>
+        <button
+          type="button"
+          onclick={() => (activeModelTestError = null)}
+          class="text-red-600 dark:text-red-400 hover:opacity-75 cursor-pointer"
+          title="Dismiss"
+        >
+          <span class="material-symbols-outlined text-sm">close</span>
+        </button>
+      </div>
+    {/if}
+    {#if isFreebuff}
+      <div class="mb-4">
+        <FreebuffSessionBanner
+          session={freebuffSession}
+          isLoading={isLoadingSession}
+          expiresInMin={sessionExpiresInMin}
+          onRefresh={loadFreebuffSession}
+        />
+      </div>
+    {/if}
+
+
+    <!-- Models flex-wrap list matching upstream -->
+    <div class="flex flex-wrap gap-3">
+      {#each visibleModels as model (model.id)}
+        {@const fullModelId = `${storageAlias}/${model.id}`}
+        {@const testStatus = modelTestStatuses[model.id]}
+        {@const isTestingThis = testStatus === 'testing'}
+        {@const isSessionActive = checkIsActiveSession(model.id)}
+        {@const isSessionLocked = checkIsLockedBySession(model.id)}
+        <div
+          class="group min-w-0 max-w-full rounded-lg border px-3 py-2 {testStatus === 'ok' ? 'border-green-500/40' : testStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50 transition-colors"
+        >
+          <div class="flex min-w-0 items-start gap-2 sm:items-center">
+            <span class="material-symbols-outlined shrink-0 text-base text-text-muted">smart_toy</span>
+            <div class="flex min-w-0 flex-1 flex-col gap-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <code class="max-w-[72vw] truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted sm:max-w-[360px]">
+                  {fullModelId}
+                </code>
+                {#if isSessionActive}
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Active Session
+                  </span>
+                {:else if isSessionLocked}
+                  <span class="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface-2 text-text-muted/80 border border-border/50" title="Locked by active session">
+                    🔒 Locked
+                  </span>
+                {/if}
+              </div>
+              <span class="flex min-w-0 items-center text-[9px] gap-1 pl-1">
+                <span class="truncate text-[9px] italic text-text-muted/70">{model.name}</span>
+                <span class="inline-flex items-center gap-0.5">
+                  {#if model.caps?.vision}
+                    <div class="relative inline-flex group/tt">
+                      <span class="material-symbols-outlined leading-none cursor-help text-text-muted/70" style="font-size: 12px;">visibility</span>
+                      <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-56 rounded px-2 py-1 text-[11px] leading-snug bg-gray-900 text-white opacity-0 group-hover/tt:opacity-100 transition-opacity duration-150 whitespace-normal shadow-lg">
+                        Vision — Supports image input
+                      </div>
+                    </div>
+                  {/if}
+                  {#if model.caps?.reasoning}
+                    <div class="relative inline-flex group/tt">
+                      <span class="material-symbols-outlined leading-none cursor-help text-text-muted/70" style="font-size: 12px;">neurology</span>
+                      <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-56 rounded px-2 py-1 text-[11px] leading-snug bg-gray-900 text-white opacity-0 group-hover/tt:opacity-100 transition-opacity duration-150 whitespace-normal shadow-lg">
+                        Reasoning — Supports reasoning / thinking
+                      </div>
+                    </div>
+                  {/if}
+                </span>
+              </span>
+            </div>
+              {#if modelTestErrors[model.id]}
+                <span class="text-[9px] text-red-500 dark:text-red-400 font-medium pl-1 truncate max-w-[280px]" title={modelTestErrors[model.id]}>
+                  {modelTestErrors[model.id]}
+                </span>
+              {/if}
+
+            <!-- Test button -->
+            <div class="relative shrink-0 group/btn">
+              <button
+                type="button"
+                onclick={() => testModel(model.id)}
+                disabled={isTestingThis}
+                class="rounded p-0.5 text-text-muted transition-opacity hover:bg-sidebar hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                title={modelTestErrors[model.id] || (testStatus === 'ok' ? 'Test Passed' : 'Test')}
+              >
+                {#if isTestingThis}
+                  <span class="material-symbols-outlined text-sm animate-spin text-primary">progress_activity</span>
+                {:else if testStatus === 'ok'}
+                  <span class="material-symbols-outlined text-sm text-green-500">check</span>
+                {:else if testStatus === 'error'}
+                  <span class="material-symbols-outlined text-sm text-red-500">error</span>
+                {:else}
+                  <span class="material-symbols-outlined text-sm">science</span>
+                {/if}
+              </button>
+              <span class="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity z-20 bg-surface-2 px-1 rounded shadow border border-border">
+                {#if isTestingThis}
+                  Testing...
+                {:else if testStatus === 'ok'}
+                  Passed
+                {:else if testStatus === 'error'}
+                  {modelTestErrors[model.id] || 'Failed'}
+                {:else}
+                  Test
+                {/if}
+              </span>
+            </div>
+            <!-- Copy button -->
+            <div class="relative shrink-0 group/btn">
+              <button
+                type="button"
+                onclick={() => copyModelId(model.id)}
+                class="rounded p-0.5 text-text-muted hover:bg-sidebar hover:text-primary cursor-pointer"
+              >
+                {#if copiedModelId === model.id}
+                  <span class="material-symbols-outlined text-sm text-green-500">check</span>
+                {:else}
+                  <span class="material-symbols-outlined text-sm">content_copy</span>
+                {/if}
+              </button>
+              <span class="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                Copy
+              </span>
+            </div>
+
+            <!-- Disable button -->
+            <button
+              type="button"
+              onclick={() => handleDisableModel(model.id)}
+              class="ml-auto rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+              title="Disable this model"
+            >
+              <span class="material-symbols-outlined text-sm">close</span>
+            </button>
+          </div>
+        </div>
+      {/each}
+
+      <!-- Add Model button inside the same flex-wrap -->
+      <button
+        type="button"
+        onclick={() => (showAddCustomModelModal = true)}
+        class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/40 px-3 py-2 text-xs text-primary transition-colors hover:border-primary hover:bg-primary/5 sm:w-auto cursor-pointer"
+      >
+        <span class="material-symbols-outlined text-sm">add</span>
+        Add Model
+      </button>
+    </div>
+
+    <!-- Disabled Models pills -->
+    {#if disabledModelIds.length > 0}
+      <div class="w-full mt-4">
+        <p class="text-xs text-text-muted mb-2">Disabled models ({disabledModelIds.length}):</p>
+        <div class="flex flex-wrap gap-2">
+          {#each disabledModelIds as dId}
+            <button
+              type="button"
+              onclick={() => handleEnableModel(dId)}
+              class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 text-xs text-text-muted hover:text-primary hover:border-primary/40 hover:bg-primary/5 transition-colors cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-[13px]">add</span>
+              {dId.split('/').pop()}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+</div>
+
+<!-- Modals -->
+
+<!-- 1. Risk Notice Modal -->
+{#if showRiskNoticeModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
+      onclick={() => (showRiskNoticeModal = false)}
+      role="presentation"
+    ></div>
+    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-md p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">Risk Notice</h2>
+        <button
+          type="button"
+          onclick={() => (showRiskNoticeModal = false)}
+          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+      <p class="text-xs text-red-600 dark:text-yellow-400 leading-relaxed mb-6">
+        ⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.
+      </p>
+      <div class="flex gap-2 justify-end">
+        <button
+          type="button"
+          onclick={() => (showRiskNoticeModal = false)}
+          class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onclick={confirmRiskAndProceed}
+          class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer"
+        >
+          I Understand, Continue
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- 2. OAuth / Antigravity Connect Modal -->
+{#if showOAuthModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
+      onclick={() => (showOAuthModal = false)}
+      role="presentation"
+    ></div>
+    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">Connect {providerName}</h2>
+        <button
+          type="button"
+          onclick={() => (showOAuthModal = false)}
+          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50 mb-4">
+        <span class="material-symbols-outlined text-base text-primary animate-spin">progress_activity</span>
+        <span class="text-sm">
+          {providerId === 'freebuff' ? 'Waiting for Freebuff authorization… (auto-polling active)' : 'Waiting for popup authorization…'}
+        </span>
+      </div>
+
+      <div class="flex items-center gap-3 my-3">
+        <div class="flex-1 h-px bg-border"></div>
+        <span class="text-xs text-text-muted uppercase tracking-wider">
+          {providerId === 'freebuff' ? 'Authorization link & manual check' : 'Or paste callback URL manually'}
+        </span>
+        <div class="flex-1 h-px bg-border"></div>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <p class="text-sm font-medium mb-1">Step 1: Open this URL in your browser</p>
+          <div class="flex gap-2">
+            <input
+              readonly
+              value={oauthAuthUrl}
+              class="flex-1 px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-muted select-all font-mono"
+            />
+            <button
+              type="button"
+              onclick={() => window.open(oauthAuthUrl, '_blank')}
+              class="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md border border-border bg-surface-2 hover:bg-surface-3 text-text-main cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-sm">open_in_new</span>
+              Open
+            </button>
+            <button
+              type="button"
+              onclick={copyAuthUrl}
+              class="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md border border-border bg-surface-2 hover:bg-surface-3 text-text-main cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-sm">{copiedAuthUrl ? 'check' : 'content_copy'}</span>
+              {copiedAuthUrl ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <p class="text-sm font-medium mb-1">
+            {providerId === 'freebuff' ? 'Step 2: Selesaikan di browser / paste URL / Code / Token' : 'Step 2: Paste the callback URL here'}
+          </p>
+          <input
+            bind:value={callbackInput}
+            placeholder={providerId === 'freebuff' ? 'https://freebuff.com/onboard?auth_code=... atau paste authToken' : 'http://localhost:8080/api/oauth/antigravity/callback?state=...&code=...'}
+            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+          />
+          <p class="text-[11px] text-text-muted mt-1">
+            {providerId === 'freebuff'
+              ? 'Jika browser diarahkan ke /onboard, selesaikan onboarding di tab Freebuff lalu paste URL di atas atau langsung klik Check & Connect.'
+              : 'After authorization, copy the full URL from your browser.'}
+          </p>
+        </div>
+
+        {#if oauthError}
+          <p class="text-xs text-red-500">{oauthError}</p>
+        {/if}
+
+        <div class="flex gap-2 pt-2">
+          <button
+            type="button"
+            onclick={submitManualCallback}
+            disabled={isConnecting}
+            class="flex-1 py-1.5 text-xs font-semibold rounded-[8px] bg-brand-500 hover:bg-brand-600 text-white shadow-sm disabled:opacity-50 cursor-pointer"
+          >
+            {isConnecting ? 'Checking…' : providerId === 'freebuff' ? 'Check & Connect' : 'Connect'}
+          </button>
+          <button
+            type="button"
+            onclick={() => {
+              showOAuthModal = false
+              if (freebuffPollTimer) {
+                clearInterval(freebuffPollTimer)
+                freebuffPollTimer = null
+              }
+              isAuthorizingFreebuff = false
+            }}
+            class="flex-1 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- 3. Apply Proxy Modal -->
+{#if showApplyProxyModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
+      onclick={() => (showApplyProxyModal = false)}
+      role="presentation"
+    ></div>
+    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">
+          Apply Proxy ({selectedConnIds.length > 0 ? selectedConnIds.length : providerConnections.length} connections)
+        </h2>
+        <button
+          type="button"
+          onclick={() => (showApplyProxyModal = false)}
+          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <div class="space-y-2 mb-6">
+        <button
+          type="button"
+          onclick={handleApplyProxyRotate}
+          disabled={isApplyingProxy || activeProxyPools.length === 0}
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left border border-border hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-primary text-lg">sync_alt</span>
+          <div>
+            <div class="text-xs font-medium text-text-main">One-to-one (rotate)</div>
+            <div class="text-[11px] text-text-muted">Distribute active proxy pools round-robin</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onclick={() => handleApplyProxyPool(null)}
+          disabled={isApplyingProxy}
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left border border-border hover:bg-surface-2 transition-colors cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-red-500 text-lg">link_off</span>
+          <div>
+            <div class="text-xs font-medium text-text-main">None (unbind all)</div>
+            <div class="text-[11px] text-text-muted">Remove proxy pool from connections</div>
+          </div>
+        </button>
+
+        {#each activeProxyPools as pool}
+          <button
+            type="button"
+            onclick={() => handleApplyProxyPool(pool.id)}
+            disabled={isApplyingProxy}
+            class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left border border-border hover:bg-surface-2 transition-colors cursor-pointer"
+          >
+            <span class="material-symbols-outlined text-text-muted text-lg">lan</span>
+            <div>
+              <div class="text-xs font-medium text-text-main">{pool.name}</div>
+              <div class="text-[11px] text-text-muted truncate">{pool.proxyUrl}</div>
+            </div>
+          </button>
+        {/each}
+      </div>
+
+      <div class="flex justify-end">
+        <button
+          type="button"
+          onclick={() => (showApplyProxyModal = false)}
+          class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- 4. Edit Connection Modal -->
+{#if editingConnection}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
+      onclick={() => (editingConnection = null)}
+      role="presentation"
+    ></div>
+    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-md p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">Edit Connection</h2>
+        <button
+          type="button"
+          onclick={() => (editingConnection = null)}
+          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-conn-name">Name</label>
+          <input
+            id="edit-conn-name"
+            bind:value={editName}
+            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+          />
+        </div>
+
+        {#if editingConnection.email}
+          <div>
+            <span class="block text-xs font-medium text-text-muted mb-1">Email</span>
+            <p class="text-xs text-text-main font-medium">{editingConnection.email}</p>
+          </div>
+        {/if}
+
+        <div>
+          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-conn-priority">Priority</label>
+          <input
+            id="edit-conn-priority"
+            type="number"
+            min="1"
+            bind:value={editPriority}
+            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+          />
+        </div>
+
+        {#if editTestStatus}
+          <div class="text-xs {editTestStatus === 'ok' ? 'text-green-500' : 'text-red-500'}">
+            {editTestStatus === 'ok' ? 'Connection valid!' : editTestError || 'Test failed'}
+          </div>
+        {/if}
+
+        <div class="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onclick={testEditingConnection}
+            disabled={isTestingEdit}
+            class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            {#if isTestingEdit}
+              <span class="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+            {/if}
+            Test Connection
+          </button>
+
+          <div class="flex gap-2">
+            <button
+              type="button"
+              onclick={() => (editingConnection = null)}
+              class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onclick={saveEditingConnection}
+              disabled={isSavingEdit}
+              class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-brand-500 hover:bg-brand-600 text-white shadow-sm disabled:opacity-50 cursor-pointer"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- 5. Add Custom Model Modal -->
+<AddCustomModelModal
+  isOpen={showAddCustomModelModal}
+  isSubmitting={false}
+  onClose={() => (showAddCustomModelModal = false)}
+  onSubmit={submitAddCustomModel}
+/>
+
+<!-- 6. Add Key Connection Modal (for non-oauth providers) -->
+<AddConnectionModal
+  isOpen={showAddKeyModal}
+  title="Add Connection to {providerName}"
+  isSubmitting={false}
+  onClose={() => (showAddKeyModal = false)}
+  onSubmit={handleAddKeyConnection}
+/>
