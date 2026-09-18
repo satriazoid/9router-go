@@ -566,6 +566,8 @@ func TestForwardOpencode_BigPickle_ForcesStreamAndAggregatesSSE(t *testing.T) {
 	if msg["content"] != "pickle response" {
 		t.Errorf("expected 'pickle response', got %v", msg["content"])
 }
+}
+
 func TestBuildResponsesBody_StringInput(t *testing.T) {
 	body := []byte(`{
 		"model": "opencode/muse-spark-1.3-contributor-free",
