@@ -223,8 +223,9 @@ var (
 	harnessBrandOMPFull         = regexp.MustCompile(`(?i)Oh My Pi coding harness`)
 	harnessBrandOMP             = regexp.MustCompile(`(?i)Oh My Pi`)
 	harnessBrandOMPLive         = regexp.MustCompile(`(?i)omp Live`)
+	claudeBillingHeaderRegex    = regexp.MustCompile(`(?im)^x-anthropic-billing-header:[^\n]*(?:\r?\n)*`)
+	hermesIdentityRegex         = regexp.MustCompile(`(?i)You are Hermes Agent,\s*(an intelligent AI assistant)(?: created by Nous Research)?\.`)
 )
-
 var opencodeRegex = regexp.MustCompile(`(?i)\bopencode\b`)
 
 // normalizeHarnessMarkers neutralizes harness fingerprint tags in system text.
@@ -251,6 +252,8 @@ func rewriteBrandingText(text string, isSystemInstruction bool) string {
 	for _, phrase := range competitivePromptBlacklist {
 		text = strings.ReplaceAll(text, phrase, "")
 	}
+	text = claudeBillingHeaderRegex.ReplaceAllString(text, "")
+	text = hermesIdentityRegex.ReplaceAllString(text, "You are Hermes Agent. You are ${1}.")
 	if isSystemInstruction {
 		text = normalizeHarnessMarkers(text)
 	}

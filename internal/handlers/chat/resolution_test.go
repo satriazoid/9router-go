@@ -462,3 +462,18 @@ func TestResolveModel_UnresolvableReturnsError(t *testing.T) {
 		t.Error("expected error for unresolvable model with no connections")
 	}
 }
+
+func TestResolveModel_BareCodexAutoReview(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	info, err := h.resolveModel("codex-auto-review")
+	if err != nil {
+		t.Fatalf("expected codex-auto-review to resolve, got error: %v", err)
+	}
+	if info.Provider != "codex" || info.Model != "codex-auto-review" {
+		t.Errorf("expected Provider=codex, Model=codex-auto-review, got Provider=%s, Model=%s", info.Provider, info.Model)
+	}
+}

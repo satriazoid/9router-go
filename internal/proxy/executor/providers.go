@@ -222,6 +222,68 @@ func ForwardAzure(w http.ResponseWriter, req *Request) error {
 	}
 	return jsonResponse(req.Ctx, w, resp.Body, req.TranslateResp, req.ResponseBuf)
 }
+func parseDataURIMime(uri string) string {
+	if strings.HasPrefix(uri, "data:") {
+		if idx := strings.Index(uri, ";"); idx > 5 {
+			return uri[5:idx]
+		}
+	}
+	return "image/png"
+}
+
+func toCommandcodeImageBlock(part map[string]any) map[string]any {
+	pType, _ := part["type"].(string)
+	if pType == "image_url" {
+		var urlStr string
+		switch u := part["image_url"].(type) {
+		case string:
+			urlStr = u
+		case map[string]any:
+			urlStr, _ = u["url"].(string)
+		}
+		if urlStr != "" && strings.HasPrefix(urlStr, "data:") {
+			mime := parseDataURIMime(urlStr)
+			return map[string]any{
+				"type":      "image",
+				"image":     urlStr,
+				"mimeType":  mime,
+				"mediaType": mime,
+			}
+		}
+	}
+	if pType == "image" {
+		if imgStr, ok := part["image"].(string); ok && strings.HasPrefix(imgStr, "data:") {
+			mime, _ := part["mimeType"].(string)
+			if mime == "" {
+				mime = parseDataURIMime(imgStr)
+			}
+			return map[string]any{
+				"type":      "image",
+				"image":     imgStr,
+				"mimeType":  mime,
+				"mediaType": mime,
+			}
+		}
+		if src, ok := part["source"].(map[string]any); ok {
+			mediaType, _ := src["media_type"].(string)
+			if mediaType == "" {
+				mediaType = "image/png"
+			}
+			data, _ := src["data"].(string)
+			if data != "" {
+				dataURI := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+				return map[string]any{
+					"type":      "image",
+					"image":     dataURI,
+					"mimeType":  mediaType,
+					"mediaType": mediaType,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 
 // buildCommandcodeBody transforms OpenAI request payload into CommandCode schema
 // {threadId, memory, config, params} matching upstream openaiToCommandCodeRequest.
@@ -290,7 +352,25 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 					"text": strContent,
 				})
 			} else if arrContent, ok := contentVal.([]any); ok {
-				contentBlocks = arrContent
+				for _, part := range arrContent {
+					if partMap, ok := part.(map[string]any); ok {
+						pType, _ := partMap["type"].(string)
+						if pType == "text" {
+							txt, _ := partMap["text"].(string)
+							contentBlocks = append(contentBlocks, map[string]any{
+								"type": "text",
+								"text": txt,
+							})
+						} else if imgBlock := toCommandcodeImageBlock(partMap); imgBlock != nil {
+							contentBlocks = append(contentBlocks, imgBlock)
+						} else if txt, ok := partMap["text"].(string); ok {
+							contentBlocks = append(contentBlocks, map[string]any{
+								"type": "text",
+								"text": txt,
+							})
+						}
+					}
+				}
 			} else {
 				contentBlocks = append(contentBlocks, map[string]any{
 					"type": "text",

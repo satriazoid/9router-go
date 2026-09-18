@@ -2,6 +2,8 @@ package chat
 
 import (
 	"errors"
+	"io"
+	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -265,5 +267,73 @@ func TestForwardCommandcodeRequest_StaticHeaders(t *testing.T) {
 	}
 	if capturedUA != "custom-cc-agent/1.0" {
 		t.Errorf("expected User-Agent 'custom-cc-agent/1.0', got %q", capturedUA)
+	}
+}
+
+func TestForwardCommandcodeRequest_ImageAndReasoningEffort(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"type":"finish","finishReason":"stop"}` + "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{
+		BaseURL: srv.URL,
+	}
+	body := []byte(`{
+		"model": "deepseek-v4-vision",
+		"reasoning_effort": "high",
+		"messages": [
+			{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "what is this?"},
+					{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+				]
+			}
+		]
+	}`)
+	rec := httptest.NewRecorder()
+	err := executor.ForwardCommandcode(rec, &executor.Request{
+		Client:   srv.Client(),
+		Config:   cfg,
+		APIKey:   "sk-test",
+		Body:     body,
+		IsStream: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	params, _ := capturedBody["params"].(map[string]any)
+	if params == nil {
+		t.Fatal("expected params object in payload")
+	}
+	if effort, _ := params["reasoning_effort"].(string); effort != "high" {
+		t.Errorf("expected reasoning_effort 'high', got %v", params["reasoning_effort"])
+	}
+
+	msgs, _ := params["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	userMsg, _ := msgs[0].(map[string]any)
+	content, _ := userMsg["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(content))
+	}
+	imgPart, _ := content[1].(map[string]any)
+	if imgPart["type"] != "image" {
+		t.Errorf("expected content[1].type 'image', got %v", imgPart["type"])
+	}
+	if imgPart["image"] != "data:image/png;base64,iVBORw0KGgo=" {
+		t.Errorf("expected data URI preserved, got %v", imgPart["image"])
+	}
+	if imgPart["mimeType"] != "image/png" {
+		t.Errorf("expected mimeType 'image/png', got %v", imgPart["mimeType"])
 	}
 }

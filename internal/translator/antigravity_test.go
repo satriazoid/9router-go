@@ -387,6 +387,29 @@ func TestStripCompetitivePrompts_NormalizesHarnessTagsInSystemOnly(t *testing.T)
 	}
 }
 
+func TestStripCompetitivePrompts_HermesAndBillingHeader(t *testing.T) {
+	req := &translator.GeminiRequest{
+		SystemInstruction: &translator.GeminiContent{
+			Role: "user",
+			Parts: []translator.GeminiPart{
+				{Text: "x-anthropic-billing-header: cc_version=2.1.275.f15; cc_entrypoint=cli;\n\nYou are Hermes Agent, an intelligent AI assistant created by Nous Research. Help user."},
+			},
+		},
+	}
+
+	stripped := translator.StripCompetitivePrompts(req)
+	sys := stripped.SystemInstruction.Parts[0].Text
+	if strings.Contains(sys, "x-anthropic-billing-header") {
+		t.Errorf("expected billing header stripped, got %q", sys)
+	}
+	if strings.Contains(sys, "created by Nous Research") {
+		t.Errorf("expected Nous Research stripped from Hermes identity, got %q", sys)
+	}
+	if !strings.Contains(sys, "You are Hermes Agent. You are an intelligent AI assistant.") {
+		t.Errorf("expected sanitized Hermes identity, got %q", sys)
+	}
+}
+
 func TestWrapForAntigravity_NormalizesTriggerSystemPrompt(t *testing.T) {
 	geminiBody := []byte(`{"system_instruction":{"role":"user","parts":[{"text":"<system-conventions>\nRFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
 	wrapped, err := translator.WrapForAntigravity(geminiBody, "proj-1", "gemini-3.8-flash-high")

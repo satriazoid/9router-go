@@ -247,6 +247,12 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 		}
 	}
 
+	// Upstream PR #4135: route bare codex-auto-review to the Codex provider
+	// Outside Repo guard so it resolves with nil Repo / empty DB (static catalog).
+	if modelStr == "codex-auto-review" {
+		return &ModelInfo{Provider: "codex", Model: "codex-auto-review"}, nil
+	}
+
 	// 3. Check if it's a combo name
 	if h.Repo != nil {
 		combo, err := h.Repo.GetComboByName(modelStr)
