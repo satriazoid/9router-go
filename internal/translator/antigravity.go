@@ -29,11 +29,15 @@ var antigravityRequestBlacklist = []string{
 }
 
 // AntigravityRequest is the wrapper format for Antigravity API.
+// RequestType is omitempty: PR decolua/9router#3986 showed Google's Cloud Code
+// endpoint enforces a tiny separate quota bucket whenever requestType="agent"
+// is present, causing false 429 RESOURCE_EXHAUSTED on OMP harness payloads
+// even with quota remaining. So the agent path omits the field entirely.
 type AntigravityRequest struct {
 	Project     string         `json:"project"`
 	Model       string         `json:"model"`
 	UserAgent   string         `json:"userAgent"`
-	RequestType string         `json:"requestType"`
+	RequestType string         `json:"requestType,omitempty"`
 	RequestID   string         `json:"requestId"`
 	Request     jsontext.Value `json:"request"`
 }
@@ -612,12 +616,14 @@ func WrapForAntigravity(geminiBody []byte, projectID, modelName string) ([]byte,
 	geminiBody = hardenAntigravityRequest(geminiBody)
 
 	wrapper := AntigravityRequest{
-		Project:     projectID,
-		Model:       modelName,
-		UserAgent:   "antigravity",
-		RequestType: "agent",
-		RequestID:   antigravityBuildRequestID(projectID, modelName, "agent", contentCount),
-		Request:     geminiBody,
+		Project:   projectID,
+		Model:     modelName,
+		UserAgent: "antigravity",
+		// Omit RequestType (was "agent"): parity with decolua/9router#3986.
+		// Google rejects agent-bucketed requests with false 429s; requestId
+		// keeps its existing agent/<...>/<...>/<...>/<step> shape.
+		RequestID: antigravityBuildRequestID(projectID, modelName, "agent", contentCount),
+		Request:   geminiBody,
 	}
 	out, err := json.Marshal(wrapper)
 	if err != nil {

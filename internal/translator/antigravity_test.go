@@ -197,6 +197,29 @@ func TestAntigravityImageModelAndConfig(t *testing.T) {
 	}
 }
 
+func TestWrapForAntigravity_OmitsAgentRequestType(t *testing.T) {
+	// Port of decolua/9router#3986: requestType="agent" triggers a false
+	// upstream 429 bucket on OMP harness payloads, so it must be omitted.
+	geminiBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	wrapped, err := translator.WrapForAntigravity(geminiBody, "proj-1", "gemini-3.8-flash-medium")
+	if err != nil {
+		t.Fatalf("WrapForAntigravity failed: %v", err)
+	}
+	if strings.Contains(string(wrapped), `"requestType"`) {
+		t.Errorf("expected no requestType field in envelope, got %s", string(wrapped))
+	}
+	var req translator.AntigravityRequest
+	if err := json.Unmarshal(wrapped, &req); err != nil {
+		t.Fatalf("unmarshal wrapper: %v", err)
+	}
+	if req.RequestType != "" {
+		t.Errorf("expected empty RequestType, got %q", req.RequestType)
+	}
+	if !antigravityRequestIDRe.MatchString(req.RequestID) {
+		t.Errorf("request ID %q does not match UUID format", req.RequestID)
+	}
+}
+
 func TestWrapAntigravityImageRequest(t *testing.T) {
 	reqBytes, err := translator.WrapAntigravityImageRequest("A cute cat", "", "proj-123", "gemini-3.1-flash-image", "16:9")
 	if err != nil {
