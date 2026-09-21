@@ -437,7 +437,7 @@ func TestTranslateClaudeToOpenAI_ThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to translate: %v", err)
 		}
-		var oreq map[string]interface{}
+		var oreq map[string]any
 		if err := json.Unmarshal(openaiJSON, &oreq); err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -456,7 +456,7 @@ func TestTranslateClaudeToOpenAI_ThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to translate: %v", err)
 		}
-		var oreq map[string]interface{}
+		var oreq map[string]any
 		if err := json.Unmarshal(openaiJSON, &oreq); err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -475,7 +475,7 @@ func TestTranslateClaudeToOpenAI_ThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to translate: %v", err)
 		}
-		var oreq map[string]interface{}
+		var oreq map[string]any
 		if err := json.Unmarshal(openaiJSON, &oreq); err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -493,7 +493,7 @@ func TestTranslateClaudeToOpenAI_ThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to translate: %v", err)
 		}
-		var oreq map[string]interface{}
+		var oreq map[string]any
 		if err := json.Unmarshal(openaiJSON, &oreq); err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}

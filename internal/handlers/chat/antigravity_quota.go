@@ -53,6 +53,18 @@ var (
 	agStrikeWindow        = 60 * time.Second
 	agStrikeThreshold     = 3
 	agStrikeBlockDuration = 15 * time.Minute
+
+	// Explicit quota-error markers (parity with decolua/9router#4197): only
+	// 429s carrying one of these count toward the strike-breaker. Generic or
+	// content-triggered 429s must not synthesize 15m blocks while quota reads
+	// optimistic. NOTE: bare "RESOURCE_EXHAUSTED" is deliberately NOT a
+	// marker — both false-bucket and real-quota 429s carry it; real quota
+	// errors additionally carry QUOTA_EXHAUSTED / "Individual quota reached".
+	agQuotaErrorMarkers = []string{
+		quotaMarkerRateLimitExceeded,
+		quotaMarkerQuotaExhausted,
+		quotaMarkerIndividualQuota,
+	}
 )
 var (
 	agWeeklyMu    sync.RWMutex
@@ -151,32 +163,44 @@ func IsAntigravityModelBlocked(connectionID, model string) bool {
 	now := time.Now().UTC()
 	for _, m := range checkModels {
 		if q, exists := modelsMap[m]; exists {
-			if q.RemainingPercentage <= 0 && !q.ResetAt.IsZero() && q.ResetAt.After(now) {
+			if quotaEntryExhausted(q, now) {
 				agQuotaMu.RUnlock()
 				return true
 			}
 		}
 	}
 
-	// Check family weekly quota
+	// Check family weekly + 5h-session quotas (parity with
+	// decolua/9router#4209: session exhaustion blocks the family even when
+	// weekly remains).
 	if strings.HasPrefix(model, "gemini-") {
-		if wq, exists := modelsMap["gemini_weekly"]; exists {
-			if wq.RemainingPercentage <= 0 && !wq.ResetAt.IsZero() && wq.ResetAt.After(now) {
-				agQuotaMu.RUnlock()
-				return true
+		for _, key := range []string{"gemini_weekly", "gemini_session"} {
+			if wq, exists := modelsMap[key]; exists {
+				if quotaEntryExhausted(wq, now) {
+					agQuotaMu.RUnlock()
+					return true
+				}
 			}
 		}
 	} else if strings.HasPrefix(model, "claude-") || strings.HasPrefix(model, "gpt-") {
-		if wq, exists := modelsMap["claude_gpt_weekly"]; exists {
-			if wq.RemainingPercentage <= 0 && !wq.ResetAt.IsZero() && wq.ResetAt.After(now) {
-				agQuotaMu.RUnlock()
-				return true
+		for _, key := range []string{"claude_gpt_weekly", "claude_gpt_session"} {
+			if wq, exists := modelsMap[key]; exists {
+				if quotaEntryExhausted(wq, now) {
+					agQuotaMu.RUnlock()
+					return true
+				}
 			}
 		}
 	}
 	agQuotaMu.RUnlock()
 
 	return false
+}
+
+// quotaEntryExhausted reports whether a cached quota entry means "do not route
+// here until reset".
+func quotaEntryExhausted(q AntigravityModelQuota, now time.Time) bool {
+	return q.RemainingPercentage <= 0 && !q.ResetAt.IsZero() && q.ResetAt.After(now)
 }
 
 // RefreshAntigravityQuota fetches live quota for a connection from v1internal:fetchAvailableModels.
@@ -323,39 +347,82 @@ func RefreshAntigravityQuota(ctx context.Context, client *http.Client, connectio
 	return quotas, nil
 }
 
+// Quota-error marker constants backing agQuotaErrorMarkers.
+const (
+	quotaMarkerRateLimitExceeded = "RATE_LIMIT_EXCEEDED"
+	quotaMarkerQuotaExhausted    = "QUOTA_EXHAUSTED"
+	quotaMarkerIndividualQuota   = "Individual quota reached"
+)
+
+// AntigravityQuotaError bundles the inputs to HandleAntigravityQuotaError.
+// Kept as a struct: the handler takes 8 inputs and positional calls proved
+// error-prone to extend (see the #4197 port).
+type AntigravityQuotaError struct {
+	Ctx          context.Context
+	Client       *http.Client
+	ConnectionID string
+	Status       int
+	Model        string
+	AccessToken  string
+	ProjectID    string
+	// ErrorMessage is the raw upstream error body/text: strikes require an
+	// explicit quota marker in it; generic/content-triggered 429s return nil
+	// without striking (#4197 parity).
+	ErrorMessage string
+}
+
+// isExplicitQuotaError reports whether an upstream error message explicitly
+// indicates quota/rate limiting (parity with decolua/9router#4197).
+func isExplicitQuotaError(errorMessage string) bool {
+	for _, marker := range agQuotaErrorMarkers {
+		if strings.Contains(errorMessage, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleAntigravityQuotaError handles Antigravity 409/429 errors by refreshing live quota and returning model resetAt.
-func HandleAntigravityQuotaError(ctx context.Context, client *http.Client, connectionID string, status int, model, accessToken, projectID string) *time.Time {
-	if status != http.StatusConflict && status != http.StatusTooManyRequests {
+// Inputs arrive as AntigravityQuotaError: 429s only feed the optimistic
+// strike-breaker when ErrorMessage carries an explicit quota marker;
+// generic/content-triggered 429s return nil without striking (#4197 parity).
+func HandleAntigravityQuotaError(p AntigravityQuotaError) *time.Time {
+	if p.Status != http.StatusConflict && p.Status != http.StatusTooManyRequests {
 		return nil
 	}
 
-	shortConn := connectionID
+	shortConn := p.ConnectionID
 	if len(shortConn) > 8 {
 		shortConn = shortConn[:8]
 	}
-	log.Info("ag_quota", "refreshing quota on error", "connection", shortConn, "status", status, "model", model)
+	log.Info("ag_quota", "refreshing quota on error", "connection", shortConn, "status", p.Status, "model", p.Model)
 
-	quotas, err := RefreshAntigravityQuota(ctx, client, connectionID, accessToken, projectID)
+	quotas, err := RefreshAntigravityQuota(p.Ctx, p.Client, p.ConnectionID, p.AccessToken, p.ProjectID)
 	if err != nil || len(quotas) == 0 {
 		return nil
 	}
 
-	checkModels := []string{model}
-	if canonical, exists := translator.AntigravityModelSynonyms[model]; exists && canonical != model {
+	checkModels := []string{p.Model}
+	if canonical, exists := translator.AntigravityModelSynonyms[p.Model]; exists && canonical != p.Model {
 		checkModels = append(checkModels, canonical)
 	}
 
 	now := time.Now().UTC()
 	for _, m := range checkModels {
 		if q, ok := quotas[m]; ok {
-			if q.RemainingPercentage <= 0 && !q.ResetAt.IsZero() && q.ResetAt.After(now) {
+			if quotaEntryExhausted(q, now) {
 				log.Warn("ag_quota", "quota exhausted; CACHE_BLOCK until reset", "connection", shortConn, "model", m, "resetAt", q.ResetAt.Format(time.RFC3339))
 				res := q.ResetAt
 				return &res
 			}
-			// Optimistic quota strike-breaker (PR #3684): remaining >0 but still 429
-			if q.RemainingPercentage > 0 {
-				key := connectionID + "|" + m
+			// Optimistic quota strike-breaker (PR #3684, gated by #4197):
+			// remaining >0 but still 429. Generic/content-triggered 429s
+			// (no explicit quota marker) must not contribute strikes.
+			if p.Status == http.StatusTooManyRequests && !isExplicitQuotaError(p.ErrorMessage) && q.RemainingPercentage > 0 {
+				return nil
+			}
+			if q.RemainingPercentage > 0 && isExplicitQuotaError(p.ErrorMessage) {
+				key := p.ConnectionID + "|" + m
 				agStrikeMu.Lock()
 				// Prune strikes outside window
 				cutoff := now.Add(-agStrikeWindow)
@@ -375,10 +442,10 @@ func HandleAntigravityQuotaError(ctx context.Context, client *http.Client, conne
 					agStrikeMu.Unlock()
 					// Store blocked quota so IsAntigravityModelBlocked sees it even after optimistic refresh
 					agQuotaMu.Lock()
-					if _, ok := agQuotaCache[connectionID]; !ok {
-						agQuotaCache[connectionID] = make(map[string]AntigravityModelQuota)
+					if _, ok := agQuotaCache[p.ConnectionID]; !ok {
+						agQuotaCache[p.ConnectionID] = make(map[string]AntigravityModelQuota)
 					}
-					agQuotaCache[connectionID][m] = AntigravityModelQuota{
+					agQuotaCache[p.ConnectionID][m] = AntigravityModelQuota{
 						RemainingPercentage: 0,
 						ResetAt:             blockUntil,
 					}
@@ -417,6 +484,7 @@ func ParseWeeklyQuotaSummary(raw []byte) map[string]AntigravityWeeklyQuota {
 			Buckets     []struct {
 				BucketID          string  `json:"bucketId"`
 				DisplayName       string  `json:"displayName"`
+				Window            string  `json:"window"`
 				Disabled          bool    `json:"disabled"`
 				RemainingFraction float64 `json:"remainingFraction"`
 				ResetTime         string  `json:"resetTime"`
@@ -428,6 +496,7 @@ func ParseWeeklyQuotaSummary(raw []byte) map[string]AntigravityWeeklyQuota {
 				Buckets     []struct {
 					BucketID          string  `json:"bucketId"`
 					DisplayName       string  `json:"displayName"`
+					Window            string  `json:"window"`
 					Disabled          bool    `json:"disabled"`
 					RemainingFraction float64 `json:"remainingFraction"`
 					ResetTime         string  `json:"resetTime"`
@@ -458,11 +527,27 @@ func ParseWeeklyQuotaSummary(raw []byte) map[string]AntigravityWeeklyQuota {
 		}
 
 		for _, b := range g.Buckets {
+			// Classify weekly vs 5h-session buckets (parity with
+			// decolua/9router#4209). A disabled session bucket is kept at
+			// 0 (upstream marks it disabled when weekly is hit); disabled
+			// weekly buckets are truly disabled and skipped.
+			windowType := strings.ToLower(b.Window)
 			bText := strings.ToLower(b.BucketID + " " + b.DisplayName)
-			if !strings.Contains(bText, "weekly") || b.Disabled {
+			isWeekly := windowType == "weekly" || strings.Contains(bText, "weekly")
+			isSession := windowType == "5h" || windowType == "daily" ||
+				strings.Contains(bText, "five hour") ||
+				strings.Contains(bText, "5h") ||
+				strings.Contains(bText, "daily")
+			if !isWeekly && !isSession {
+				continue
+			}
+			if b.Disabled && isWeekly {
 				continue
 			}
 			frac := b.RemainingFraction
+			if b.Disabled {
+				frac = 0
+			}
 			if frac < 0 {
 				frac = 0
 			}
@@ -489,7 +574,18 @@ func ParseWeeklyQuotaSummary(raw []byte) map[string]AntigravityWeeklyQuota {
 				key = "claude_gpt_weekly"
 				dName = "Claude & GPT (Weekly)"
 			}
+			if !isWeekly {
+				if strings.HasPrefix(key, "gemini") {
+					key = "gemini_session"
+					dName = "Gemini (5h)"
+				} else {
+					key = "claude_gpt_session"
+					dName = "Claude & GPT (5h)"
+				}
+			}
 
+			// First matching bucket per type wins (no break: one group can
+			// yield both a weekly and a session bucket).
 			if _, exists := result[key]; !exists {
 				result[key] = AntigravityWeeklyQuota{
 					Used:                used,
@@ -499,7 +595,6 @@ func ParseWeeklyQuotaSummary(raw []byte) map[string]AntigravityWeeklyQuota {
 					DisplayName:         dName,
 				}
 			}
-			break
 		}
 	}
 	return result

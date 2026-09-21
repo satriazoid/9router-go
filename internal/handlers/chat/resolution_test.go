@@ -140,7 +140,7 @@ func TestResolvePrefixProvider_ResolvesConnection(t *testing.T) {
 		t.Fatalf("seed providerNode: %v", err)
 	}
 
-	connData, _ := json.Marshal(map[string]interface{}{"apiKey": "sk-bn"})
+	connData, _ := json.Marshal(map[string]any{"apiKey": "sk-bn"})
 	_, err = database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-bn', 'openai-compatible-chat-bn', 'apikey', 'Bun', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`, string(connData))
 	if err != nil {
@@ -175,7 +175,7 @@ func TestResolveModel_CustomPrefixShadowing_BuiltinAlias(t *testing.T) {
 	}
 
 	// Seed active connection for Custom OA
-	connData, _ := json.Marshal(map[string]interface{}{"apiKey": "sk-custom-oa"})
+	connData, _ := json.Marshal(map[string]any{"apiKey": "sk-custom-oa"})
 	_, err = database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-custom-oa', 'openai-compatible-chat-f494', 'apikey', 'Custom OA Conn', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`, string(connData))
 	if err != nil {
@@ -189,7 +189,7 @@ func TestResolveModel_CustomPrefixShadowing_BuiltinAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed providerNode cc: %v", err)
 	}
-	connCCData, _ := json.Marshal(map[string]interface{}{"apiKey": "sk-custom-cc"})
+	connCCData, _ := json.Marshal(map[string]any{"apiKey": "sk-custom-cc"})
 	_, err = database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-custom-cc', 'openai-compatible-chat-cc99', 'apikey', 'Custom CC Conn', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`, string(connCCData))
 	if err != nil {

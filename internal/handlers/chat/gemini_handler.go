@@ -101,7 +101,11 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 				if dur, ok := extractResetDuration(uErr.Body); ok {
 					BlockAntigravityModelUntil(connectionID, modelName, time.Now().UTC().Add(dur))
 				}
-				HandleAntigravityQuotaError(ctx, h.Client, connectionID, uErr.StatusCode, modelName, apiKey, projectID)
+				HandleAntigravityQuotaError(AntigravityQuotaError{
+					Ctx: ctx, Client: h.Client, ConnectionID: connectionID,
+					Status: uErr.StatusCode, Model: modelName, AccessToken: apiKey,
+					ProjectID: projectID, ErrorMessage: string(uErr.Body),
+				})
 			}
 		}
 		return fmt.Errorf("ForwardGemini (%s/%s): %w", provider, modelName, err)
@@ -164,7 +168,7 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		return currentToken, "", nil
 	}
 
-	var connMap map[string]interface{}
+	var connMap map[string]any
 	if err := json.Unmarshal([]byte(rawData), &connMap); err != nil {
 		return currentToken, "", nil
 	}
@@ -191,10 +195,10 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 			return currentToken, projectID, fmt.Errorf("OAuth refresh for %s: %w", provider, err)
 		}
 		update := oauth.BuildConnectionUpdate(result)
-		var existing map[string]interface{}
+		var existing map[string]any
 		if err := json.Unmarshal([]byte(rawData), &existing); err != nil {
 			log.Error("oauth", "unmarshal connection data failed", "conn", connectionID, "error", err)
-			existing = make(map[string]interface{})
+			existing = make(map[string]any)
 		}
 		for k, v := range update {
 			existing[k] = v
@@ -230,10 +234,10 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 	}
 
 	update := tokenResp.BuildConnectionUpdate()
-	var existing map[string]interface{}
+	var existing map[string]any
 	if err := json.Unmarshal([]byte(rawData), &existing); err != nil {
 		log.Error("oauth", "unmarshal connection data failed", "conn", connectionID, "error", err)
-		existing = make(map[string]interface{})
+		existing = make(map[string]any)
 	}
 	for k, v := range update {
 		existing[k] = v
@@ -264,7 +268,7 @@ func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, strin
 		return "", "", err
 	}
 
-	var connMap map[string]interface{}
+	var connMap map[string]any
 	if err := json.Unmarshal([]byte(rawData), &connMap); err != nil {
 		return "", "", err
 	}
@@ -283,10 +287,10 @@ func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, strin
 			RefreshToken: oauthData.RefreshToken,
 		})
 		if err == nil && result != nil {
-			var existing map[string]interface{}
+			var existing map[string]any
 			if err := json.Unmarshal([]byte(rawData), &existing); err != nil {
 				log.Error("oauth", "unmarshal conn data failed", "conn", connectionID, "error", err)
-				existing = make(map[string]interface{})
+				existing = make(map[string]any)
 			}
 			existing["accessToken"] = result.AccessToken
 			if result.RefreshToken != "" {
@@ -324,10 +328,10 @@ func (h *ChatHandler) forceRefreshOAuthToken(connectionID string) (string, strin
 	}
 
 	update := tokenResp.BuildConnectionUpdate()
-	var existing map[string]interface{}
+	var existing map[string]any
 	if err := json.Unmarshal([]byte(rawData), &existing); err != nil {
 		log.Error("oauth", "unmarshal conn data failed", "conn", connectionID, "error", err)
-		existing = make(map[string]interface{})
+		existing = make(map[string]any)
 	}
 	for k, v := range update {
 		existing[k] = v

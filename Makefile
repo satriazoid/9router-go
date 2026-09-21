@@ -1,7 +1,7 @@
 BINARY_NAME := 9router-go
 # Central version — single source: VERSION file, fallback to version.json, then git
 VERSION ?= $(shell cat VERSION 2>/dev/null || (cat version.json 2>/dev/null | grep -o '"latestVersion": *"[^"]*"' | cut -d'"' -f4) || git describe --tags --always 2>/dev/null || echo "1.0.0")
-PORT ?= 20128
+PORT ?= 20130
 DATA_DIR ?= $(HOME)/.9router
 RTK ?=
 CAVEMAN ?=
@@ -23,7 +23,7 @@ web-build:
 build: web-build
 	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/9router-go/
 
-## run — start proxy (PORT=20128)
+## run — start proxy (PORT=20130)
 run: build
 	PORT=$(PORT) DATA_DIR=$(DATA_DIR) ./$(BINARY_NAME) $(if $(RTK),--rtk=$(RTK)) $(if $(CAVEMAN),--caveman=$(CAVEMAN)) $(if $(PONYTAIL),--ponytail=$(PONYTAIL)) --auto-update=$(AUTO_UPDATE)
 
@@ -67,6 +67,8 @@ cross: web-build
 	GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-darwin-arm64 ./cmd/9router-go/
 	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-windows-amd64.exe ./cmd/9router-go/
 	@ls -lh $(BINARY_NAME)-*
+	@(sha256sum $(BINARY_NAME)-linux-amd64 $(BINARY_NAME)-linux-arm64 $(BINARY_NAME)-darwin-amd64 $(BINARY_NAME)-darwin-arm64 $(BINARY_NAME)-windows-amd64.exe 2>/dev/null || shasum -a 256 $(BINARY_NAME)-linux-amd64 $(BINARY_NAME)-linux-arm64 $(BINARY_NAME)-darwin-amd64 $(BINARY_NAME)-darwin-arm64 $(BINARY_NAME)-windows-amd64.exe) > SHA256SUMS.txt
+	@cat SHA256SUMS.txt
 
 ## mitm-enable — start MITM proxy
 mitm-enable: build

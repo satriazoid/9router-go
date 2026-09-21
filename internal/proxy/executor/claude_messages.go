@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"9router/proxy/internal/constants"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/translator"
@@ -22,7 +23,10 @@ func handleClaudeMessagesStream(w http.ResponseWriter, req *Request, upstream io
 		if startTime.IsZero() {
 			startTime = time.Now()
 		}
-		return sseStream(w, upstream, false, startTime, req.TTFT, req.ResponseBuf, req.Ctx, req.ToolNameMap)
+		return sseStream(sseStreamOpts{
+			W: w, Upstream: upstream, Translate: false, StartTime: startTime,
+			TTFT: req.TTFT, Buf: req.ResponseBuf, Ctx: req.Ctx, ToolNameMap: req.ToolNameMap,
+		})
 	}
 
 	// Client requested OpenAI format (/v1/chat/completions) but upstream is Claude Messages SSE.
@@ -122,7 +126,7 @@ func handleClaudeMessagesStream(w http.ResponseWriter, req *Request, upstream io
 // handleClaudeMessagesNonStream handles non-streaming Claude Messages responses,
 // translating Claude JSON to OpenAI JSON when the downstream client is an OpenAI client.
 func handleClaudeMessagesNonStream(w http.ResponseWriter, req *Request, upstream io.Reader) error {
-	body, err := io.ReadAll(io.LimitReader(upstream, 10*1024*1024))
+	body, err := io.ReadAll(io.LimitReader(upstream, constants.MaxUpstreamBodyBytes))
 	if err != nil {
 		return fmt.Errorf("read claude response body: %w", err)
 	}

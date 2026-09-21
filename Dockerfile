@@ -21,5 +21,5 @@ RUN VERSION=${VERSION:-$(cat VERSION 2>/dev/null || cat version.json | sed -n 's
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /app/9router-go /usr/local/bin/9router-go
-EXPOSE 20128
+EXPOSE 20130
 ENTRYPOINT ["9router-go"]

@@ -127,11 +127,11 @@ func TestParseResponseUsage(t *testing.T) {
 }
 
 func TestTranslateGeminiResponseToOpenAI_cachedTokens(t *testing.T) {
-	geminiBody, _ := json.Marshal(map[string]interface{}{
-		"candidates": []map[string]interface{}{{
-			"content": map[string]interface{}{"parts": []map[string]interface{}{{"text": "hi"}}},
+	geminiBody, _ := json.Marshal(map[string]any{
+		"candidates": []map[string]any{{
+			"content": map[string]any{"parts": []map[string]any{{"text": "hi"}}},
 		}},
-		"usageMetadata": map[string]interface{}{
+		"usageMetadata": map[string]any{
 			"promptTokenCount":     100,
 			"candidatesTokenCount": 5,
 			"cachedContentToken":   90,
@@ -147,7 +147,7 @@ func TestTranslateGeminiResponseToOpenAI_cachedTokens(t *testing.T) {
 	// The OpenAI usage map must carry cached_tokens so the OpenAI→Claude
 	// double-translation preserves it.
 	var parsed struct {
-		Usage map[string]interface{} `json:"usage"`
+		Usage map[string]any `json:"usage"`
 	}
 	if json.Unmarshal(out, &parsed) != nil {
 		t.Fatal("expected parseable output")

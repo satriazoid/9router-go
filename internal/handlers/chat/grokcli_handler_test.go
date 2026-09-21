@@ -27,7 +27,7 @@ func TestForwardGrokCLIRequest_Success(t *testing.T) {
 			t.Errorf("expected Authorization: Bearer test-key, got %q", r.Header.Get("Authorization"))
 		}
 
-		var reqBody map[string]interface{}
+		var reqBody map[string]any
 		if err := json.UnmarshalRead(r.Body, &reqBody); err != nil {
 			t.Fatalf("parse body: %v", err)
 		}

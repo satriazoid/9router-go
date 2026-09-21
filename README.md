@@ -155,13 +155,22 @@ go build -o 9router-go ./cmd/9router-go/
 ./9router-go
 
 # Or specify custom port or database path:
-PORT=20128 ./9router-go
+PORT=20131 ./9router-go
 # or using flags:
-./9router-go --port 20128 --db-path ~/.9router/db/data.sqlite
+./9router-go --port 20131 --db-path ~/.9router/db/data.sqlite
 
 # Verify server health:
 curl http://localhost:20130/health
 ```
+
+> **Windows Defender / SmartScreen flags the `.exe`?** Release binaries are
+> unsigned, so a fresh release can trip a heuristic false positive (the
+> built-in auto-updater also downloads and replaces its own binary, which
+> looks downloader-like to heuristics). Verify integrity first with
+> `certutil -hashfile 9router-go-windows-amd64.exe SHA256` against
+> `SHA256SUMS.txt` from the same release, then allow it via
+> *Virus & threat protection → Protection history → Allow*.
+> Tracked in [#19](https://github.com/luqman-v1/9router-go/issues/19).
 
 ---
 
@@ -284,7 +293,7 @@ via CLI flag or environment variable (CLI flag overrides env).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `20128` | Server port |
+| `PORT` | `20130` | Server port |
 | `DATA_DIR` | `~/.9router/` | Data directory (DB, JWT secret) |
 | `DB_PATH` | `DATA_DIR/db/data.sqlite` | Custom SQLite DB path (overrides DATA_DIR) |
 | `LOG_FILE` | stderr | Log output file (defaults to stderr when unset) |
@@ -304,7 +313,7 @@ See [DATABASE.md](DATABASE.md) for full schema documentation, JSON blob structur
 
 ```bash
 # Use custom SQLite path
-DB_PATH=/mnt/shared/9router/data.sqlite PORT=20128 ./9router-go
+DB_PATH=/mnt/shared/9router/data.sqlite PORT=20130 ./9router-go
 ```
 
 ## API Endpoints
@@ -387,9 +396,9 @@ services:
     image: luqmenul/9router-go:latest
     container_name: 9router-go
     ports:
-      - "20130:20128"
+      - "20130:20130"
     environment:
-      - PORT=20128
+      - PORT=20130
       - DATA_DIR=/data
       - RTK_ENABLED=true
       - CAVEMAN_ENABLED=false
@@ -411,9 +420,9 @@ services:
     image: luqmenul/9router-go:latest
     container_name: 9router-go
     ports:
-      - "20128:20128"
+      - "20130:20130"
     environment:
-      - PORT=20128
+      - PORT=20130
       - DATA_DIR=/data
       - RTK_ENABLED=true
       - CAVEMAN_ENABLED=false
