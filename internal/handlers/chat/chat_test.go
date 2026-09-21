@@ -48,7 +48,7 @@ func setupChatTestDB(t *testing.T) (*sql.DB, func()) {
 	}
 
 	// Seed provider connections (used by resolve/fallback tests)
-	deepseekData, _ := json.Marshal(map[string]interface{}{"apiKey": "sk-test-deepseek-key"})
+	deepseekData, _ := json.Marshal(map[string]any{"apiKey": "sk-test-deepseek-key"})
 	if _, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-1', 'deepseek', 'apikey', 'DeepSeek Test', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`,
 		string(deepseekData)); err != nil {
@@ -56,7 +56,7 @@ func setupChatTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatalf("failed to seed providerConnections: %v", err)
 	}
 
-	groqData, _ := json.Marshal(map[string]interface{}{"apiKey": "gsk-test-groq-key"})
+	groqData, _ := json.Marshal(map[string]any{"apiKey": "gsk-test-groq-key"})
 	if _, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-2', 'groq', 'apikey', 'Groq Test', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`,
 		string(groqData)); err != nil {
@@ -210,7 +210,7 @@ func TestHandleChatCompletions_NonStreaming(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify the request was forwarded correctly
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		json.Unmarshal(body, &req)
 
 		if req["model"] != "deepseek-chat" {
@@ -230,7 +230,7 @@ func TestHandleChatCompletions_NonStreaming(t *testing.T) {
 	defer upstream.Close()
 
 	// Insert a custom connection with the mock upstream URL
-	customData, _ := json.Marshal(map[string]interface{}{
+	customData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test-deepseek-key",
 		"baseUrl": upstream.URL,
 	})
@@ -255,7 +255,7 @@ func TestHandleChatCompletions_NonStreaming(t *testing.T) {
 	}
 
 	// Verify response contains upstream data
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
@@ -303,11 +303,11 @@ func TestHandleMessages_ClaudeFormat(t *testing.T) {
 	// Start a mock upstream that expects OpenAI format (after translation from Claude)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		json.Unmarshal(body, &req)
 
 		// After translation, should have OpenAI-format messages
-		messages, ok := req["messages"].([]interface{})
+		messages, ok := req["messages"].([]any)
 		if !ok {
 			t.Error("expected messages array in translated request")
 			w.WriteHeader(http.StatusBadRequest)
@@ -324,7 +324,7 @@ func TestHandleMessages_ClaudeFormat(t *testing.T) {
 	defer upstream.Close()
 
 	// Insert mock connection
-	customData, _ := json.Marshal(map[string]interface{}{
+	customData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test-deepseek-key",
 		"baseUrl": upstream.URL,
 	})
@@ -376,7 +376,7 @@ func TestHandleChatCompletions_Streaming(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	customData, _ := json.Marshal(map[string]interface{}{
+	customData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test-deepseek-key",
 		"baseUrl": upstream.URL,
 	})
@@ -425,7 +425,7 @@ func TestHandleChatCompletions_UpstreamError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	customData, _ := json.Marshal(map[string]interface{}{
+	customData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-bad-key",
 		"baseUrl": upstream.URL,
 	})
@@ -472,7 +472,7 @@ func TestHandleChatCompletions_AccountFallback_401(t *testing.T) {
 	defer upstream2.Close()
 
 	// Insert two connections for deepseek: first will fail with 401, second will succeed
-	data1, _ := json.Marshal(map[string]interface{}{
+	data1, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-bad-key",
 		"baseUrl": upstream1.URL,
 	})
@@ -483,7 +483,7 @@ func TestHandleChatCompletions_AccountFallback_401(t *testing.T) {
 		t.Fatalf("failed to insert failing connection: %v", err)
 	}
 
-	data2, _ := json.Marshal(map[string]interface{}{
+	data2, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-good-key",
 		"baseUrl": upstream2.URL,
 	})
@@ -544,7 +544,7 @@ func TestHandleChatCompletions_AccountFallback_429(t *testing.T) {
 		t.Fatalf("failed to deactivate seeded connections: %v", err)
 	}
 
-	mockData, _ := json.Marshal(map[string]interface{}{
+	mockData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-rate-limited",
 		"baseUrl": upstream.URL,
 	})
@@ -587,12 +587,12 @@ func TestWriteJSONError(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 
-	var errResp map[string]interface{}
+	var errResp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
 		t.Fatalf("failed to parse error response: %v", err)
 	}
 
-	errObj, ok := errResp["error"].(map[string]interface{})
+	errObj, ok := errResp["error"].(map[string]any)
 	if !ok {
 		t.Fatal("expected error object in response")
 	}
@@ -819,7 +819,7 @@ func TestHandleMessages_ClaudeStreamTranslation(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	customData, _ := json.Marshal(map[string]interface{}{
+	customData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test-key",
 		"baseUrl": upstream.URL,
 	})
@@ -898,7 +898,7 @@ func TestResolveModel_PrefixProvider(t *testing.T) {
 	}
 
 	// Seed a connection for this providerNode
-	connData, _ := json.Marshal(map[string]interface{}{
+	connData, _ := json.Marshal(map[string]any{
 		"apiKey": "sk-bn-key",
 	})
 	_, err = database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
@@ -1014,7 +1014,7 @@ func TestHandleChatCompletions_ComboFallback(t *testing.T) {
 	// Mock upstream 2: returns 200 (fallback that succeeds)
 	succeedingUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		json.Unmarshal(body, &req)
 
 		// Verify the second model name was used
@@ -1029,7 +1029,7 @@ func TestHandleChatCompletions_ComboFallback(t *testing.T) {
 	defer succeedingUpstream.Close()
 
 	// Insert mock connections for both upstreams (high priority so they get picked)
-	failingData, _ := json.Marshal(map[string]interface{}{
+	failingData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-failing-key",
 		"baseUrl": failingUpstream.URL,
 	})
@@ -1040,7 +1040,7 @@ func TestHandleChatCompletions_ComboFallback(t *testing.T) {
 		t.Fatalf("failed to insert failing connection: %v", err)
 	}
 
-	succeedingData, _ := json.Marshal(map[string]interface{}{
+	succeedingData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-succeeding-key",
 		"baseUrl": succeedingUpstream.URL,
 	})
@@ -1074,7 +1074,7 @@ func TestHandleChatCompletions_ComboFallback(t *testing.T) {
 		t.Errorf("expected 200 OK via combo fallback, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
@@ -1096,7 +1096,7 @@ func TestHandleChatCompletions_ComboAllFail(t *testing.T) {
 	defer failingUpstream.Close()
 
 	// Insert connections for both providers pointing to the same failing upstream
-	failingData, _ := json.Marshal(map[string]interface{}{
+	failingData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-failing-key",
 		"baseUrl": failingUpstream.URL,
 	})
@@ -1107,7 +1107,7 @@ func TestHandleChatCompletions_ComboAllFail(t *testing.T) {
 		t.Fatalf("failed to insert connection: %v", err)
 	}
 
-	failingData2, _ := json.Marshal(map[string]interface{}{
+	failingData2, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-failing-key",
 		"baseUrl": failingUpstream.URL,
 	})
@@ -1182,7 +1182,7 @@ func TestHandleChatCompletions_PrefixProvider(t *testing.T) {
 	// Start a mock upstream
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		json.Unmarshal(body, &req)
 
 		if req["model"] != "claude-sonnet-4.5" {
@@ -1201,7 +1201,7 @@ func TestHandleChatCompletions_PrefixProvider(t *testing.T) {
 	defer upstream.Close()
 
 	// Seed providerNode with upstream URL
-	nodeData, _ := json.Marshal(map[string]interface{}{
+	nodeData, _ := json.Marshal(map[string]any{
 		"prefix":  "bn",
 		"apiType": "openai-compatible",
 		"baseUrl": upstream.URL,
@@ -1214,7 +1214,7 @@ func TestHandleChatCompletions_PrefixProvider(t *testing.T) {
 	}
 
 	// Seed connection for this node
-	connData, _ := json.Marshal(map[string]interface{}{
+	connData, _ := json.Marshal(map[string]any{
 		"apiKey": "sk-bn-key",
 	})
 	_, err = database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
@@ -1255,7 +1255,7 @@ func TestAccountFallback_NonRetryableError(t *testing.T) {
 		t.Fatalf("failed to deactivate connections: %v", err)
 	}
 
-	mockData, _ := json.Marshal(map[string]interface{}{
+	mockData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-bad-key",
 		"baseUrl": upstream.URL,
 	})
@@ -1304,7 +1304,7 @@ func TestAccountFallback_AllExhaustedRetryable(t *testing.T) {
 		t.Fatalf("failed to deactivate: %v", err)
 	}
 
-	mockData, _ := json.Marshal(map[string]interface{}{
+	mockData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-key",
 		"baseUrl": upstream.URL,
 	})
@@ -1362,7 +1362,7 @@ func TestAccountFallback_PinnedConnection(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	pinnedData, _ := json.Marshal(map[string]interface{}{
+	pinnedData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-pinned",
 		"baseUrl": upstream.URL,
 	})

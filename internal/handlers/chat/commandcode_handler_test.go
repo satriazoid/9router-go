@@ -18,7 +18,7 @@ func TestProcessCommandcodeEvent_TextDelta(t *testing.T) {
 		ResponseID: "test-id",
 		Created:    1000,
 	}
-	event := map[string]interface{}{"type": "text-delta", "text": "Hello world"}
+	event := map[string]any{"type": "text-delta", "text": "Hello world"}
 	chunks := executor.ProcessCommandcodeEvent(event, "text-delta", state)
 	if len(chunks) == 0 {
 		t.Fatal("expected output chunks")
@@ -36,7 +36,7 @@ func TestProcessCommandcodeEvent_TextDelta(t *testing.T) {
 
 func TestProcessCommandcodeEvent_ReasoningDelta(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
-	event := map[string]interface{}{"type": "reasoning-delta", "text": "thinking step by step"}
+	event := map[string]any{"type": "reasoning-delta", "text": "thinking step by step"}
 	chunks := executor.ProcessCommandcodeEvent(event, "reasoning-delta", state)
 	if len(chunks) == 0 {
 		t.Fatal("expected output chunks")
@@ -48,7 +48,7 @@ func TestProcessCommandcodeEvent_ReasoningDelta(t *testing.T) {
 
 func TestProcessCommandcodeEvent_ToolInputStart(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
-	event := map[string]interface{}{
+	event := map[string]any{
 		"type":     "tool-input-start",
 		"id":       "call_123",
 		"toolName": "get_weather",
@@ -68,7 +68,7 @@ func TestProcessCommandcodeEvent_ToolInputStart(t *testing.T) {
 func TestProcessCommandcodeEvent_ToolInputDelta(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
 	state.ToolIndexByID = map[string]int{"call_123": 0}
-	event := map[string]interface{}{
+	event := map[string]any{
 		"type":  "tool-input-delta",
 		"id":    "call_123",
 		"delta": `{"location":"Jakarta"}`,
@@ -84,11 +84,11 @@ func TestProcessCommandcodeEvent_ToolInputDelta(t *testing.T) {
 
 func TestProcessCommandcodeEvent_ToolCall(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
-	event := map[string]interface{}{
+	event := map[string]any{
 		"type":       "tool-call",
 		"toolCallId": "call_456",
 		"toolName":   "search",
-		"input":      map[string]interface{}{"query": "test"},
+		"input":      map[string]any{"query": "test"},
 	}
 	chunks := executor.ProcessCommandcodeEvent(event, "tool-call", state)
 	if len(chunks) == 0 {
@@ -104,7 +104,7 @@ func TestProcessCommandcodeEvent_ToolCall(t *testing.T) {
 
 func TestProcessCommandcodeEvent_FinishStep(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
-	event := map[string]interface{}{
+	event := map[string]any{
 		"type":          "finish-step",
 		"finishReason": "stop",
 	}
@@ -122,7 +122,7 @@ func TestProcessCommandcodeEvent_Finish(t *testing.T) {
 		ResponseID: "test-id",
 		Created:    1000,
 	}
-	event := map[string]interface{}{"type": "finish", "finishReason": "stop"}
+	event := map[string]any{"type": "finish", "finishReason": "stop"}
 	chunks := executor.ProcessCommandcodeEvent(event, "finish", state)
 	if len(chunks) == 0 {
 		t.Fatal("expected output from finish")
@@ -137,7 +137,7 @@ func TestProcessCommandcodeEvent_Finish(t *testing.T) {
 
 func TestProcessCommandcodeEvent_Error(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000}
-	event := map[string]interface{}{
+	event := map[string]any{
 		"type":  "error",
 		"error": "rate limit exceeded",
 	}
@@ -156,7 +156,7 @@ func TestProcessCommandcodeEvent_Error(t *testing.T) {
 
 func TestBuildCommandcodeChunk(t *testing.T) {
 	state := &executor.CommandcodeStreamState{ResponseID: "test-id", Created: 1000, Model: "deepseek-v4"}
-	result := executor.BuildCommandcodeChunk(state, map[string]interface{}{"content": "hi"}, "stop")
+	result := executor.BuildCommandcodeChunk(state, map[string]any{"content": "hi"}, "stop")
 	if !strings.Contains(result, "deepseek-v4") {
 		t.Errorf("expected model in chunk, got %s", result)
 	}

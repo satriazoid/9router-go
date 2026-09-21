@@ -99,7 +99,7 @@ func TestProcessCommandcodeEvent_ToolInputDeltaHasID(t *testing.T) {
 		Model:         "deepseek",
 		ToolIndexByID: map[string]int{"call_1": 0},
 	}
-	out := ProcessCommandcodeEvent(map[string]interface{}{
+	out := ProcessCommandcodeEvent(map[string]any{
 		"type":  "tool-input-delta",
 		"id":    "call_1",
 		"delta": `"path": "/`,

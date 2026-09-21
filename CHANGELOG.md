@@ -3,6 +3,40 @@
 
 ## [Unreleased]
 
+### 🔄 Upstream Parity Sync
+
+**Strike-breaker quota-only (upstream `decolua/9router#4197` parity, PR #16):**
+- `internal/handlers/chat/antigravity_quota.go` — `HandleAntigravityQuotaError` now takes the upstream `errorMessage` and only counts a strike on explicit quota markers (`RATE_LIMIT_EXCEEDED`, `QUOTA_EXHAUSTED`, `Individual quota reached`). Generic bare `RESOURCE_EXHAUSTED` 429s no longer burn strikes / lock combos.
+- `internal/handlers/chat/gemini_handler.go` — forwards `string(uErr.Body)` as the error message source.
+- Added `TestAntigravityQuota_Generic429NoStrike` regression test.
+
+**Refusal → content_filter mapping (upstream `decolua/9router#4210` parity, PR #16):**
+- `internal/translator/claude_response.go` — streaming + non-streaming: Gemini `refusal` finish maps to `content_filter`, emits `stop_details.explanation` so Claude Code renders the block instead of hanging.
+- `internal/translator/response.go` — reverse mapping `content_filter → refusal` for round-trips.
+- Added refusal stream / non-stream / round-trip tests.
+
+**Weekly vs session quota buckets (upstream `decolua/9router#4209` parity, PR #18):**
+- `internal/handlers/chat/antigravity_quota.go` — `ParseWeeklyQuotaSummary` classifies the `window` field into weekly (`gemini`/`claude_gpt`) vs 5h-session (`gemini_session`/`claude_gpt_session`) buckets; `IsAntigravityModelBlocked` honors session buckets via `quotaEntryExhausted` helper.
+- Added `TestAntigravityWeeklyQuota_SessionBuckets`.
+
+### 🧹 Style Cleanup (behavior-neutral, PR #17 + follow-ups)
+
+- `interface{}` → `any` across production code and test files; `errors.New` + `%w` wrapping; `slices.Contains/Sorted/Delete`, builtin `max()`/`clear()`, `strings.Builder`, shared header constants in `internal/constants`.
+- Named constants: `antigravityDecoyUnavailable`, `maxReadLimit`, `thinkingHeadroomTokens`, `maxCallIDLen`, `MaxUpstreamBodyBytes`/`UpstreamErrLimit`.
+- `fallback.go` — `forwardRequestParams` struct replaces 10-param forwarding; `openai.go` — `sseStreamOpts` struct replaces 8-param SSE helper.
+- `antigravity_quota.go` — `AntigravityQuotaError` struct + named quota markers (replaces `map[string]any` error plumbing).
+- Added `samber/lo` (`Ternary`, `CoalesceOrEmpty` only — `Coalesce` on `any` maps and eager `Ternary` slicing deliberately avoided).
+- Default port `20128` → `20130` (`config.go`, `Makefile`, `mitm/handlers/base.go`, `.env.example`, `docker-compose.yml`, `Dockerfile`, `README.md`).
+
+### 🧪 Tests
+
+- `gemini38_live_test.go` — real upstream tests for `ag/gemini-3.8-flash-medium` (chat + stream, `200 OK`). Live E2E: 17/17 PASS.
+
+### 📦 Release Hardening (issue #19)
+
+- `make cross` generates `SHA256SUMS.txt`, uploaded by `release.yml`; README documents the Windows Defender false-positive (`Wacatac.C!ml` heuristic on the unsigned binary) with verify + Allow steps.
+
+
 ## [v1.8.18] — 2026-09-21
 
 ### 🐛 Bug Fixes

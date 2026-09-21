@@ -20,7 +20,7 @@ import (
 // seedConnDB inserts a single active connection for the given provider pointing at upstream.
 func seedConnDB(t *testing.T, database *sql.DB, provider, connID, apiKey, baseURL string) {
 	t.Helper()
-	data, _ := json.Marshal(map[string]interface{}{"apiKey": apiKey, "baseUrl": baseURL})
+	data, _ := json.Marshal(map[string]any{"apiKey": apiKey, "baseUrl": baseURL})
 	q := `INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, 'apikey', 'Test', 1, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`
 	if _, err := database.Exec(q, connID, provider, string(data)); err != nil {
 		t.Fatalf("seed connection: %v", err)

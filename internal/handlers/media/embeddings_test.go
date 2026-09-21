@@ -97,7 +97,7 @@ func TestHandleEmbeddings_Success(t *testing.T) {
 			t.Errorf("expected Authorization Bearer sk-test, got %q", auth)
 		}
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Errorf("failed to parse upstream body: %v", err)
 		}
@@ -110,7 +110,7 @@ func TestHandleEmbeddings_Success(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	data, _ := json.Marshal(map[string]interface{}{
+	data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test",
 		"baseUrl": upstream.URL,
 	})
@@ -134,19 +134,19 @@ func TestHandleEmbeddings_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if resp["object"] != "list" {
 		t.Errorf("expected object 'list', got %v", resp["object"])
 	}
-	dataArr, _ := resp["data"].([]interface{})
+	dataArr, _ := resp["data"].([]any)
 	if len(dataArr) != 1 {
 		t.Fatalf("expected 1 data item, got %d", len(dataArr))
 	}
-	item, _ := dataArr[0].(map[string]interface{})
-	emb, _ := item["embedding"].([]interface{})
+	item, _ := dataArr[0].(map[string]any)
+	emb, _ := item["embedding"].([]any)
 	if len(emb) != 3 {
 		t.Errorf("expected 3 embedding values, got %d", len(emb))
 	}
@@ -169,9 +169,9 @@ func TestHandleEmbeddings_MissingModel(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &resp)
-	errObj, _ := resp["error"].(map[string]interface{})
+	errObj, _ := resp["error"].(map[string]any)
 	if msg, _ := errObj["message"].(string); msg != "missing model" {
 		t.Errorf("expected error message 'missing model', got %v", errObj["message"])
 	}
@@ -194,9 +194,9 @@ func TestHandleEmbeddings_InvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &resp)
-	errObj, _ := resp["error"].(map[string]interface{})
+	errObj, _ := resp["error"].(map[string]any)
 	if msg, _ := errObj["message"].(string); msg != "invalid JSON body" {
 		t.Errorf("expected error message 'invalid JSON body', got %v", errObj["message"])
 	}
@@ -212,7 +212,7 @@ func TestHandleEmbeddings_UpstreamError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	data, _ := json.Marshal(map[string]interface{}{
+	data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test",
 		"baseUrl": upstream.URL,
 	})
@@ -235,7 +235,7 @@ func TestHandleEmbeddings_UpstreamError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rec.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	errMsg, _ := resp["error"].(string)
 	if errMsg != "upstream failed" {

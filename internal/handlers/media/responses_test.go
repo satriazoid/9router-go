@@ -105,7 +105,7 @@ func TestHandleResponses_SingleModel_Success(t *testing.T) {
 		}
 
 		body, _ := io.ReadAll(r.Body)
-		var req map[string]interface{}
+		var req map[string]any
 		json.Unmarshal(body, &req)
 		if req["model"] != "deepseek-chat" {
 			t.Errorf("expected model deepseek-chat, got %v", req["model"])
@@ -122,7 +122,7 @@ func TestHandleResponses_SingleModel_Success(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	connData, _ := json.Marshal(map[string]interface{}{
+	connData, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-test-key",
 		"baseUrl": upstream.URL,
 	})
@@ -146,7 +146,7 @@ func TestHandleResponses_SingleModel_Success(t *testing.T) {
 		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestHandleResponses_SingleModel_NoAPIKey(t *testing.T) {
 	database, cleanup := setupResponsesTestDB(t)
 	defer cleanup()
 
-	connData, _ := json.Marshal(map[string]interface{}{})
+	connData, _ := json.Marshal(map[string]any{})
 	_, err := database.Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
 		('conn-1', 'deepseek', 'apikey', 'No Key', 0, 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`,
 		string(connData))
@@ -216,7 +216,7 @@ func TestHandleResponses_ComboFallback_FirstFailsSecondSucceeds(t *testing.T) {
 	}))
 	defer upstream2.Close()
 
-	conn1Data, _ := json.Marshal(map[string]interface{}{
+	conn1Data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-key-1",
 		"baseUrl": upstream1.URL,
 	})
@@ -227,7 +227,7 @@ func TestHandleResponses_ComboFallback_FirstFailsSecondSucceeds(t *testing.T) {
 		t.Fatalf("failed to insert conn-1: %v", err)
 	}
 
-	conn2Data, _ := json.Marshal(map[string]interface{}{
+	conn2Data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-key-2",
 		"baseUrl": upstream2.URL,
 	})
@@ -259,7 +259,7 @@ func TestHandleResponses_ComboFallback_FirstFailsSecondSucceeds(t *testing.T) {
 		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestHandleResponses_ComboFallback_AllFail(t *testing.T) {
 	}))
 	defer upstream2.Close()
 
-	conn1Data, _ := json.Marshal(map[string]interface{}{
+	conn1Data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-key-1",
 		"baseUrl": upstream1.URL,
 	})
@@ -295,7 +295,7 @@ func TestHandleResponses_ComboFallback_AllFail(t *testing.T) {
 		t.Fatalf("failed to insert conn-1: %v", err)
 	}
 
-	conn2Data, _ := json.Marshal(map[string]interface{}{
+	conn2Data, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-key-2",
 		"baseUrl": upstream2.URL,
 	})

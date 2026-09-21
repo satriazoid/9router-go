@@ -12,7 +12,7 @@ func TestTransformCodebuddyBody_ForceStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestTransformCodebuddyBody_StreamAlreadyTrue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestTransformCodebuddyBody_ReasoningEffortNone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error for %q: %v", eff, err)
 		}
-		var m map[string]interface{}
+		var m map[string]any
 		if err := json.Unmarshal(out, &m); err != nil {
 			t.Fatalf("unmarshal output: %v", err)
 		}
@@ -64,7 +64,7 @@ func TestTransformCodebuddyBody_ReasoningEffortMedium(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestTransformCodebuddyBody_NoReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}

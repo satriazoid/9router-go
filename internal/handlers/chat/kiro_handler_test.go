@@ -135,7 +135,7 @@ func TestForwardKiroRequest_ReasoningContent(t *testing.T) {
 }
 
 func TestForwardKiroRequest_ToolUse(t *testing.T) {
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"toolUseId": "call_abc123",
 		"name":      "get_weather",
 		"content":   `{"location":"Jakarta"}`,
