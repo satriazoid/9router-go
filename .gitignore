@@ -1,6 +1,7 @@
 # Build artifacts
 /9router-go
 /9router-go-*
+/SHA256SUMS.txt
 *.exe
 web/dist/
 

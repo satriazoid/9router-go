@@ -60,6 +60,7 @@ jobs:
             9router-go-darwin-amd64
             9router-go-darwin-arm64
             9router-go-windows-amd64.exe
+            SHA256SUMS.txt
           body_path: /tmp/changelog.md
           generate_release_notes: false
         env:

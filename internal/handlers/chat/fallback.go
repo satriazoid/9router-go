@@ -45,7 +45,11 @@ func (h *ChatHandler) handleAccountFallback(
 			return fmt.Errorf("pinned connection %s: %w", pinnedConnectionID, err)
 		}
 		log.Debug("fallback", "pinned", "pinnedConn", pinnedConnectionID, "connObj", connObj.ID)
-		return h.tryForwardWithConnection(ctx, w, provider, model, connObj.ID, connData, body, isStream, translateResponse, endpoint)
+		return h.tryForwardWithConnection(forwardRequestParams{
+			Ctx: ctx, W: w, Provider: provider, Model: model,
+			ConnectionID: connObj.ID, ConnData: connData, Body: body,
+			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+		})
 	}
 
 	if !h.Repo.IsProviderAvailable(provider, model) {
@@ -60,7 +64,11 @@ func (h *ChatHandler) handleAccountFallback(
 			if apiKey == "" {
 				apiKey = "public"
 			}
-			return h.tryForwardWithConnection(ctx, w, provider, model, "default", &ConnectionData{APIKey: apiKey}, body, isStream, translateResponse, endpoint)
+			return h.tryForwardWithConnection(forwardRequestParams{
+				Ctx: ctx, W: w, Provider: provider, Model: model,
+				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey}, Body: body,
+				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+			})
 		}
 		return fmt.Errorf("no active connections for provider: %s", provider)
 	}
@@ -94,7 +102,11 @@ func (h *ChatHandler) handleAccountFallback(
 			}
 		}
 		log.Debug("fallback", "connection", "conn", c.ID, "connObj", connObj.ID)
-		if err := h.tryForwardWithConnection(ctx, w, provider, model, c.ID, connData, body, isStream, translateResponse, endpoint); err == nil {
+		if err := h.tryForwardWithConnection(forwardRequestParams{
+			Ctx: ctx, W: w, Provider: provider, Model: model,
+			ConnectionID: c.ID, ConnData: connData, Body: body,
+			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+		}); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -162,18 +174,29 @@ func appendBetaQuery(u string) string {
 	return u + "?beta=true"
 }
 
-func (h *ChatHandler) tryForwardWithConnection(
-	ctx context.Context,
-	w http.ResponseWriter,
-	provider string,
-	model string,
-	connectionID string,
-	connData *ConnectionData,
-	body []byte,
-	isStream bool,
-	translateResponse bool,
-	endpoint string,
-) error {
+// forwardRequestParams bundles tryForwardWithConnection inputs. Ten positional
+// params (including two adjacent bools) made call sites unreadable and
+// extension error-prone; named fields fix the call sites while the function
+// body intentionally keeps short local aliases.
+type forwardRequestParams struct {
+	Ctx               context.Context
+	W                 http.ResponseWriter
+	Provider          string
+	Model             string
+	ConnectionID      string
+	ConnData          *ConnectionData
+	Body              []byte
+	IsStream          bool
+	TranslateResponse bool
+	Endpoint          string
+}
+
+func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
+	ctx, w := f.Ctx, f.W
+	provider, model := f.Provider, f.Model
+	connectionID, connData := f.ConnectionID, f.ConnData
+	body, isStream := f.Body, f.IsStream
+	translateResponse, endpoint := f.TranslateResponse, f.Endpoint
 	ctx = translator.WithUsageCapture(ctx)
 
 	providerCfg, err := h.getProviderConfig(provider, connData)

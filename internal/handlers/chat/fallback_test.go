@@ -107,7 +107,11 @@ func TestTryForwardWithConnection_Success(t *testing.T) {
 
 	body := []byte(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`)
 	rec := httptest.NewRecorder()
-	err := h.tryForwardWithConnection(context.Background(), rec, "deepseek", "deepseek-chat", "conn-try", &ConnectionData{APIKey: "sk-try", BaseURL: srv.URL}, body, false, false, "/v1/chat/completions")
+	err := h.tryForwardWithConnection(forwardRequestParams{
+		Ctx: context.Background(), W: rec, Provider: "deepseek", Model: "deepseek-chat",
+		ConnectionID: "conn-try", ConnData: &ConnectionData{APIKey: "sk-try", BaseURL: srv.URL}, Body: body,
+		IsStream: false, TranslateResponse: false, Endpoint: "/v1/chat/completions",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +125,11 @@ func TestTryForwardWithConnection_NoAPIKey(t *testing.T) {
 	defer cleanup()
 
 	rec := httptest.NewRecorder()
-	err := h.tryForwardWithConnection(context.Background(), rec, "deepseek", "deepseek-chat", "conn-x", &ConnectionData{}, []byte(`{}`), false, false, "/v1/chat/completions")
+	err := h.tryForwardWithConnection(forwardRequestParams{
+		Ctx: context.Background(), W: rec, Provider: "deepseek", Model: "deepseek-chat",
+		ConnectionID: "conn-x", ConnData: &ConnectionData{}, Body: []byte(`{}`),
+		IsStream: false, TranslateResponse: false, Endpoint: "/v1/chat/completions",
+	})
 	if err == nil {
 		t.Fatal("expected error when API key missing")
 	}

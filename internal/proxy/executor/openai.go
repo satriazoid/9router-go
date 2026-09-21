@@ -60,11 +60,33 @@ func execSSEStream(w http.ResponseWriter, upstream io.Reader, req *Request) erro
 	if startTime.IsZero() {
 		startTime = time.Now()
 	}
-	return sseStream(w, upstream, req.TranslateResp, startTime, req.TTFT, req.ResponseBuf, req.Ctx, req.ToolNameMap)
+	return sseStream(sseStreamOpts{
+		W: w, Upstream: upstream, Translate: req.TranslateResp, StartTime: startTime,
+		TTFT: req.TTFT, Buf: req.ResponseBuf, Ctx: req.Ctx, ToolNameMap: req.ToolNameMap,
+	})
+}
+
+// sseStreamOpts bundles sseStream inputs. Eight positional params (an
+// io.Reader next to an io.Writer, two adjacent time/TTFT values) made call
+// sites unreadable; named fields fix the call sites while the function body
+// intentionally keeps short local aliases.
+type sseStreamOpts struct {
+	W           http.ResponseWriter
+	Upstream    io.Reader
+	Translate   bool
+	StartTime   time.Time
+	TTFT        *int64
+	Buf         io.Writer
+	Ctx         context.Context
+	ToolNameMap map[string]string
 }
 
 // sseStream pipes SSE chunks to client with optional format translation.
-func sseStream(w http.ResponseWriter, upstream io.Reader, translate bool, startTime time.Time, ttft *int64, buf io.Writer, ctx context.Context, toolNameMap map[string]string) error {
+func sseStream(o sseStreamOpts) error {
+	w, upstream := o.W, o.Upstream
+	translate, startTime := o.Translate, o.StartTime
+	ttft, buf := o.TTFT, o.Buf
+	ctx, toolNameMap := o.Ctx, o.ToolNameMap
 	hw := proxy.NewHeartbeatWriter(ctx, w, 0)
 	defer hw.Close()
 	flusher := proxy.WriteSSEHeaders(hw)

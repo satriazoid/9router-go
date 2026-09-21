@@ -450,7 +450,11 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 					comboMetrics := &streamMetrics{}
 					fwdErr = h.MimoFreeChat(ctx, cw, upstreamJSON, isStream, comboMetrics)
 				} else {
-					fwdErr = h.tryForwardWithConnection(ctx, cw, modelInfo.Provider, modelInfo.Model, connID, connData, upstreamJSON, isStream, translateResponse, "/v1/chat/completions")
+					fwdErr = h.tryForwardWithConnection(forwardRequestParams{
+						Ctx: ctx, W: cw, Provider: modelInfo.Provider, Model: modelInfo.Model,
+						ConnectionID: connID, ConnData: connData, Body: upstreamJSON,
+						IsStream: isStream, TranslateResponse: translateResponse, Endpoint: "/v1/chat/completions",
+					})
 				}
 
 				if fwdErr != nil {
@@ -635,7 +639,11 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 					break
 				}
 
-				fwdErr := h.tryForwardWithConnection(ctx, cw, modelInfo.Provider, modelInfo.Model, connID, connData, upstreamJSON, isStream, true, "/v1/messages")
+				fwdErr := h.tryForwardWithConnection(forwardRequestParams{
+					Ctx: ctx, W: cw, Provider: modelInfo.Provider, Model: modelInfo.Model,
+					ConnectionID: connID, ConnData: connData, Body: upstreamJSON,
+					IsStream: isStream, TranslateResponse: true, Endpoint: "/v1/messages",
+				})
 
 				if fwdErr != nil {
 					if ctx.Err() != nil {

@@ -155,13 +155,22 @@ go build -o 9router-go ./cmd/9router-go/
 ./9router-go
 
 # Or specify custom port or database path:
-PORT=20128 ./9router-go
+PORT=20131 ./9router-go
 # or using flags:
-./9router-go --port 20128 --db-path ~/.9router/db/data.sqlite
+./9router-go --port 20131 --db-path ~/.9router/db/data.sqlite
 
 # Verify server health:
 curl http://localhost:20130/health
 ```
+
+> **Windows Defender / SmartScreen flags the `.exe`?** Release binaries are
+> unsigned, so a fresh release can trip a heuristic false positive (the
+> built-in auto-updater also downloads and replaces its own binary, which
+> looks downloader-like to heuristics). Verify integrity first with
+> `certutil -hashfile 9router-go-windows-amd64.exe SHA256` against
+> `SHA256SUMS.txt` from the same release, then allow it via
+> *Virus & threat protection → Protection history → Allow*.
+> Tracked in [#19](https://github.com/luqman-v1/9router-go/issues/19).
 
 ---
 

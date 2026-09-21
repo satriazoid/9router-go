@@ -168,7 +168,11 @@ func (h *ChatHandler) makePanelCall(body []byte, entry string) func() *fusionRes
 		}
 
 		rec := &responseBuffer{header: http.Header{}}
-		fwdErr := h.tryForwardWithConnection(context.Background(), rec, modelInfo.Provider, modelInfo.Model, connID, connData, upstreamJSON, false, false, "/v1/chat/completions")
+		fwdErr := h.tryForwardWithConnection(forwardRequestParams{
+			Ctx: context.Background(), W: rec, Provider: modelInfo.Provider, Model: modelInfo.Model,
+			ConnectionID: connID, ConnData: connData, Body: upstreamJSON,
+			IsStream: false, TranslateResponse: false, Endpoint: "/v1/chat/completions",
+		})
 		if fwdErr != nil {
 			return &fusionResult{model: entry, err: fwdErr}
 		}
