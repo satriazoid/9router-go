@@ -195,7 +195,11 @@ func TestAntigravityQuota_StrikeReassert(t *testing.T) {
 	// NOTE: upstream #4197's tests use "RATE_LIMIT_EXHAUSTED" (typo) which
 	// matches no marker; the real marker is "RATE_LIMIT_EXCEEDED".
 	for i := 0; i < 3; i++ {
-		res := HandleAntigravityQuotaError(context.Background(), srv.Client(), connID, 429, model, "token", "proj", "RATE_LIMIT_EXCEEDED")
+		res := HandleAntigravityQuotaError(AntigravityQuotaError{
+			Ctx: context.Background(), Client: srv.Client(), ConnectionID: connID,
+			Status: 429, Model: model, AccessToken: "token", ProjectID: "proj",
+			ErrorMessage: "RATE_LIMIT_EXCEEDED",
+		})
 		t.Logf("strike %d: res=%v", i+1, res)
 		if i < 2 && res != nil {
 			t.Fatalf("expected nil for first 2 strikes, got %v", *res)

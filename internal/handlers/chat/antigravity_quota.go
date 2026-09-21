@@ -61,9 +61,9 @@ var (
 	// marker — both false-bucket and real-quota 429s carry it; real quota
 	// errors additionally carry QUOTA_EXHAUSTED / "Individual quota reached".
 	agQuotaErrorMarkers = []string{
-		"RATE_LIMIT_EXCEEDED",
-		"QUOTA_EXHAUSTED",
-		"Individual quota reached",
+		quotaMarkerRateLimitExceeded,
+		quotaMarkerQuotaExhausted,
+		quotaMarkerIndividualQuota,
 	}
 )
 var (
@@ -347,6 +347,30 @@ func RefreshAntigravityQuota(ctx context.Context, client *http.Client, connectio
 	return quotas, nil
 }
 
+// Quota-error marker constants backing agQuotaErrorMarkers.
+const (
+	quotaMarkerRateLimitExceeded = "RATE_LIMIT_EXCEEDED"
+	quotaMarkerQuotaExhausted    = "QUOTA_EXHAUSTED"
+	quotaMarkerIndividualQuota   = "Individual quota reached"
+)
+
+// AntigravityQuotaError bundles the inputs to HandleAntigravityQuotaError.
+// Kept as a struct: the handler takes 8 inputs and positional calls proved
+// error-prone to extend (see the #4197 port).
+type AntigravityQuotaError struct {
+	Ctx          context.Context
+	Client       *http.Client
+	ConnectionID string
+	Status       int
+	Model        string
+	AccessToken  string
+	ProjectID    string
+	// ErrorMessage is the raw upstream error body/text: strikes require an
+	// explicit quota marker in it; generic/content-triggered 429s return nil
+	// without striking (#4197 parity).
+	ErrorMessage string
+}
+
 // isExplicitQuotaError reports whether an upstream error message explicitly
 // indicates quota/rate limiting (parity with decolua/9router#4197).
 func isExplicitQuotaError(errorMessage string) bool {
@@ -359,27 +383,27 @@ func isExplicitQuotaError(errorMessage string) bool {
 }
 
 // HandleAntigravityQuotaError handles Antigravity 409/429 errors by refreshing live quota and returning model resetAt.
-// errorMessage is the raw upstream error body/text: 429s only feed the
-// optimistic strike-breaker when it carries an explicit quota marker;
+// Inputs arrive as AntigravityQuotaError: 429s only feed the optimistic
+// strike-breaker when ErrorMessage carries an explicit quota marker;
 // generic/content-triggered 429s return nil without striking (#4197 parity).
-func HandleAntigravityQuotaError(ctx context.Context, client *http.Client, connectionID string, status int, model, accessToken, projectID, errorMessage string) *time.Time {
-	if status != http.StatusConflict && status != http.StatusTooManyRequests {
+func HandleAntigravityQuotaError(p AntigravityQuotaError) *time.Time {
+	if p.Status != http.StatusConflict && p.Status != http.StatusTooManyRequests {
 		return nil
 	}
 
-	shortConn := connectionID
+	shortConn := p.ConnectionID
 	if len(shortConn) > 8 {
 		shortConn = shortConn[:8]
 	}
-	log.Info("ag_quota", "refreshing quota on error", "connection", shortConn, "status", status, "model", model)
+	log.Info("ag_quota", "refreshing quota on error", "connection", shortConn, "status", p.Status, "model", p.Model)
 
-	quotas, err := RefreshAntigravityQuota(ctx, client, connectionID, accessToken, projectID)
+	quotas, err := RefreshAntigravityQuota(p.Ctx, p.Client, p.ConnectionID, p.AccessToken, p.ProjectID)
 	if err != nil || len(quotas) == 0 {
 		return nil
 	}
 
-	checkModels := []string{model}
-	if canonical, exists := translator.AntigravityModelSynonyms[model]; exists && canonical != model {
+	checkModels := []string{p.Model}
+	if canonical, exists := translator.AntigravityModelSynonyms[p.Model]; exists && canonical != p.Model {
 		checkModels = append(checkModels, canonical)
 	}
 
@@ -394,11 +418,11 @@ func HandleAntigravityQuotaError(ctx context.Context, client *http.Client, conne
 			// Optimistic quota strike-breaker (PR #3684, gated by #4197):
 			// remaining >0 but still 429. Generic/content-triggered 429s
 			// (no explicit quota marker) must not contribute strikes.
-			if status == http.StatusTooManyRequests && !isExplicitQuotaError(errorMessage) && q.RemainingPercentage > 0 {
+			if p.Status == http.StatusTooManyRequests && !isExplicitQuotaError(p.ErrorMessage) && q.RemainingPercentage > 0 {
 				return nil
 			}
-			if q.RemainingPercentage > 0 && isExplicitQuotaError(errorMessage) {
-				key := connectionID + "|" + m
+			if q.RemainingPercentage > 0 && isExplicitQuotaError(p.ErrorMessage) {
+				key := p.ConnectionID + "|" + m
 				agStrikeMu.Lock()
 				// Prune strikes outside window
 				cutoff := now.Add(-agStrikeWindow)
@@ -418,10 +442,10 @@ func HandleAntigravityQuotaError(ctx context.Context, client *http.Client, conne
 					agStrikeMu.Unlock()
 					// Store blocked quota so IsAntigravityModelBlocked sees it even after optimistic refresh
 					agQuotaMu.Lock()
-					if _, ok := agQuotaCache[connectionID]; !ok {
-						agQuotaCache[connectionID] = make(map[string]AntigravityModelQuota)
+					if _, ok := agQuotaCache[p.ConnectionID]; !ok {
+						agQuotaCache[p.ConnectionID] = make(map[string]AntigravityModelQuota)
 					}
-					agQuotaCache[connectionID][m] = AntigravityModelQuota{
+					agQuotaCache[p.ConnectionID][m] = AntigravityModelQuota{
 						RemainingPercentage: 0,
 						ResetAt:             blockUntil,
 					}

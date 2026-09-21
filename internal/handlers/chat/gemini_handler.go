@@ -101,7 +101,11 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 				if dur, ok := extractResetDuration(uErr.Body); ok {
 					BlockAntigravityModelUntil(connectionID, modelName, time.Now().UTC().Add(dur))
 				}
-				HandleAntigravityQuotaError(ctx, h.Client, connectionID, uErr.StatusCode, modelName, apiKey, projectID, string(uErr.Body))
+				HandleAntigravityQuotaError(AntigravityQuotaError{
+					Ctx: ctx, Client: h.Client, ConnectionID: connectionID,
+					Status: uErr.StatusCode, Model: modelName, AccessToken: apiKey,
+					ProjectID: projectID, ErrorMessage: string(uErr.Body),
+				})
 			}
 		}
 		return fmt.Errorf("ForwardGemini (%s/%s): %w", provider, modelName, err)

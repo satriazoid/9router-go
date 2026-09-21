@@ -70,7 +70,11 @@ func TestAntigravityQuota_RefreshAndBlock(t *testing.T) {
 	}
 
 	// 4. Handle 429 quota error returns resetAt
-	resetAt := HandleAntigravityQuotaError(context.Background(), client, connectionID, 429, "gemini-3.7-flash-high", "test-ag-token", "test-project", "")
+	resetAt := HandleAntigravityQuotaError(AntigravityQuotaError{
+		Ctx: context.Background(), Client: client, ConnectionID: connectionID,
+		Status: 429, Model: "gemini-3.7-flash-high", AccessToken: "test-ag-token",
+		ProjectID: "test-project",
+	})
 	if resetAt == nil || resetAt.Before(time.Now()) {
 		t.Errorf("expected future resetAt from 429 handler, got %v", resetAt)
 	}
@@ -312,7 +316,11 @@ func TestAntigravityQuota_Generic429NoStrike(t *testing.T) {
 	ClearAntigravityStrikes(genericConn, model)
 	genericErr := `{"error":{"code":429,"message":"Request blocked for content reasons.","status":"RESOURCE_EXHAUSTED"}}`
 	for i := 0; i < 5; i++ {
-		if res := HandleAntigravityQuotaError(ctx, client, genericConn, 429, model, "token", "proj", genericErr); res != nil {
+		if res := HandleAntigravityQuotaError(AntigravityQuotaError{
+			Ctx: ctx, Client: client, ConnectionID: genericConn,
+			Status: 429, Model: model, AccessToken: "token", ProjectID: "proj",
+			ErrorMessage: genericErr,
+		}); res != nil {
 			t.Fatalf("generic 429 #%d must not block, got %v", i+1, *res)
 		}
 	}
@@ -326,11 +334,19 @@ func TestAntigravityQuota_Generic429NoStrike(t *testing.T) {
 	ClearAntigravityStrikes(quotaConn, model)
 	quotaErr := `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"}]}}`
 	for i := 0; i < 2; i++ {
-		if res := HandleAntigravityQuotaError(ctx, client, quotaConn, 429, model, "token", "proj", quotaErr); res != nil {
+		if res := HandleAntigravityQuotaError(AntigravityQuotaError{
+			Ctx: ctx, Client: client, ConnectionID: quotaConn,
+			Status: 429, Model: model, AccessToken: "token", ProjectID: "proj",
+			ErrorMessage: quotaErr,
+		}); res != nil {
 			t.Fatalf("explicit quota 429 #%d must not block yet, got %v", i+1, *res)
 		}
 	}
-	blocked := HandleAntigravityQuotaError(ctx, client, quotaConn, 429, model, "token", "proj", quotaErr)
+	blocked := HandleAntigravityQuotaError(AntigravityQuotaError{
+		Ctx: ctx, Client: client, ConnectionID: quotaConn,
+		Status: 429, Model: model, AccessToken: "token", ProjectID: "proj",
+		ErrorMessage: quotaErr,
+	})
 	if blocked == nil {
 		t.Fatalf("explicit quota 429 #3 must trigger strike block")
 	}
