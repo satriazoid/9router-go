@@ -161,6 +161,154 @@ func (h *DashboardHandler) HandleCreateProviderNode(w http.ResponseWriter, r *ht
 	})
 }
 
+// HandleUpdateProviderNode handles PUT /api/provider-nodes/{id}.
+// Mirrors upstream src/app/api/provider-nodes/[id]/route.js: name and prefix
+// are required, apiType is validated only for openai-compatible nodes, and the
+// base URL is sanitized (strip /messages for anthropic-compatible,
+// /embeddings for custom-embedding). Attached connections inherit the new
+// prefix/apiType/baseUrl/nodeName into their providerSpecificData.
+func (h *DashboardHandler) HandleUpdateProviderNode(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing node id")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+	var req struct {
+		Name    string `json:"name"`
+		Prefix  string `json:"prefix"`
+		APIType string `json:"apiType"`
+		BaseURL string `json:"baseUrl"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+	node, nodeData, err := h.Repo.GetProviderNodeByID(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if node == nil {
+		handlerutil.WriteJSONError(w, http.StatusNotFound, "provider node not found")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	prefix := strings.TrimSpace(req.Prefix)
+	baseURL := strings.TrimSpace(req.BaseURL)
+	if name == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if prefix == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "prefix is required")
+		return
+	}
+	nodeType := ""
+	if node.Type != nil {
+		nodeType = *node.Type
+	}
+	if nodeType == "openai-compatible" && req.APIType != "chat" && req.APIType != "responses" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid OpenAI compatible API type")
+		return
+	}
+	if baseURL == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "base URL is required")
+		return
+	}
+	if nodeType == "anthropic-compatible" {
+		baseURL = strings.TrimSuffix(baseURL, "/")
+		baseURL = strings.TrimSuffix(baseURL, "/messages")
+	}
+	if nodeType == "custom-embedding" {
+		baseURL = strings.TrimSuffix(baseURL, "/")
+		baseURL = strings.TrimSuffix(baseURL, "/embeddings")
+	}
+	apiType := ""
+	if nodeData != nil {
+		apiType = nodeData.APIType
+	}
+	if nodeType == "openai-compatible" {
+		apiType = req.APIType
+	}
+	dataBytes, _ := json.Marshal(map[string]string{
+		"prefix":  prefix,
+		"apiType": apiType,
+		"baseUrl": baseURL,
+	})
+	updated, err := h.Repo.UpdateProviderNode(id, name, string(dataBytes))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	syncNodeConnections(h, id, prefix, apiType, nodeType, baseURL, name)
+	nodeName := name
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"node": ProviderNodeResponse{
+			ID:        updated.ID,
+			Type:      nodeType,
+			Name:      nodeName,
+			Prefix:    prefix,
+			APIType:   apiType,
+			BaseURL:   baseURL,
+			CreatedAt: updated.CreatedAt,
+			UpdatedAt: updated.UpdatedAt,
+		},
+	})
+}
+
+// syncNodeConnections propagates edited node fields into the
+// providerSpecificData of every attached connection, mirroring upstream
+// updateProviderConnection calls after updateProviderNode.
+func syncNodeConnections(h *DashboardHandler, nodeID, prefix, apiType, nodeType, baseURL, nodeName string) {
+	conns, err := h.Repo.GetProviderConnections(nodeID, false)
+	if err != nil || len(conns) == 0 {
+		return
+	}
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		dataMap := make(map[string]any)
+		if conn.Data != "" {
+			_ = json.Unmarshal([]byte(conn.Data), &dataMap)
+		}
+		psd, _ := dataMap["providerSpecificData"].(map[string]any)
+		if psd == nil {
+			psd = make(map[string]any)
+		}
+		psd["prefix"] = prefix
+		if nodeType == "openai-compatible" {
+			psd["apiType"] = apiType
+		} else {
+			delete(psd, "apiType")
+		}
+		psd["baseUrl"] = baseURL
+		psd["nodeName"] = nodeName
+		dataMap["providerSpecificData"] = psd
+		dataBytes, err := json.Marshal(dataMap)
+		if err != nil {
+			continue
+		}
+		name := ""
+		if conn.Name != nil {
+			name = *conn.Name
+		}
+		priority := 0
+		if conn.Priority != nil {
+			priority = *conn.Priority
+		}
+		_ = h.Repo.UpdateProviderConnection(conn.ID, name, priority, conn.IsActive == 1, string(dataBytes))
+	}
+}
+
 // HandleDeleteProviderNode handles DELETE /api/provider-nodes/{id}.
 func (h *DashboardHandler) HandleDeleteProviderNode(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")

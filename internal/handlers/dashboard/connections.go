@@ -288,6 +288,7 @@ type createConnectionRequest struct {
 	TestStatus           string         `json:"testStatus"`
 	ProxyPoolID          string         `json:"proxyPoolId"`
 	Priority             *int           `json:"priority"`
+	DefaultModel         string         `json:"defaultModel"`
 	ProviderSpecificData map[string]any `json:"providerSpecificData"`
 	Data                 any            `json:"data"`
 }
@@ -348,6 +349,11 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 	}
 	if req.ProxyPoolID != "" {
 		dataMap["proxyPoolId"] = req.ProxyPoolID
+	}
+	// Upstream POST /api/providers stores the compatible node's default model
+	// alongside the key (AddApiKeyModal sends defaultModel for compatible nodes).
+	if req.DefaultModel != "" {
+		dataMap["defaultModel"] = req.DefaultModel
 	}
 
 	dataStr := rawData
@@ -570,4 +576,91 @@ func (h *DashboardHandler) HandleTestConnection(w http.ResponseWriter, r *http.R
 		return
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"valid": true})
+}
+
+// HandleGetConnectionModels handles GET /api/providers/{id}/models.
+// Mirrors upstream src/app/api/providers/[id]/models/route.js for
+// OpenAI/Anthropic-compatible connections: the id is a connection id whose
+// provider must be an openai-compatible-*/anthropic-compatible-* node. The
+// node baseUrl is probed for GET /models (upstream parity: OpenAI uses
+// Bearer, Anthropic strips a /messages suffix and sends x-api-key +
+// anthropic-version plus Bearer). Other providers answer 400.
+func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *http.Request) {
+	id := getURLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing connection id")
+		return
+	}
+	conn, err := h.Repo.GetProviderConnectionByID(id)
+	if err != nil || conn == nil {
+		handlerutil.WriteJSONError(w, http.StatusNotFound, "connection not found")
+		return
+	}
+	isOpenAI := strings.HasPrefix(conn.Provider, "openai-compatible-")
+	isAnthropic := strings.HasPrefix(conn.Provider, "anthropic-compatible-")
+	if !isOpenAI && !isAnthropic {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "provider "+conn.Provider+" does not support models listing")
+		return
+	}
+	var connData struct {
+		APIKey               string         `json:"apiKey"`
+		ProviderSpecificData map[string]any `json:"providerSpecificData"`
+	}
+	if conn.Data != "" {
+		_ = json.Unmarshal([]byte(conn.Data), &connData)
+	}
+	baseURL := ""
+	if connData.ProviderSpecificData != nil {
+		if v, ok := connData.ProviderSpecificData["baseUrl"].(string); ok {
+			baseURL = strings.TrimSpace(v)
+		}
+	}
+	if baseURL == "" {
+		if _, nodeData, nerr := h.Repo.GetProviderNodeByID(conn.Provider); nerr == nil && nodeData != nil {
+			baseURL = strings.TrimSpace(nodeData.BaseURL)
+		}
+	}
+	if baseURL == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "no base URL configured for OpenAI compatible provider")
+		return
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	headers := map[string]string{"Content-Type": "application/json"}
+	if isAnthropic {
+		baseURL = strings.TrimSuffix(baseURL, "/messages")
+		headers["x-api-key"] = connData.APIKey
+		headers["anthropic-version"] = "2023-06-01"
+		headers["Authorization"] = "Bearer " + connData.APIKey
+	} else {
+		headers["Authorization"] = "Bearer " + connData.APIKey
+	}
+	status, body, err := validateProbeDo(r.Context(), http.MethodGet, baseURL+"/models", headers, nil)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadGateway, validateNodeNetworkMessage(err))
+		return
+	}
+	if status != http.StatusOK {
+		handlerutil.WriteJSONError(w, status, "failed to fetch models: "+http.StatusText(status))
+		return
+	}
+	var parsed struct {
+		Data   []any `json:"data"`
+		Models []any `json:"models"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadGateway, "invalid models response")
+		return
+	}
+	models := parsed.Data
+	if models == nil {
+		models = parsed.Models
+	}
+	if models == nil {
+		models = []any{}
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"provider":     conn.Provider,
+		"connectionId": conn.ID,
+		"models":       models,
+	})
 }

@@ -2,9 +2,9 @@ package handlers
 
 import (
 	json "encoding/json/v2"
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/pprof"
-	"github.com/go-chi/chi/v5"
 
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
@@ -18,6 +18,7 @@ import (
 	"9router/proxy/internal/middleware"
 	"9router/proxy/web"
 )
+
 // Re-export TokenSaverConfig for root compatibility
 type TokenSaverConfig = shared.TokenSaverConfig
 
@@ -176,8 +177,10 @@ func SetupRoutes(r interface {
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)
+	r.Put("/api/provider-nodes/{id}", dashH.HandleUpdateProviderNode)
 	r.Delete("/api/provider-nodes/{id}", dashH.HandleDeleteProviderNode)
 	r.Post("/api/provider-nodes/validate", dashH.HandleValidateProviderNode)
+	r.Get("/api/providers/{id}/models", dashH.HandleGetConnectionModels)
 
 	r.Get("/api/combos", dashH.HandleGetCombos)
 	r.Post("/api/combos", dashH.HandleCreateCombo)
@@ -220,6 +223,7 @@ func SetupRoutes(r interface {
 	r.Post("/api/auth/saml/test", ssoH.HandleSamlTest)
 	r.Get("/api/auth/saml/metadata", ssoH.HandleSamlMetadata)
 }
+
 // SetupServerRouter mounts public endpoints (/health, /api/hello) and
 // API-key protected routes (all engine + admin routes) on the chi router.
 func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {

@@ -411,10 +411,20 @@ export const api = {
         body: JSON.stringify(payload),
       }
     ),
+  updateProviderNode: (id: string, payload: { name: string; prefix: string; apiType?: string; baseUrl: string }) =>
+    request<{ node: ProviderNode }>(`/api/provider-nodes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   deleteProviderNode: (id: string) =>
     request<{ success: boolean }>(`/api/provider-nodes/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+  /** List models from a connection's upstream (compatible nodes; upstream GET /api/providers/[id]/models). */
+  getConnectionModels: (connectionId: string) =>
+    request<{ provider: string; connectionId: string; models: Array<{ id?: string; name?: string; model?: string } | string> }>(
+      `/api/providers/${encodeURIComponent(connectionId)}/models`,
+    ),
 
   // Combos
   getCombos: async () => {
@@ -468,6 +478,19 @@ export const api = {
     request<{ success: boolean }>(`/api/models/disabled/${encodeURIComponent(provider)}`, {
       method: 'PUT',
       body: JSON.stringify(modelIds),
+    }),
+  /** Upstream GET /api/models/alias — full alias map (compatible pages merge custom + legacy rows). */
+  getModelAliases: () => request<{ aliases: Record<string, string> }>('/api/models/alias'),
+  /** Upstream PUT /api/models/alias {model, alias}. */
+  setModelAlias: (model: string, alias: string) =>
+    request<{ success: boolean }>('/api/models/alias', {
+      method: 'PUT',
+      body: JSON.stringify({ model, alias }),
+    }),
+  /** Upstream DELETE /api/models/alias?alias=. */
+  deleteModelAlias: (alias: string) =>
+    request<{ success: boolean }>(`/api/models/alias?alias=${encodeURIComponent(alias)}`, {
+      method: 'DELETE',
     }),
   testModel: (model: string) =>
     request<{ ok: boolean; error?: string }>('/api/models/test', {

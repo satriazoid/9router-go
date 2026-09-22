@@ -36,6 +36,7 @@
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
+  import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
 
   interface Props {
@@ -143,6 +144,12 @@
       .filter((c) => c.provider === providerId)
       .sort((a, b) => (a.priority ?? 999999) - (b.priority ?? 999999))
   )
+  // Upstream parity: compatible-node detection drives the details card,
+  // bottom Add button, models section, and edit-node modal.
+  let isOpenAICompatibleNode = $derived(!!selectedNode && selectedNode.type === 'openai-compatible')
+  let isAnthropicCompatibleNode = $derived(!!selectedNode && selectedNode.type === 'anthropic-compatible')
+  let isCompatibleNode = $derived(isOpenAICompatibleNode || isAnthropicCompatibleNode)
+  let isResponsesNode = $derived(selectedNode?.apiType === 'responses')
 
   // Models state
   let customModels = $state<CustomModelData[]>([])
@@ -178,6 +185,36 @@
   let allDisabled = $derived(
     allAvailableModels.length > 0 && disabledModelIds.length >= allAvailableModels.length
   )
+  // Compatible nodes (upstream CompatibleModelsSection): rows = custom models
+  // + legacy aliases, both keyed by the node row id; display = node prefix.
+  let modelAliases = $state<Record<string, string>>({})
+  let newCompatibleModel = $state('')
+  let isAddingCompatibleModel = $state(false)
+  let isImportingCompatibleModels = $state(false)
+  let compatibleTestId = $state<string | null>(null)
+  let compatibleTestResults = $state<Record<string, 'ok' | 'error'>>({})
+  let compatibleRows = $derived.by(() => {
+    const rows: Array<{ id: string; source: 'custom' | 'legacyAlias'; alias?: string }> = []
+    const seen = new Set<string>()
+    for (const cm of customModels) {
+      if (!cm.id || cm.providerAlias !== storageAlias) continue
+      if ((cm.type || 'llm') !== 'llm') continue
+      const full = `${storageAlias}/${cm.id}`
+      if (seen.has(full)) continue
+      seen.add(full)
+      rows.push({ id: cm.id, source: 'custom' })
+    }
+    const prefix = `${storageAlias}/`
+    for (const [alias, full] of Object.entries(modelAliases || {})) {
+      if (typeof full !== 'string' || !full.startsWith(prefix)) continue
+      const id = full.slice(prefix.length)
+      if (!id || seen.has(full)) continue
+      seen.add(full)
+      rows.push({ id, source: 'legacyAlias', alias })
+    }
+    return rows
+  })
+  let canImportCompatible = $derived(providerConnections.some((c) => c.isActive !== 0))
 
   // Settings & Strategies
   let settings = $state<Settings | null>(null)
@@ -475,13 +512,15 @@
   // Load models, settings, proxy pools
   async function loadData() {
     try {
-      const [modelsData, settingsData, poolsData] = await Promise.all([
+      const [modelsData, settingsData, poolsData, aliasesData] = await Promise.all([
         fetchProviderModelsData(providerId, storageAlias),
         api.getSettings().catch(() => ({})),
-        api.getProxyPools().catch(() => [])
+        api.getProxyPools().catch(() => []),
+        api.getModelAliases().catch(() => ({ aliases: {} })),
       ])
       customModels = modelsData.customModels
       disabledModelIds = modelsData.disabledModelIds
+      modelAliases = aliasesData?.aliases || {}
       settings = settingsData
       proxyPools = poolsData
 
@@ -1613,6 +1652,128 @@
       alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+
+  // Upstream parity: PUT /api/provider-nodes/[id] then refresh the node list.
+  async function handleSaveEditedNode(data: { name: string; prefix: string; apiType?: string; baseUrl: string }) {
+    if (!selectedNode) return
+    try {
+      await api.updateProviderNode(selectedNode.id, {
+        name: data.name,
+        prefix: data.prefix,
+        ...(selectedNode.type === 'openai-compatible' && data.apiType ? { apiType: data.apiType } : {}),
+        baseUrl: data.baseUrl,
+      })
+      showEditNodeModal = false
+      onRefresh()
+    } catch (err) {
+      alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Compatible nodes: upstream CompatibleModelsSection handlers.
+  function displayAlias(): string {
+    return selectedNode?.prefix || providerId
+  }
+
+  async function refreshCompatibleModels() {
+    try {
+      const [modelsData, aliasesData] = await Promise.all([
+        fetchProviderModelsData(providerId, storageAlias),
+        api.getModelAliases().catch(() => ({ aliases: {} })),
+      ])
+      customModels = modelsData.customModels
+      modelAliases = aliasesData?.aliases || {}
+    } catch (err) {
+      console.error('Failed to refresh compatible models:', err)
+    }
+  }
+
+  async function handleAddCompatibleModel() {
+    const modelId = newCompatibleModel.trim()
+    if (!modelId || isAddingCompatibleModel) return
+    if (compatibleRows.some((r) => r.id === modelId)) {
+      alert('Model already exists for this provider.')
+      return
+    }
+    isAddingCompatibleModel = true
+    try {
+      await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
+        id: modelId,
+        providerAlias: storageAlias,
+        type: 'llm',
+      })
+      newCompatibleModel = ''
+      await refreshCompatibleModels()
+    } catch (err) {
+      console.error('Error adding model:', err)
+    } finally {
+      isAddingCompatibleModel = false
+    }
+  }
+
+  async function handleDeleteCompatibleModel(row: { id: string; source: 'custom' | 'legacyAlias'; alias?: string }) {
+    try {
+      if (row.source === 'custom') {
+        await api.deleteCustomModel(`${storageAlias}|${row.id}|llm`)
+      } else if (row.alias) {
+        await api.deleteModelAlias(row.alias)
+      }
+      await refreshCompatibleModels()
+    } catch (err) {
+      console.error('Error deleting model:', err)
+    }
+  }
+
+  async function handleTestCompatibleModel(modelId: string) {
+    if (compatibleTestId) return
+    compatibleTestId = modelId
+    try {
+      const res = await api.testModel(`${storageAlias}/${modelId}`)
+      compatibleTestResults[modelId] = res.ok ? 'ok' : 'error'
+    } catch {
+      compatibleTestResults[modelId] = 'error'
+    } finally {
+      compatibleTestId = null
+    }
+  }
+
+  function copyCompatibleModel(modelId: string) {
+    navigator.clipboard.writeText(`${displayAlias()}/${modelId}`)
+    copiedModelId = modelId
+    setTimeout(() => (copiedModelId = null), 2000)
+  }
+
+  async function handleImportCompatibleModels() {
+    if (isImportingCompatibleModels) return
+    const active = providerConnections.find((c) => c.isActive !== 0)
+    if (!active) return
+    isImportingCompatibleModels = true
+    try {
+      const res = await api.getConnectionModels(active.id)
+      const models = res.models || []
+      if (models.length === 0) {
+        alert('No models returned from /models.')
+        return
+      }
+      let imported = 0
+      for (const m of models) {
+        const modelId = typeof m === 'string' ? m : (m.id || m.name || m.model || '')
+        if (!modelId || compatibleRows.some((r) => r.id === modelId)) continue
+        await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
+          id: modelId,
+          providerAlias: storageAlias,
+          type: 'llm',
+        })
+        imported += 1
+      }
+      await refreshCompatibleModels()
+      if (imported === 0) alert('No new models were added.')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to import models')
+    } finally {
+      isImportingCompatibleModels = false
+    }
+  }
 </script>
 
 <div class="flex min-w-0 flex-col gap-6 px-1 sm:gap-8 sm:px-0">
@@ -1695,23 +1856,44 @@
     </div>
   {/if}
 
-  <!-- 2. Compatible Node details (if custom node) -->
+  <!-- 2. Compatible Node details (if custom node) — upstream parity: endpoint line + Add API Key / Edit / Delete -->
   {#if selectedNode}
     <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
       <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
           <h2 class="text-lg font-semibold">
-            {selectedNode.apiType === 'responses' ? 'Anthropic' : 'OpenAI'} Compatible Details
+            {isAnthropicCompatibleNode ? 'Anthropic Compatible Details' : 'OpenAI Compatible Details'}
           </h2>
-          <p class="break-all text-sm text-text-muted">{selectedNode.baseUrl}</p>
+          <p class="break-all text-sm text-text-muted">
+            {isAnthropicCompatibleNode
+              ? `Messages API · ${(selectedNode.baseUrl || '').replace(/\/$/, '')}/messages`
+              : `${isResponsesNode ? 'Responses API' : 'Chat Completions'} · ${(selectedNode.baseUrl || '').replace(/\/$/, '')}/${isResponsesNode ? 'responses' : 'chat/completions'}`}
+          </p>
         </div>
         <div class="grid grid-cols-1 gap-2 sm:flex sm:items-center">
           <button
+            type="button"
+            onclick={openAddKeyModal}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+          >
+            <span class="material-symbols-outlined text-[18px]">add</span>
+            Add API Key
+          </button>
+          <button
+            type="button"
+            onclick={() => (showEditNodeModal = true)}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+          >
+            <span class="material-symbols-outlined text-[18px]">edit</span>
+            Edit
+          </button>
+          <button
+            type="button"
             onclick={() => handleDeleteProviderNode(selectedNode!.id)}
-            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/30 h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
           >
             <span class="material-symbols-outlined text-[18px]">delete</span>
-            Delete Node
+            Delete
           </button>
         </div>
       </div>
@@ -2156,7 +2338,8 @@
       </div>
     {/if}
 
-    <!-- Bottom Add Button -->
+    <!-- Bottom Add Button (upstream: compatible nodes add keys only via the details card) -->
+    {#if !isCompatibleNode}
     <div class="mt-4 grid grid-cols-1 gap-2 sm:flex">
       {#if providerId === 'freebuff'}
         <button
@@ -2196,10 +2379,113 @@
         </button>
       {/if}
     </div>
+    {/if}
   </div>
   {/if}
 
-  <!-- 4. Available Models Card -->
+  <!-- 4. Models Card: compatible nodes use upstream CompatibleModelsSection layout -->
+  {#if isCompatibleNode}
+  <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
+    <div class="flex flex-col gap-4">
+      <p class="text-sm text-text-muted">
+        Add {isAnthropicCompatibleNode ? 'Anthropic' : 'OpenAI'}-compatible models manually or import them from the /models endpoint.
+      </p>
+      <div class="flex items-end gap-2 flex-wrap">
+        <div class="flex-1 min-w-[240px]">
+          <label for="new-compatible-model-input" class="text-xs text-text-muted mb-1 block">Model ID</label>
+          <input
+            id="new-compatible-model-input"
+            type="text"
+            bind:value={newCompatibleModel}
+            onkeydown={(e) => { if (e.key === 'Enter') handleAddCompatibleModel() }}
+            placeholder={isAnthropicCompatibleNode ? 'claude-3-opus-20240229' : 'gpt-4o'}
+            class="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+          />
+        </div>
+        <button
+          type="button"
+          onclick={handleAddCompatibleModel}
+          disabled={!newCompatibleModel.trim() || isAddingCompatibleModel}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          {isAddingCompatibleModel ? 'Adding...' : 'Add'}
+        </button>
+        <button
+          type="button"
+          onclick={handleImportCompatibleModels}
+          disabled={!canImportCompatible || isImportingCompatibleModels}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <span class="material-symbols-outlined text-[18px]">download</span>
+          {isImportingCompatibleModels ? 'Importing...' : 'Import from /models'}
+        </button>
+      </div>
+      {#if !canImportCompatible}
+        <p class="text-xs text-text-muted">Add a connection to enable importing models.</p>
+      {/if}
+      {#if compatibleRows.length > 0}
+        <div class="flex flex-col gap-3">
+          {#each compatibleRows as row (row.source + ':' + row.id)}
+            {@const tStatus = compatibleTestResults[row.id]}
+            {@const isTestingRow = compatibleTestId === row.id}
+            <div class="flex items-center gap-3 p-3 rounded-lg border {tStatus === 'ok' ? 'border-green-500/40' : tStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50">
+              <span
+                class="material-symbols-outlined text-base text-text-muted"
+                style={tStatus === 'ok' ? 'color:#22c55e' : tStatus === 'error' ? 'color:#ef4444' : undefined}
+              >
+                {tStatus === 'ok' ? 'check_circle' : tStatus === 'error' ? 'cancel' : 'smart_toy'}
+              </span>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium truncate">{row.id}</p>
+                <div class="flex items-center gap-1 mt-1">
+                  <code class="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{displayAlias()}/{row.id}</code>
+                  <div class="relative group/btn">
+                    <button
+                      type="button"
+                      onclick={() => copyCompatibleModel(row.id)}
+                      class="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary cursor-pointer"
+                    >
+                      <span class="material-symbols-outlined text-sm">{copiedModelId === row.id ? 'check' : 'content_copy'}</span>
+                    </button>
+                    <span class="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                      {copiedModelId === row.id ? 'Copied!' : 'Copy'}
+                    </span>
+                  </div>
+                  {#if providerConnections.length > 0}
+                    <div class="relative group/btn">
+                      <button
+                        type="button"
+                        onclick={() => handleTestCompatibleModel(row.id)}
+                        disabled={isTestingRow}
+                        class="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary transition-colors cursor-pointer"
+                      >
+                        <span class="material-symbols-outlined text-sm" style={isTestingRow ? 'animation: spin 1s linear infinite' : undefined}>
+                          {isTestingRow ? 'progress_activity' : 'science'}
+                        </span>
+                      </button>
+                      <span class="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                        {isTestingRow ? 'Testing...' : 'Test'}
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+              <button
+                type="button"
+                onclick={() => handleDeleteCompatibleModel(row)}
+                class="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
+                title="Remove model"
+              >
+                <span class="material-symbols-outlined text-sm">delete</span>
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+  {:else}
   <div class="bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-soft)] p-6">
     <!-- Header -->
     <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2427,6 +2713,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 <!-- Modals -->
@@ -2865,11 +3152,22 @@
 {/if}
 
 <!-- 5. Add Custom Model Modal -->
+{#if !isCompatibleNode}
 <AddCustomModelModal
   isOpen={showAddCustomModelModal}
   providerAlias={storageAlias}
   onClose={() => (showAddCustomModelModal = false)}
   onSave={submitAddCustomModel}
+/>
+{/if}
+
+<!-- 5b. Edit Compatible Node Modal (upstream EditCompatibleNodeModal parity) -->
+<EditCompatibleNodeModal
+  isOpen={showEditNodeModal && isCompatibleNode}
+  node={selectedNode}
+  isAnthropic={isAnthropicCompatibleNode}
+  onClose={() => (showEditNodeModal = false)}
+  onSave={handleSaveEditedNode}
 />
 
 <!-- 6. Add Key Connection Modal (for non-oauth providers) -->

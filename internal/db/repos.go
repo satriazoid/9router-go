@@ -366,6 +366,32 @@ func (r *Repo) CreateProviderNode(id, nodeType, name, data string) (*models.Prov
 	}, nil
 }
 
+// UpdateProviderNode updates a provider node's name and data JSON, returning
+// the refreshed row. Mirrors upstream PUT /api/provider-nodes/[id]: name and
+// prefix are required; apiType/baseUrl are stored in the data blob.
+func (r *Repo) UpdateProviderNode(id, name, data string) (*models.ProviderNode, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var nameVal any
+	if name != "" {
+		nameVal = name
+	}
+	if _, err := r.db.Exec(
+		"UPDATE providerNodes SET name = ?, data = ?, updatedAt = ? WHERE id = ?",
+		nameVal, data, now, id,
+	); err != nil {
+		return nil, fmt.Errorf("update provider node %s: %w", id, err)
+	}
+	var node models.ProviderNode
+	err := r.db.QueryRow(
+		"SELECT id, type, name, data, createdAt, updatedAt FROM providerNodes WHERE id = ? LIMIT 1",
+		id,
+	).Scan(&node.ID, &node.Type, &node.Name, &node.Data, &node.CreatedAt, &node.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("reload provider node %s: %w", id, err)
+	}
+	return &node, nil
+}
+
 // DeleteProviderNode deletes a provider node and its associated connections.
 func (r *Repo) DeleteProviderNode(id string) error {
 	if _, err := r.db.Exec("DELETE FROM providerNodes WHERE id = ?", id); err != nil {
