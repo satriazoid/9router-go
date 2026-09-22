@@ -64,9 +64,10 @@ func (h *ChatHandler) handleAccountFallback(
 			if apiKey == "" {
 				apiKey = "public"
 			}
+			proxyPoolID := h.ResolveProviderProxyPoolID(provider)
 			return h.tryForwardWithConnection(forwardRequestParams{
 				Ctx: ctx, W: w, Provider: provider, Model: model,
-				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey}, Body: body,
+				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: proxyPoolID}, Body: body,
 				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
 			})
 		}

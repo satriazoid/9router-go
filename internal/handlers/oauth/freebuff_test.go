@@ -362,6 +362,127 @@ func TestHandleFreebuffPoll_Authorized_UpdatesExisting(t *testing.T) {
 	}
 }
 
+func TestHandleFreebuffPoll_Authorized_NestedUser(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	repo := db.NewRepo(database)
+
+	testAuthToken := "fb_nested_token_abcdef123456"
+	expectedConnID := "fb-" + shortHash(testAuthToken)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/cli/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Mirrors the upstream CLI contract (cli/src/login/login-flow.ts): the
+		// credentials are nested under `user`, not at the top level.
+		_, _ = w.Write([]byte(`{
+			"user": {
+				"id": "user_123",
+				"name": "Nested Freebuff User",
+				"email": "nested@freebuff.com",
+				"authToken": "` + testAuthToken + `"
+			}
+		}`))
+	}))
+	defer mockServer.Close()
+
+	oldURL := freebuffAuthBaseURL
+	freebuffAuthBaseURL = mockServer.URL
+	defer func() { freebuffAuthBaseURL = oldURL }()
+
+	handler := NewOAuthHandler(repo)
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/freebuff/poll", strings.NewReader(`{
+		"fingerprintId": "fp-nested",
+		"fingerprintHash": "hash-nested"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.HandleFreebuffPoll(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	if res["status"] != "authorized" {
+		t.Fatalf("expected status 'authorized', got %v", res["status"])
+	}
+	if res["connectionId"] != expectedConnID {
+		t.Errorf("expected connectionId %s, got %v", expectedConnID, res["connectionId"])
+	}
+
+	var name, data string
+	err := database.QueryRow(
+		"SELECT name, data FROM providerConnections WHERE id = ?", expectedConnID,
+	).Scan(&name, &data)
+	if err != nil {
+		t.Fatalf("failed to query providerConnections: %v", err)
+	}
+	if name != "Nested Freebuff User" {
+		t.Errorf("expected name 'Nested Freebuff User', got %s", name)
+	}
+
+	var dataMap map[string]any
+	if err := json.Unmarshal([]byte(data), &dataMap); err != nil {
+		t.Fatalf("failed to parse connection data: %v", err)
+	}
+	if dataMap["authToken"] != testAuthToken {
+		t.Errorf("expected authToken %s, got %v", testAuthToken, dataMap["authToken"])
+	}
+	if dataMap["email"] != "nested@freebuff.com" {
+		t.Errorf("expected email 'nested@freebuff.com', got %v", dataMap["email"])
+	}
+	if dataMap["userId"] != "user_123" {
+		t.Errorf("expected userId 'user_123', got %v", dataMap["userId"])
+	}
+}
+
+func TestHandleFreebuffPoll_UserWithoutToken_StaysPending(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"user": {"name": "No Token"}}`))
+	}))
+	defer mockServer.Close()
+
+	oldURL := freebuffAuthBaseURL
+	freebuffAuthBaseURL = mockServer.URL
+	defer func() { freebuffAuthBaseURL = oldURL }()
+
+	handler := NewOAuthHandler(nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/freebuff/poll", strings.NewReader(`{
+		"fingerprintId": "fp-no-token",
+		"fingerprintHash": "hash-no-token"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.HandleFreebuffPoll(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	if res["status"] != "pending" {
+		t.Errorf("expected status 'pending', got %v", res["status"])
+	}
+	if res["connectionId"] != nil {
+		t.Errorf("expected no connectionId, got %v", res["connectionId"])
+	}
+}
+
 func TestHandleAntigravityAuthorize(t *testing.T) {
 	handler := NewOAuthHandler(nil)
 

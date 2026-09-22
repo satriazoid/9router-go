@@ -11,7 +11,26 @@ import (
 var (
 	proxyClientsMu sync.RWMutex
 	proxyClients   = make(map[string]*http.Client)
+	// proxyPoolLogged tracks pool IDs already announced at debug level so the
+	// "routing via proxy" line appears once per pool, not on every request.
+	proxyPoolLogged sync.Map
 )
+
+// logProxyOnce records proxy usage once per pool at debug level, e.g.
+// proxy routing requests via proxy pool pool=abc123 url=http://... type=http
+// Run with LOG_LEVEL=debug and grep for "proxy" to confirm traffic uses the pool.
+func logProxyOnce(poolID, proxyURLStr, proxyType string) {
+	if poolID == "" {
+		return
+	}
+	if _, loaded := proxyPoolLogged.LoadOrStore(poolID, true); loaded {
+		return
+	}
+	if proxyType == "" {
+		proxyType = "http"
+	}
+	log.Debug("proxy", "routing requests via proxy pool", "pool", poolID, "url", proxyURLStr, "type", proxyType)
+}
 
 // GetClientForConnection returns an http.Client configured with ProxyPool transport if set.
 func (h *ChatHandler) GetClientForConnection(connData *ConnectionData) *http.Client {
@@ -61,6 +80,7 @@ func (h *ChatHandler) getClientForConnection(connData *ConnectionData) *http.Cli
 	if proxyURLStr == "" {
 		return h.Client
 	}
+	logProxyOnce(connData.ProxyPoolID, proxyURLStr, proxyType)
 
 	parsedURL, err := url.Parse(proxyURLStr)
 	if err != nil {

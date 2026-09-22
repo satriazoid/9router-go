@@ -13,6 +13,7 @@ import (
 	"9router/proxy/internal/handlers/media"
 	"9router/proxy/internal/handlers/oauth"
 	"9router/proxy/internal/handlers/shared"
+	"9router/proxy/internal/handlers/sso"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/middleware"
 	"9router/proxy/web"
@@ -39,6 +40,7 @@ func SetupRoutes(r interface {
 	oauthH := oauth.NewOAuthHandler(repo)
 
 	dashH := dashboard.NewDashboardHandler(repo)
+	ssoH := sso.NewHandler(repo)
 	// Chat, Version & Models Domain
 	r.Get("/version", chatH.HandleVersion)
 	r.Get("/api/version", chatH.HandleVersion)
@@ -46,6 +48,7 @@ func SetupRoutes(r interface {
 	r.Get("/api/version/check", chatH.HandleCheckUpdate)
 	r.Post("/api/version/update", chatH.HandleTriggerUpdate)
 	r.Post("/api/version/auto-update", chatH.HandleToggleAutoUpdate)
+	r.Post("/api/version/shutdown", HandleShutdown)
 	r.Get("/models", chatH.HandleModels)
 	r.Get("/models/info", chatH.HandleModelsInfo)
 	r.Get("/models/{kind}", chatH.HandleModelsByKind)
@@ -111,14 +114,39 @@ func SetupRoutes(r interface {
 	r.Post("/api/oauth/freebuff/initiate", oauthH.HandleFreebuffInitiate)
 	r.Post("/api/oauth/freebuff/poll", oauthH.HandleFreebuffPoll)
 	r.Get("/api/oauth/freebuff/session", oauthH.HandleFreebuffSessionStatus)
+	r.Post("/api/oauth/freebuff/session/switch", oauthH.HandleFreebuffSessionSwitch)
 	r.Get("/api/oauth/antigravity/authorize", oauthH.HandleAntigravityAuthorize)
 	r.Get("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
 	r.Post("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
+	r.Get("/api/oauth/cline/authorize", oauthH.HandleClineAuthorize)
+	r.Post("/api/oauth/cline/exchange", oauthH.HandleClineExchange)
+	r.Get("/api/oauth/pkce/authorize", oauthH.HandlePKCEAuthorize)
+	r.Post("/api/oauth/pkce/exchange", oauthH.HandlePKCEExchange)
+	r.Get("/api/oauth/authcode/authorize", oauthH.HandleAuthCodeAuthorize)
+	r.Post("/api/oauth/authcode/exchange", oauthH.HandleAuthCodeExchange)
+	r.Get("/api/oauth/trae/authorize", oauthH.HandleTraeAuthorize)
+	r.Post("/api/oauth/trae/exchange", oauthH.HandleTraeExchange)
+	r.Get("/api/oauth/windsurf/authorize", oauthH.HandleWindsurfAuthorize)
+	r.Post("/api/oauth/windsurf/exchange", oauthH.HandleWindsurfExchange)
+	r.Get("/api/oauth/zed/authorize", oauthH.HandleZedAuthorize)
+	r.Post("/api/oauth/zed/exchange", oauthH.HandleZedExchange)
+	r.Post("/api/oauth/device/start", oauthH.HandleDeviceStart)
+	r.Post("/api/oauth/device/poll", oauthH.HandleDevicePoll)
+	r.Post("/api/oauth/cursor/import", oauthH.HandleCursorImport)
+	r.Get("/api/oauth/cursor/auto-import", oauthH.HandleCursorAutoImport)
+	r.Get("/api/oauth/kimchi/authorize", oauthH.HandleKimchiAuthorize)
+	r.Post("/api/oauth/kimchi/exchange", oauthH.HandleKimchiExchange)
+	r.Post("/api/oauth/gitlab/pat", oauthH.HandleGitlabPAT)
+	r.Post("/api/oauth/iflow/cookie", oauthH.HandleIflowCookie)
+	r.Get("/api/oauth/xiaomi-mimo/authorize", oauthH.HandleMimoAuthorize)
+	r.Post("/api/oauth/xiaomi-mimo/exchange", oauthH.HandleMimoExchange)
 
 	// Live Console Logs Domain (dashboard "Monitor Console Log")
 	r.Get("/translator/console-logs", HandleConsoleLogsGet)
 	r.Delete("/translator/console-logs", HandleConsoleLogsDelete)
 	r.Get("/translator/console-logs/stream", HandleConsoleLogsStream)
+	r.Get("/translator/console-logs/level", HandleConsoleLogsLevelGet)
+	r.Put("/translator/console-logs/level", HandleConsoleLogsLevelPut)
 
 	// Usage Real-time SSE Stream & Stats Domain (dashboard topology animation + recent requests)
 	r.Get("/usage/stream", HandleUsageStream(repo))
@@ -137,16 +165,19 @@ func SetupRoutes(r interface {
 	r.Get("/api/providers", dashH.HandleGetProvidersClient)
 	r.Get("/api/providers/client", dashH.HandleGetProvidersClient)
 	r.Post("/api/connections", dashH.HandleCreateConnection)
+	r.Post("/api/providers/validate", dashH.HandleValidateProvider)
 	r.Put("/api/connections/{id}", dashH.HandleUpdateConnection)
 	r.Put("/api/providers/{id}", dashH.HandleUpdateConnection)
 	r.Delete("/api/connections/{id}", dashH.HandleDeleteConnection)
 	r.Delete("/api/providers/{id}", dashH.HandleDeleteConnection)
 	r.Post("/api/connections/{id}/test", dashH.HandleTestConnection)
 	r.Post("/api/providers/{id}/test", dashH.HandleTestConnection)
+	r.Get("/api/providers/suggested-models", HandleSuggestedModels)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)
 	r.Delete("/api/provider-nodes/{id}", dashH.HandleDeleteProviderNode)
+	r.Post("/api/provider-nodes/validate", dashH.HandleValidateProviderNode)
 
 	r.Get("/api/combos", dashH.HandleGetCombos)
 	r.Post("/api/combos", dashH.HandleCreateCombo)
@@ -178,6 +209,16 @@ func SetupRoutes(r interface {
 	r.Patch("/api/settings", dashH.HandleUpdateSettings)
 	r.Put("/settings", dashH.HandleUpdateSettings)
 	r.Patch("/settings", dashH.HandleUpdateSettings)
+
+	// Settings backup/restore + outbound proxy diagnostics (profile page)
+	r.Get("/api/settings/database", dashH.HandleExportDatabase)
+	r.Post("/api/settings/database", dashH.HandleImportDatabase)
+	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
+
+	// Single Sign-On settings checks + SP metadata (profile page)
+	r.Post("/api/auth/oidc/test", ssoH.HandleOidcTest)
+	r.Post("/api/auth/saml/test", ssoH.HandleSamlTest)
+	r.Get("/api/auth/saml/metadata", ssoH.HandleSamlMetadata)
 }
 // SetupServerRouter mounts public endpoints (/health, /api/hello) and
 // API-key protected routes (all engine + admin routes) on the chi router.
@@ -189,6 +230,11 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	})
 	// Embedded Native Dashboard SPA
 	webH := web.Handler()
+	oauthH := oauth.NewOAuthHandler(repo)
+	// Public OAuth landing page: providers redirect browsers here after login
+	// (/callback?code=...). No API key — browsers carry none; the page only
+	// displays the code for the user to paste into the dashboard modal.
+	r.Get("/callback", oauthH.HandleCallbackPage)
 	r.Get("/", webH.ServeHTTP)
 	r.Get("/dashboard", webH.ServeHTTP)
 	r.Get("/dashboard/*", webH.ServeHTTP)

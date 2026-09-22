@@ -1,451 +1,676 @@
 <script lang="ts">
+  // Port of Next.js ProviderLimits page logic for the Go dashboard quota page.
+  // Matches upstream behavior: paginated provider fetch, per-connection quota
+  // fetch + localStorage cache, auto-refresh w/ countdown + page visibility,
+  // Claude throttling, provider/account filters, codex sort, expiring-first,
+  // bulk turn off empty / on available, quota hide/show via settings,
+  // and per-connection refresh/toggle/delete actions.
   import { onMount } from 'svelte'
-  import {
-    api,
-    type ConnectionQuotaInfo,
-    type ConnectionUsageResponse,
-    type ProviderConnection
-  } from '../api/client'
+  import { api, type ProviderConnection } from '../api/client'
+  import { PROVIDER_CATALOG } from '../lib/providers'
   import Toggle from '../lib/ui/Toggle.svelte'
   import { getIconPath } from './connections/types'
+  import QuotaTable from './quota/QuotaTable.svelte'
+  import {
+    ACCOUNT_FILTER_OPTIONS,
+    ACCOUNT_PAGE_SIZE_MAX,
+    ACCOUNT_PAGE_SIZE_OPTIONS,
+    AUTO_REFRESH_STORAGE_KEY,
+    CLAUDE_REFRESH_INTERVAL_MS,
+    DEPLETED_QUOTA_THRESHOLD,
+    QUOTA_SORT_OPTIONS,
+    REFRESH_INTERVAL_MS,
+    buildLoadingState,
+    calculatePercentage,
+    filterQuotaStateByConnections,
+    filterQuotasByVisibility,
+    getConnectionsEmptyMessage,
+    getConnectionsPaginationSummary,
+    getHiddenQuotaRows,
+    getProviderOptions,
+    getQuotaCache,
+    getQuotaVisibilityKey,
+    getSafePagination,
+    getSafeTotals,
+    parseQuotaData,
+    setQuotaCache,
+    shouldResetPage,
+    sortVisibleConnections,
+    type Pagination,
+    type ProviderConnectionLike,
+    type QuotaEntry,
+    type QuotaVisibility,
+    type Totals,
+  } from './quota/types'
+
+  const CONNECTIONS_PAGE_SIZE = 20
 
   interface Props {
     connections?: ProviderConnection[]
   }
 
   let { connections: initialConns = [] }: Props = $props()
+
+  // ─── State ─────────────────────────────────────────────────────────────────
   let connections = $state<ProviderConnection[]>([])
-  let isLoading = $state(true)
-  let isRefreshing = $state(false)
-  let quotaData = $state<Record<string, ConnectionUsageResponse>>({})
+  let quotaData = $state<Record<string, QuotaEntry>>({})
   let quotaLoading = $state<Record<string, boolean>>({})
   let quotaErrors = $state<Record<string, string>>({})
+  let autoRefresh = $state(true)
+  let hasHydratedAutoRefresh = $state(false)
+  let lastUpdated = $state<Date | null>(null)
+  let refreshingAll = $state(false)
+  let countdown = $state(60)
+  let connectionsLoading = $state(true)
+  let deletingId = $state<string | null>(null)
+  let togglingId = $state<string | null>(null)
+  let bulkToggling = $state(false)
 
   // Filters
-  let selectedProvider = $state('all')
-  let accountFilter = $state<'all' | 'active' | 'inactive'>('all')
-  let isProviderDropdownOpen = $state(false)
+  let providerFilter = $state('all')
+  let providerOptions = $state<string[]>([])
+  let providerMenuOpen = $state(false)
+  let accountFilter = $state('all')
+  let quotaSortMode = $state('default')
   let expiringFirst = $state(false)
 
-  // Auto-refresh
-  let autoRefresh = $state(true)
-  let countdown = $state(60)
+  // Pagination
+  let page = $state(1)
+  let pageSize = $state(CONNECTIONS_PAGE_SIZE)
+  let customPageSizeInput = $state(String(CONNECTIONS_PAGE_SIZE))
+  let pagination = $state<Pagination>({
+    page: 1,
+    pageSize: CONNECTIONS_PAGE_SIZE,
+    total: 0,
+    totalPages: 1,
+  })
+  let totals = $state<Totals>({ eligibleConnections: 0, providerFilteredConnections: 0 })
 
-  $effect(() => {
-    if (initialConns.length > 0 && connections.length === 0) {
-      connections = initialConns
-      isLoading = false
-      fetchAllQuotas(initialConns)
+  // Quota visibility (hidden rows), persisted via /api/settings quotaVisibility
+  let quotaVisibility = $state<QuotaVisibility>({})
+
+  // Timers
+  let intervalTimer: ReturnType<typeof setInterval> | null = null
+  let countdownTimer: ReturnType<typeof setInterval> | null = null
+  let tickCount = 0
+  let initialLoadDone = false
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+  function providerLabel(providerId: string): string {
+    const cat = PROVIDER_CATALOG.find((p) => p.id === providerId || p.alias === providerId)
+    return cat?.name || providerId
+  }
+
+  function isConnectionDepleted(conn: ProviderConnection): boolean {
+    const quotas = quotaData[conn.id]?.quotas
+    if (!quotas?.length) return false
+    return quotas.some((q) => {
+      if (!q.total || q.total <= 0) return false
+      return calculatePercentage(q.used, q.total) <= DEPLETED_QUOTA_THRESHOLD
+    })
+  }
+
+  function isActiveConn(conn: ProviderConnection): boolean {
+    return conn.isActive === 1 || conn.isActive === true
+  }
+
+  function getConnectionLabel(conn: ProviderConnectionLike): string | null {
+    return conn.name?.trim() || conn.email?.trim() || conn.displayName?.trim() || null
+  }
+
+  // ─── Data loading ──────────────────────────────────────────────────────────
+  async function fetchConnections(targetPage = page): Promise<ProviderConnection[]> {
+    try {
+      const params = new URLSearchParams({
+        page: String(targetPage),
+        pageSize: String(pageSize),
+        accountStatus: accountFilter,
+        sort: 'priority',
+      })
+      if (providerFilter !== 'all') {
+        params.set('provider', providerFilter)
+      }
+      const data = await api.getProvidersClientPage(params.toString())
+      const connectionList = data.connections || []
+      connections = connectionList
+      providerOptions = getProviderOptions(data.providerOptions)
+      pagination = getSafePagination(data.pagination, pageSize)
+      totals = getSafeTotals(data.totals, connectionList.length, pagination.total)
+      page = data.pagination?.page || targetPage
+      return connectionList
+    } catch (error) {
+      console.error('Error fetching connections:', error)
+      connections = []
+      providerOptions = []
+      pagination = { page: 1, pageSize, total: 0, totalPages: 1 }
+      totals = { eligibleConnections: 0, providerFilteredConnections: 0 }
+      return []
     }
+  }
+
+  async function fetchQuota(
+    connectionId: string,
+    provider: string,
+    { force = false }: { force?: boolean } = {},
+  ): Promise<void> {
+    quotaLoading = { ...quotaLoading, [connectionId]: true }
+    quotaErrors = { ...quotaErrors, [connectionId]: '' }
+
+    try {
+      const data = await api.getConnectionUsage(connectionId, force)
+      const parsedQuotas = parseQuotaData(provider, data)
+      const quotaEntry: QuotaEntry = {
+        quotas: parsedQuotas,
+        plan: data?.plan || null,
+        message: data?.message || null,
+        raw: data,
+      }
+      quotaData = { ...quotaData, [connectionId]: quotaEntry }
+      quotaErrors = { ...quotaErrors, [connectionId]: '' }
+      setQuotaCache(connectionId, quotaEntry)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // 404-style: connection not found — skip silently
+      if (message.toLowerCase().includes('not found')) {
+        console.warn(`[QuotaTracker] Connection not found for ${provider}, skipping`)
+        return
+      }
+      console.error(`[QuotaTracker] Error fetching quota for ${provider} (${connectionId}):`, error)
+      quotaErrors = { ...quotaErrors, [connectionId]: message || 'Failed to fetch quota' }
+    } finally {
+      quotaLoading = { ...quotaLoading, [connectionId]: false }
+    }
+  }
+
+  async function refreshProvider(connectionId: string, provider: string): Promise<void> {
+    await fetchQuota(connectionId, provider, { force: true })
+    lastUpdated = new Date()
+  }
+
+  async function refreshAll(force = false): Promise<void> {
+    if (refreshingAll) return
+    refreshingAll = true
+    countdown = REFRESH_INTERVAL_MS / 1000
+
+    // Throttle Claude: poll its quota every Nth auto-tick (manual force bypasses)
+    const tick = ++tickCount
+    const claudeEvery = Math.round(CLAUDE_REFRESH_INTERVAL_MS / REFRESH_INTERVAL_MS)
+    const shouldFetch = (conn: ProviderConnection) =>
+      force || conn.provider !== 'claude' || tick % claudeEvery === 0
+
+    try {
+      const visibleConnections = await fetchConnections(page)
+
+      quotaLoading = { ...buildLoadingState(visibleConnections) }
+      quotaErrors = filterQuotaStateByConnections(quotaErrors, visibleConnections)
+      quotaData = filterQuotaStateByConnections(quotaData, visibleConnections)
+
+      await Promise.allSettled(
+        visibleConnections.filter(shouldFetch).map((conn) => fetchQuota(conn.id, conn.provider)),
+      )
+
+      lastUpdated = new Date()
+    } catch (error) {
+      console.error('Error refreshing all providers:', error)
+    } finally {
+      refreshingAll = false
+    }
+  }
+
+  // ─── Connection actions ────────────────────────────────────────────────────
+  async function handleDeleteConnection(id: string): Promise<void> {
+    if (!window.confirm('Delete this connection?')) return
+    deletingId = id
+    try {
+      await api.deleteConnection(id)
+      const cache = getQuotaCache()
+      if (cache[id]) {
+        delete cache[id]
+        try {
+          window.localStorage.setItem('quotaCacheData', JSON.stringify(cache))
+        } catch (e) {
+          console.error('Error deleting cache entry:', e)
+        }
+      }
+      // Reconcile page after delete (stay on page or move back if empty)
+      await fetchConnections(page)
+    } catch (error) {
+      console.error('Error deleting connection:', error)
+    } finally {
+      deletingId = null
+    }
+  }
+
+  async function handleToggleConnectionActive(id: string, nextActive: boolean): Promise<void> {
+    togglingId = id
+    try {
+      await api.updateConnection(id, { isActive: nextActive ? 1 : 0 })
+      connections = connections.map((c) =>
+        c.id === id ? { ...c, isActive: nextActive ? 1 : 0 } : c,
+      )
+    } catch (error) {
+      console.error('Error updating connection status:', error)
+    } finally {
+      togglingId = null
+    }
+  }
+
+  async function bulkSetActive(targetIds: string[], nextActive: boolean): Promise<void> {
+    if (!targetIds.length || bulkToggling) return
+    bulkToggling = true
+    try {
+      await Promise.allSettled(
+        targetIds.map((id) =>
+          api.updateConnection(id, { isActive: nextActive ? 1 : 0 }).then(() => {
+            connections = connections.map((c) =>
+              c.id === id ? { ...c, isActive: nextActive ? 1 : 0 } : c,
+            )
+          }),
+        ),
+      )
+    } catch (error) {
+      console.error('Error bulk toggling connections:', error)
+    } finally {
+      bulkToggling = false
+    }
+  }
+
+  function handleDisableDepleted(): void {
+    const ids = connections
+      .filter((c) => isActiveConn(c) && isConnectionDepleted(c))
+      .map((c) => c.id)
+    void bulkSetActive(ids, false)
+  }
+
+  function handleEnableAvailable(): void {
+    const ids = connections
+      .filter((c) => !isActiveConn(c) && !isConnectionDepleted(c))
+      .map((c) => c.id)
+    void bulkSetActive(ids, true)
+  }
+
+  // ─── Quota visibility ──────────────────────────────────────────────────────
+  async function updateQuotaVisibility(
+    nextVisibility: QuotaVisibility,
+    previousVisibility: QuotaVisibility,
+  ): Promise<void> {
+    quotaVisibility = nextVisibility
+    try {
+      await api.patchSettings({ quotaVisibility: nextVisibility })
+    } catch (error) {
+      console.error('Error updating quota visibility:', error)
+      quotaVisibility = previousVisibility
+    }
+  }
+
+  function antigravityFamilyUnhide(hidden: Set<string>, key: string): void {
+    // Hiding an antigravity family row unhides its member rows
+    if (key === 'gemini') {
+      for (const k of hidden) {
+        if (k.startsWith('gemini-') && !k.includes('image')) hidden.delete(k)
+      }
+    } else if (key === 'claude') {
+      for (const k of hidden) {
+        if (k.startsWith('claude-')) hidden.delete(k)
+      }
+    }
+  }
+
+  function handleHideQuota(provider: string, quotaRow: { modelKey?: string; name?: string }): void {
+    const key = getQuotaVisibilityKey(quotaRow)
+    if (!provider || !key) return
+    const previous = quotaVisibility
+    const providerVisibility = previous[provider] || {}
+    const hidden = new Set(providerVisibility.hidden || [])
+    hidden.add(key)
+    antigravityFamilyUnhide(hidden, key)
+    const next: QuotaVisibility = {
+      ...previous,
+      [provider]: { ...providerVisibility, hidden: [...hidden] },
+    }
+    void updateQuotaVisibility(next, previous)
+  }
+
+  function handleShowQuota(provider: string, quotaRow: { modelKey?: string; name?: string }): void {
+    const key = getQuotaVisibilityKey(quotaRow)
+    if (!provider || !key) return
+    const previous = quotaVisibility
+    const providerVisibility = previous[provider] || {}
+    const hidden = new Set(providerVisibility.hidden || [])
+    hidden.delete(key)
+    antigravityFamilyUnhide(hidden, key)
+    const next: QuotaVisibility = {
+      ...previous,
+      [provider]: { ...providerVisibility, hidden: [...hidden] },
+    }
+    void updateQuotaVisibility(next, previous)
+  }
+
+  // ─── Derived ───────────────────────────────────────────────────────────────
+  let sortedConnections = $derived.by<ProviderConnection[]>(() =>
+    sortVisibleConnections(
+      connections as ProviderConnectionLike[],
+      quotaData,
+      expiringFirst,
+      providerFilter,
+      quotaSortMode,
+    ) as ProviderConnection[],
+  )
+
+  let hasEligibleConnections = $derived(totals.eligibleConnections > 0)
+  let hasVisibleConnections = $derived(sortedConnections.length > 0)
+  let emptyState = $derived(getConnectionsEmptyMessage(totals, providerFilter, accountFilter))
+  let connectionsPageSummary = $derived(getConnectionsPaginationSummary(pagination))
+  let isCustomPageSize = $derived(!ACCOUNT_PAGE_SIZE_OPTIONS.includes(pageSize))
+  let selectedProviderLabel = $derived(
+    providerFilter === 'all' ? 'All providers' : providerLabel(providerFilter),
+  )
+
+  // ─── Auto-refresh lifecycle ────────────────────────────────────────────────
+  function stopTimers(): void {
+    if (intervalTimer) {
+      clearInterval(intervalTimer)
+      intervalTimer = null
+    }
+    if (countdownTimer) {
+      clearInterval(countdownTimer)
+      countdownTimer = null
+    }
+  }
+
+  function startTimers(): void {
+    stopTimers()
+    intervalTimer = setInterval(() => {
+      void refreshAll()
+    }, REFRESH_INTERVAL_MS)
+    countdownTimer = setInterval(() => {
+      countdown = countdown <= 1 ? REFRESH_INTERVAL_MS / 1000 : countdown - 1
+    }, 1000)
+  }
+
+  // Persist auto-refresh preference
+  $effect(() => {
+    if (!hasHydratedAutoRefresh) return
+    window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(autoRefresh))
   })
 
-  // Load all connections
-  async function loadConnections() {
-    try {
-      const res = await api.getProvidersClient()
-      connections = res.connections || []
-      // Fetch quotas for each connection
-      fetchAllQuotas(connections)
-    } catch {
-      const fallbackConns = await api.getConnections().catch(() => [])
-      connections = fallbackConns
-      fetchAllQuotas(fallbackConns)
-    } finally {
-      isLoading = false
-      isRefreshing = false
+  // Start/stop timers on auto-refresh changes
+  $effect(() => {
+    if (!hasHydratedAutoRefresh) return
+    if (autoRefresh) {
+      startTimers()
+    } else {
+      stopTimers()
     }
-  }
+    return () => stopTimers()
+  })
 
-  // Fetch quota for one connection
-  async function fetchQuotaForConnection(conn: ProviderConnection, force = false) {
-    const id = conn.id
-    quotaLoading[id] = true
-    try {
-      const usage = await api.getConnectionUsage(id, force)
-      quotaData[id] = usage
-      if (usage.error) {
-        quotaErrors[id] = usage.error
-      } else {
-        delete quotaErrors[id]
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      quotaErrors[id] = msg
-    } finally {
-      quotaLoading[id] = false
-    }
-  }
-
-  async function fetchAllQuotas(conns: ProviderConnection[], force = false) {
-    await Promise.allSettled(conns.map((c) => fetchQuotaForConnection(c, force)))
-  }
-
-  async function handleRefreshAll() {
-    isRefreshing = true
-    countdown = 60
-    await loadConnections()
-  }
-
-  // Toggle connection active/inactive
-  async function handleToggle(conn: ProviderConnection) {
-    const currentActive = conn.isActive === 1 || conn.isActive === true
-    const newActive = !currentActive
-    try {
-      await api.updateConnection(conn.id, { isActive: newActive ? 1 : 0 })
-      connections = connections.map((c) =>
-        c.id === conn.id ? { ...c, isActive: newActive ? 1 : 0 } : c
-      )
-    } catch (err) {
-      console.error('Failed to update connection status:', err)
-    }
-  }
-
-  // Turn off empty accounts
-  async function handleTurnOffEmpty() {
-    const emptyConns = connections.filter((c) => {
-      const isActive = c.isActive === 1 || c.isActive === true
-      if (!isActive) return false
-      const usage = quotaData[c.id]
-      if (!usage || !usage.quotas) return false
-      const qList = getQuotaList(usage.quotas)
-      if (qList.length === 0) return false
-      // If every quota has 0% or remaining <= 0
-      return qList.every((q) => getRemainingPercentage(q) <= 0)
-    })
-
-    await Promise.allSettled(
-      emptyConns.map((c) =>
-        api
-          .updateConnection(c.id, { isActive: 0 })
-          .then(() => {
-            connections = connections.map((item) =>
-              item.id === c.id ? { ...item, isActive: 0 } : item
-            )
-          })
-          .catch(() => {})
-      )
-    )
-  }
-
-  // Turn on available accounts
-  async function handleTurnOnAvailable() {
-    const availableConns = connections.filter((c) => {
-      const isActive = c.isActive === 1 || c.isActive === true
-      if (isActive) return false
-      const usage = quotaData[c.id]
-      if (!usage || !usage.quotas) return false
-      const qList = getQuotaList(usage.quotas)
-      if (qList.length === 0) return false
-      // If at least one quota has remaining > 0
-      return qList.some((q) => getRemainingPercentage(q) > 0)
-    })
-
-    await Promise.allSettled(
-      availableConns.map((c) =>
-        api
-          .updateConnection(c.id, { isActive: 1 })
-          .then(() => {
-            connections = connections.map((item) =>
-              item.id === c.id ? { ...item, isActive: 1 } : item
-            )
-          })
-          .catch(() => {})
-      )
-    )
-  }
+  // Refetch connections when pagination/filter inputs change (skip first run;
+  // the initial load happens in onMount)
+  $effect(() => {
+    void page
+    void pageSize
+    void accountFilter
+    void providerFilter
+    if (!initialLoadDone) return
+    void fetchConnections(page)
+  })
 
   onMount(() => {
-    loadConnections()
+    // Seed from props to avoid a flash of empty state
+    if (initialConns.length > 0 && connections.length === 0) {
+      connections = initialConns
+    }
 
-    const timer = setInterval(() => {
-      if (!autoRefresh) return
-      countdown -= 1
-      if (countdown <= 0) {
-        countdown = 60
-        loadConnections()
+    // Hydrate auto-refresh preference
+    const stored = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY)
+    autoRefresh = stored === null ? true : stored === 'true'
+    hasHydratedAutoRefresh = true
+
+    // Load quota visibility settings
+    api
+      .getSettings()
+      .then((s) => {
+        quotaVisibility = (s as QuotaVisibility)?.quotaVisibility || {}
+      })
+      .catch(() => {})
+
+    // Initial data load
+    void (async () => {
+      connectionsLoading = true
+      const visibleConnections = await fetchConnections(page)
+      connectionsLoading = false
+      initialLoadDone = true
+      quotaLoading = { ...buildLoadingState(visibleConnections) }
+      quotaErrors = filterQuotaStateByConnections(quotaErrors, visibleConnections)
+      quotaData = filterQuotaStateByConnections(quotaData, visibleConnections)
+      await Promise.allSettled(
+        visibleConnections.map((conn) => fetchQuota(conn.id, conn.provider)),
+      )
+      lastUpdated = new Date()
+    })()
+
+    // Pause auto-refresh when tab hidden (Page Visibility API)
+    function handleVisibilityChange(): void {
+      if (document.hidden) {
+        stopTimers()
+      } else if (autoRefresh && hasHydratedAutoRefresh) {
+        startTimers()
       }
-    }, 1000)
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
-    function handleDocClick(e: MouseEvent) {
+    // Close provider dropdown on outside click
+    function handleDocClick(e: MouseEvent): void {
       const target = e.target as HTMLElement | null
       if (!target?.closest('#provider-dropdown-container')) {
-        isProviderDropdownOpen = false
+        providerMenuOpen = false
       }
     }
     document.addEventListener('click', handleDocClick)
 
     return () => {
-      clearInterval(timer)
+      stopTimers()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('click', handleDocClick)
     }
   })
 
-  // Helpers
-  function getDisplayName(conn: ProviderConnection): string {
-    return (
-      conn.name ||
-      conn.displayName ||
-      conn.email ||
-      (conn.authType === 'oauth' ? 'OAuth Account' : 'API Key Slot')
-    )
+  // ─── Page-size handlers ────────────────────────────────────────────────────
+  function handlePageSizeChange(nextPageSize: number): void {
+    page = 1
+    pageSize = nextPageSize
+    customPageSizeInput = String(nextPageSize)
   }
 
-  function getQuotaList(
-    quotas?: Record<string, ConnectionQuotaInfo> | ConnectionQuotaInfo[]
-  ): ConnectionQuotaInfo[] {
-    if (!quotas) return []
-    if (Array.isArray(quotas)) return quotas
-    return Object.entries(quotas).map(([key, info]) => ({
-      ...info,
-      modelKey: key,
-    }))
+  function commitCustomPageSize(): void {
+    const parsed = Number.parseInt(customPageSizeInput, 10)
+    if (!Number.isFinite(parsed)) {
+      customPageSizeInput = String(pageSize)
+      return
+    }
+    const next = Math.min(ACCOUNT_PAGE_SIZE_MAX, Math.max(1, parsed))
+    page = 1
+    pageSize = next
+    customPageSizeInput = String(next)
   }
 
-  function getRemainingPercentage(quota: ConnectionQuotaInfo): number {
-    if (quota.remainingPercentage !== undefined) {
-      return Math.max(0, Math.min(100, Math.round(quota.remainingPercentage)))
-    }
-    if (quota.remaining !== undefined && quota.total && quota.total > 0) {
-      return Math.max(0, Math.min(100, Math.round((quota.remaining / quota.total) * 100)))
-    }
-    if (quota.used !== undefined && quota.total && quota.total > 0) {
-      const rem = Math.max(0, quota.total - quota.used)
-      return Math.max(0, Math.min(100, Math.round((rem / quota.total) * 100)))
-    }
-    return 100
+  function handleCustomPageSizeKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter') return
+    commitCustomPageSize()
   }
 
-  function formatResetTime(resetAt?: string): string | null {
-    if (!resetAt) return null
-    try {
-      const target = new Date(resetAt).getTime()
-      const now = Date.now()
-      const diff = target - now
-      if (diff <= 0) return 'Resetting soon'
-      const hours = Math.floor(diff / (1000 * 60 * 60))
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-      if (hours >= 24) {
-        const days = Math.floor(hours / 24)
-        const remHours = hours % 24
-        return `Resets in ${days}d ${remHours}h`
-      }
-      return `Resets in ${hours}h ${minutes}m`
-    } catch {
-      return null
-    }
+  function handleAccountFilterChange(): void {
+    page = 1
   }
-
-  function getEarliestResetTime(conn: ProviderConnection): number {
-    const usage = quotaData[conn.id]
-    if (!usage || !usage.quotas) return Infinity
-    const list = getQuotaList(usage.quotas)
-    let earliest = Infinity
-    for (const q of list) {
-      if (q.resetAt) {
-        const t = new Date(q.resetAt).getTime()
-        if (t > Date.now() && t < earliest) {
-          earliest = t
-        }
-      }
-    }
-    return earliest
-  }
-
-  // Filtered connections
-  let uniqueProviders = $derived(
-    Array.from(new Set(connections.map((c) => c.provider))).sort()
-  )
-
-  let filteredConnections = $derived(
-    connections.filter((conn) => {
-      // Provider filter
-      if (selectedProvider !== 'all' && conn.provider !== selectedProvider) {
-        return false
-      }
-      // Active / Inactive filter
-      const isActive = conn.isActive === 1 || conn.isActive === true
-      if (accountFilter === 'active' && !isActive) return false
-      if (accountFilter === 'inactive' && isActive) return false
-      return true
-    })
-  )
-
-  let sortedConnections = $derived(
-    expiringFirst
-      ? [...filteredConnections].sort(
-          (a, b) => getEarliestResetTime(a) - getEarliestResetTime(b)
-        )
-      : filteredConnections
-  )
-
-  let activeCount = $derived(
-    connections.filter((c) => c.isActive === 1 || c.isActive === true).length
-  )
-  let inactiveCount = $derived(connections.length - activeCount)
 </script>
 
 <div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between gap-4 flex-wrap">
-    <div class="flex items-center gap-3">
-      <div
-        class="size-10 rounded-xl bg-brand-500/10 text-brand-600 dark:text-brand-400 flex items-center justify-center shrink-0"
-      >
-        <span class="material-symbols-outlined text-[24px]">data_usage</span>
-      </div>
-      <div>
-        <h1 class="text-xl font-bold text-text-main tracking-tight">Quota Tracker</h1>
-        <p class="text-xs text-text-muted">Track and manage your API quota limits</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Action Bar -->
-  <div
-    class="flex items-center justify-between gap-3 flex-wrap p-2.5 rounded-xl bg-surface border border-border-subtle shadow-[var(--shadow-soft)]"
-  >
-    <!-- Left: Provider dropdown + Account segmented tabs -->
-    <div class="flex items-center gap-2 flex-wrap">
+  <!-- Header Controls -->
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end">
+    <div class="flex flex-wrap items-center gap-1.5">
       <!-- Provider filter dropdown -->
       <div class="relative" id="provider-dropdown-container">
         <button
           type="button"
-          onclick={() => (isProviderDropdownOpen = !isProviderDropdownOpen)}
-          class="flex h-8 items-center gap-1.5 px-2.5 rounded-lg border border-border-subtle bg-surface-2 text-xs font-medium text-text-main hover:bg-surface-3 transition-colors cursor-pointer"
+          onclick={() => (providerMenuOpen = !providerMenuOpen)}
+          class="flex h-8 items-center justify-between gap-1 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main transition-colors hover:bg-surface-3"
+          aria-haspopup="menu"
+          aria-expanded={providerMenuOpen}
+          title="Filter quota providers"
         >
-          <span class="material-symbols-outlined text-[16px] text-text-muted">apps</span>
-          <span class="capitalize">
-            {selectedProvider === 'all' ? 'All Providers' : selectedProvider}
+          <span class="flex min-w-0 items-center gap-1.5">
+            {#if providerFilter === 'all'}
+              <span class="material-symbols-outlined text-[14px] text-text-muted">apps</span>
+            {:else}
+              <img
+                src={getIconPath(providerFilter)}
+                alt={providerFilter}
+                class="size-[18px] rounded object-contain"
+                onerror={(e) => {
+                  ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                }}
+              />
+            {/if}
+            <span class="hidden truncate lg:inline">{selectedProviderLabel}</span>
           </span>
-          <span
-            class="material-symbols-outlined text-[14px] text-text-muted transition-transform duration-150"
-            style:transform={isProviderDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)'}
-          >
-            expand_more
-          </span>
+          <span class="material-symbols-outlined text-[14px] text-text-muted">expand_more</span>
         </button>
 
-        {#if isProviderDropdownOpen}
+        {#if providerMenuOpen}
+          <button
+            type="button"
+            class="fixed inset-0 z-30 cursor-default bg-transparent"
+            aria-label="Close provider filter"
+            onclick={() => (providerMenuOpen = false)}
+          ></button>
           <div
-            class="absolute left-0 top-full mt-1.5 w-48 rounded-xl bg-surface border border-border-subtle shadow-xl z-30 py-1 max-h-64 overflow-y-auto custom-scrollbar"
+            class="absolute left-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-2xl border border-border-subtle bg-surface p-1.5 shadow-xl sm:w-72"
           >
             <button
               type="button"
               onclick={() => {
-                selectedProvider = 'all'
-                isProviderDropdownOpen = false
+                if (shouldResetPage(providerFilter, 'all')) page = 1
+                providerFilter = 'all'
+                providerMenuOpen = false
               }}
-              class="flex items-center justify-between w-full px-3 py-1.5 text-xs text-left hover:bg-surface-2 transition-colors cursor-pointer {selectedProvider ===
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors {providerFilter ===
               'all'
-                ? 'text-brand-500 font-semibold'
-                : 'text-text-main'}"
+                ? 'bg-brand-500/10 text-brand-500'
+                : 'text-text-main hover:bg-surface-2'}"
             >
-              <span>All Providers</span>
-              <span class="text-text-muted text-[11px]">{connections.length}</span>
+              <span class="material-symbols-outlined text-[22px]">apps</span>
+              <span class="font-medium">All providers</span>
+              {#if providerFilter === 'all'}
+                <span class="material-symbols-outlined ml-auto text-[20px]">check</span>
+              {/if}
             </button>
-            <div class="h-px bg-border-subtle my-1"></div>
-            {#each uniqueProviders as prov}
-              {@const count = connections.filter((c) => c.provider === prov).length}
-              <button
-                type="button"
-                onclick={() => {
-                  selectedProvider = prov
-                  isProviderDropdownOpen = false
-                }}
-                class="flex items-center justify-between w-full px-3 py-1.5 text-xs text-left capitalize hover:bg-surface-2 transition-colors cursor-pointer {selectedProvider ===
-                prov
-                  ? 'text-brand-500 font-semibold'
-                  : 'text-text-main'}"
-              >
-                <span>{prov}</span>
-                <span class="text-text-muted text-[11px]">{count}</span>
-              </button>
-            {/each}
+            <div class="my-1 h-px bg-border-subtle"></div>
+            <div class="max-h-72 overflow-y-auto pr-1">
+              {#each providerOptions as prov (prov)}
+                <button
+                  type="button"
+                  onclick={() => {
+                    if (shouldResetPage(providerFilter, prov)) page = 1
+                    providerFilter = prov
+                    providerMenuOpen = false
+                  }}
+                  class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors {providerFilter ===
+                  prov
+                    ? 'bg-brand-500/10 text-brand-500'
+                    : 'text-text-main hover:bg-surface-2'}"
+                >
+                  <img
+                    src={getIconPath(prov)}
+                    alt={prov}
+                    class="size-6 rounded-md object-contain"
+                    onerror={(e) => {
+                      ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                  <span class="font-medium">{providerLabel(prov)}</span>
+                  {#if providerFilter === prov}
+                    <span class="material-symbols-outlined ml-auto text-[20px]">check</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
           </div>
         {/if}
       </div>
 
-      <!-- Account Status Tabs -->
-      <div class="flex items-center rounded-lg bg-surface-2 p-0.5 border border-border-subtle">
-        <button
-          type="button"
-          onclick={() => (accountFilter = 'all')}
-          class="px-2.5 py-1 text-xs rounded-md font-medium transition-colors cursor-pointer {accountFilter ===
-          'all'
-            ? 'bg-surface text-text-main shadow-xs'
-            : 'text-text-muted hover:text-text-main'}"
-        >
-          All accounts
-        </button>
-        <button
-          type="button"
-          onclick={() => (accountFilter = 'active')}
-          class="px-2.5 py-1 text-xs rounded-md font-medium transition-colors cursor-pointer {accountFilter ===
-          'active'
-            ? 'bg-surface text-text-main shadow-xs'
-            : 'text-text-muted hover:text-text-main'}"
-        >
-          Active ({activeCount})
-        </button>
-        <button
-          type="button"
-          onclick={() => (accountFilter = 'inactive')}
-          class="px-2.5 py-1 text-xs rounded-md font-medium transition-colors cursor-pointer {accountFilter ===
-          'inactive'
-            ? 'bg-surface text-text-main shadow-xs'
-            : 'text-text-muted hover:text-text-main'}"
-        >
-          Turned off ({inactiveCount})
-        </button>
-      </div>
-    </div>
+      <!-- Account status filter -->
+      <select
+        bind:value={accountFilter}
+        onchange={handleAccountFilterChange}
+        class="h-8 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main outline-none transition-colors hover:bg-surface-3"
+        aria-label="Filter accounts by status"
+      >
+        {#each ACCOUNT_FILTER_OPTIONS as option (option.value)}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
 
-    <!-- Right: Action pills -->
-    <div class="flex items-center gap-1.5 flex-wrap">
+      <!-- Codex quota sort -->
+      {#if providerFilter === 'codex'}
+        <select
+          bind:value={quotaSortMode}
+          class="h-8 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main outline-none transition-colors hover:bg-surface-3"
+          aria-label="Sort Codex quotas by remaining"
+        >
+          {#each QUOTA_SORT_OPTIONS as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+      {/if}
+
       <!-- Expiring first -->
       <button
         type="button"
         onclick={() => (expiringFirst = !expiringFirst)}
-        class="flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs transition-colors cursor-pointer {expiringFirst
-          ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 font-medium'
-          : 'border-border-subtle bg-surface text-text-muted hover:bg-surface-2 hover:text-text-main'}"
+        aria-pressed={expiringFirst}
+        class="flex h-8 shrink-0 items-center gap-1 rounded-lg border px-2 text-xs transition-colors {expiringFirst
+          ? 'border-amber-500/40 bg-amber-500/10 text-amber-500'
+          : 'border-border-subtle bg-surface text-text-main hover:bg-surface-2'}"
         title="Sort accounts by earliest quota reset time"
       >
         <span class="material-symbols-outlined text-[14px]">hourglass_top</span>
         <span class="hidden sm:inline">Expiring first</span>
       </button>
 
-      <!-- Turn off Empty -->
+      <!-- Bulk: disable depleted -->
       <button
         type="button"
-        onclick={handleTurnOffEmpty}
-        class="flex h-8 items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/5 px-2.5 text-xs text-red-500 transition-colors hover:bg-red-500/10 cursor-pointer"
-        title="Disable connections with depleted quota"
+        onclick={handleDisableDepleted}
+        disabled={bulkToggling}
+        class="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-red-500/30 px-2 text-xs text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+        title="Disable connections with depleted quota on the current page"
       >
         <span class="material-symbols-outlined text-[14px]">block</span>
         <span class="hidden sm:inline">Turn off Empty</span>
       </button>
 
-      <!-- Turn on Available -->
+      <!-- Bulk: enable available -->
       <button
         type="button"
-        onclick={handleTurnOnAvailable}
-        class="flex h-8 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 text-xs text-emerald-500 transition-colors hover:bg-emerald-500/10 cursor-pointer"
-        title="Enable connections that still have quota"
+        onclick={handleEnableAvailable}
+        disabled={bulkToggling}
+        class="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 px-2 text-xs text-emerald-500 transition-colors hover:bg-emerald-500/10 disabled:opacity-50"
+        title="Enable connections that still have quota on the current page"
       >
         <span class="material-symbols-outlined text-[14px]">check_circle</span>
         <span class="hidden sm:inline">Turn on Available</span>
       </button>
 
-      <!-- Auto-refresh -->
+      <!-- Auto-refresh toggle -->
       <button
         type="button"
         onclick={() => (autoRefresh = !autoRefresh)}
-        class="flex h-8 items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2.5 text-xs transition-colors hover:bg-surface-2 cursor-pointer"
+        class="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2 text-xs transition-colors hover:bg-surface-2"
         title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
       >
         <span
-          class="material-symbols-outlined text-[16px] {autoRefresh
+          class="material-symbols-outlined text-[14px] {autoRefresh
             ? 'text-brand-500'
             : 'text-text-muted'}"
         >
@@ -453,187 +678,296 @@
         </span>
         <span class="hidden text-text-main sm:inline">Auto-refresh</span>
         {#if autoRefresh}
-          <span class="text-[10px] text-text-muted tabular-nums">({countdown}s)</span>
+          <span class="text-[10px] tabular-nums text-text-muted">({countdown}s)</span>
         {/if}
       </button>
 
-      <!-- Manual refresh -->
+      <!-- Refresh all -->
       <button
         type="button"
-        onclick={handleRefreshAll}
-        disabled={isRefreshing}
-        class="flex h-8 items-center justify-center rounded-lg border border-border-subtle bg-surface px-2 text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors cursor-pointer disabled:opacity-50"
+        onclick={() => refreshAll(true)}
+        disabled={refreshingAll}
+        class="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2 text-xs text-text-main transition-colors hover:bg-surface-2 disabled:opacity-50"
         title="Refresh all"
-        aria-label="Refresh quota data"
       >
-        <span class="material-symbols-outlined text-[16px] {isRefreshing ? 'animate-spin' : ''}">
+        <span class="material-symbols-outlined text-[14px] {refreshingAll ? 'animate-spin' : ''}">
           refresh
         </span>
       </button>
     </div>
   </div>
 
-  <!-- Account Cards Grid -->
-  {#if isLoading}
-    <div class="flex items-center justify-center py-20 text-text-muted">
-      <span class="material-symbols-outlined animate-spin mr-2 text-2xl">progress_activity</span>
-      <span>Loading accounts and quotas...</span>
-    </div>
-  {:else if sortedConnections.length === 0}
+  <!-- Expiring-first notice -->
+  {#if expiringFirst}
     <div
-      class="p-12 text-center rounded-2xl bg-surface border border-border-subtle shadow-[var(--shadow-soft)]"
+      class="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
     >
-      <span class="material-symbols-outlined text-4xl text-text-muted mb-2">inbox</span>
-      <h3 class="text-base font-semibold text-text-main">No accounts found</h3>
-      <p class="text-xs text-text-muted mt-1">
-        Try adjusting your provider or status filter to see more connections.
-      </p>
+      Expiring-first currently reorders accounts inside the current page. Cross-page ordering still
+      follows backend pagination.
+    </div>
+  {/if}
+
+  <!-- Empty states -->
+  {#if !connectionsLoading && !hasEligibleConnections}
+    <div
+      class="rounded-xl border border-border-subtle bg-surface p-12 text-center shadow-[var(--shadow-soft)]"
+    >
+      <span class="material-symbols-outlined text-[64px] text-text-muted opacity-20">
+        {emptyState.icon}
+      </span>
+      <h3 class="mt-4 text-lg font-semibold text-text-main">{emptyState.title}</h3>
+      <p class="mx-auto mt-2 max-w-md text-sm text-text-muted">{emptyState.description}</p>
+    </div>
+  {:else if !connectionsLoading && !hasVisibleConnections}
+    <div
+      class="rounded-xl border border-border-subtle bg-surface p-12 text-center shadow-[var(--shadow-soft)]"
+    >
+      <span class="material-symbols-outlined text-[64px] text-text-muted opacity-20">
+        {emptyState.icon}
+      </span>
+      <h3 class="mt-4 text-lg font-semibold text-text-main">{emptyState.title}</h3>
+      <p class="mx-auto mt-2 max-w-md text-sm text-text-muted">{emptyState.description}</p>
     </div>
   {:else}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <!-- Provider cards: 2 columns, compact -->
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
       {#each sortedConnections as conn (conn.id)}
-        {@const isActive = conn.isActive === 1 || conn.isActive === true}
-        {@const usage = quotaData[conn.id]}
-        {@const isQuotaLoading = quotaLoading[conn.id]}
-        {@const error = quotaErrors[conn.id] || conn.lastError}
-        {@const quotas = getQuotaList(usage?.quotas)}
+        {@const isActive = isActiveConn(conn)}
+        {@const quota = quotaData[conn.id]}
+        {@const isLoading = quotaLoading[conn.id]}
+        {@const error = quotaErrors[conn.id]}
+        {@const rowBusy = deletingId === conn.id || togglingId === conn.id}
+        {@const rawQuotas = quota?.quotas || []}
+        {@const visibleQuotas = filterQuotasByVisibility(conn.provider, rawQuotas, quotaVisibility)}
+        {@const hiddenQuotaRows = getHiddenQuotaRows(conn.provider, rawQuotas, quotaVisibility)}
 
         <div
-          class="flex flex-col p-4 rounded-xl border bg-surface transition-all {isActive
-            ? 'border-border-subtle shadow-[var(--shadow-soft)] hover:border-brand-500/30'
-            : 'border-border-subtle/60 opacity-70 bg-surface-2/40'}"
+          class="flex min-w-0 flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface shadow-[var(--shadow-soft)] {isActive
+            ? ''
+            : 'opacity-60'}"
         >
-          <!-- Card Header -->
-          <div class="flex items-center justify-between gap-3 pb-3 border-b border-border-subtle">
-            <!-- Provider logo & Name -->
-            <div class="flex items-center gap-3 min-w-0">
-              <div
-                class="size-9 rounded-lg bg-surface-2 border border-border-subtle flex items-center justify-center shrink-0 overflow-hidden p-1"
-              >
-                <img
-                  src={getIconPath(conn.provider)}
-                  alt={conn.provider}
-                  class="size-full object-contain"
-                  onerror={(e) => {
-                    const el = e.currentTarget as HTMLImageElement
-                    el.style.display = 'none'
-                  }}
-                />
-              </div>
-
-              <div class="min-w-0">
-                <div class="flex items-center gap-1.5">
-                  <h3 class="font-semibold text-sm text-text-main truncate">
-                    {getDisplayName(conn)}
+          <!-- Card header -->
+          <div class="border-b border-border-subtle px-3 py-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex min-w-0 items-center gap-2">
+                <div
+                  class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md"
+                >
+                  <img
+                    src={getIconPath(conn.provider)}
+                    alt={conn.provider}
+                    class="size-8 object-contain"
+                    onerror={(e) => {
+                      ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                </div>
+                <div class="min-w-0">
+                  <h3 class="truncate text-sm font-semibold text-text-main">
+                    {providerLabel(conn.provider)}
                   </h3>
-                </div>
-                <div class="flex items-center gap-2 text-[11px] text-text-muted capitalize">
-                  <span>{conn.provider}</span>
-                  <span>•</span>
-                  <span>{conn.authType}</span>
+                  {#if getConnectionLabel(conn)}
+                    <p class="truncate text-xs text-text-muted">{getConnectionLabel(conn)}</p>
+                  {/if}
+                  {#if conn.email && conn.name && conn.email.trim() !== conn.name?.trim()}
+                    <p class="truncate text-[11px] text-text-muted/80">{conn.email}</p>
+                  {/if}
+                  <div class="mt-1 flex flex-wrap items-center gap-1">
+                    <span
+                      class="rounded-full px-2 py-0.5 text-[10px] font-semibold {isActive
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        : conn.testStatus === 'error' ||
+                            conn.testStatus === 'expired' ||
+                            conn.testStatus === 'unavailable'
+                          ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                          : 'bg-surface-3 text-text-muted'}"
+                    >
+                      {isActive ? 'active' : conn.testStatus || 'unknown'}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <!-- Status & Quick Toggle -->
-            <div class="flex items-center gap-2 shrink-0">
-              <span
-                class="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider {isActive
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                  : 'bg-surface-3 text-text-muted border border-border-subtle'}"
-              >
-                {isActive ? 'Active' : 'Turned off'}
-              </span>
-
-              <Toggle
-                checked={isActive}
-                onChange={() => handleToggle(conn)}
-                title={isActive ? 'Deactivate connection' : 'Activate connection'}
-              />
+              <div class="flex shrink-0 items-center gap-1">
+                <!-- Refresh quota -->
+                <button
+                  type="button"
+                  onclick={() => refreshProvider(conn.id, conn.provider)}
+                  disabled={isLoading || rowBusy}
+                  aria-label="Refresh quota"
+                  title="Refresh quota"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-3 hover:text-text-main disabled:opacity-50"
+                >
+                  <span
+                    class="material-symbols-outlined text-[18px] {isLoading
+                      ? 'animate-spin'
+                      : ''}">refresh</span
+                  >
+                </button>
+                <!-- Delete connection -->
+                <button
+                  type="button"
+                  onclick={() => handleDeleteConnection(conn.id)}
+                  disabled={rowBusy}
+                  aria-label="Delete connection"
+                  title="Delete connection"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                >
+                  <span
+                    class="material-symbols-outlined text-[18px] {deletingId === conn.id
+                      ? 'animate-pulse'
+                      : ''}">delete</span
+                  >
+                </button>
+                <div
+                  class="inline-flex items-center pl-0.5"
+                  title={isActive ? 'Disable connection' : 'Enable connection'}
+                >
+                  <Toggle
+                    size="sm"
+                    checked={isActive}
+                    disabled={rowBusy}
+                    onChange={(nextActive) => handleToggleConnectionActive(conn.id, nextActive)}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          <!-- Card Body / Quota Breakdown -->
-          <div class="pt-3 flex-1 flex flex-col justify-between gap-3">
-            {#if isQuotaLoading}
-              <div class="flex items-center gap-2 py-4 text-xs text-text-muted justify-center">
-                <span class="material-symbols-outlined text-[16px] animate-spin">
+          <!-- Card body: quota rows -->
+          <div class="px-2 py-1.5">
+            {#if isLoading}
+              <div class="py-5 text-center text-text-muted">
+                <span class="material-symbols-outlined text-[28px] animate-spin">
                   progress_activity
                 </span>
-                <span>Refreshing quota...</span>
               </div>
             {:else if error}
-              <div
-                class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs flex items-start gap-2"
-              >
-                <span class="material-symbols-outlined text-[16px] shrink-0 mt-0.5">error</span>
-                <span class="truncate leading-relaxed">{error}</span>
+              <div class="py-5 text-center">
+                <span class="material-symbols-outlined text-[28px] text-red-500">error</span>
+                <p class="mt-1.5 text-xs text-text-muted">{error}</p>
               </div>
-            {:else if quotas.length > 0}
-              <div class="space-y-2.5">
-                {#each quotas.slice(0, 4) as quota (quota.modelKey || quota.name)}
-                  {@const remainingPct = getRemainingPercentage(quota)}
-                  {@const resetText = formatResetTime(quota.resetAt)}
-
-                  <div>
-                    <div class="flex items-center justify-between text-xs mb-1">
-                      <span class="font-medium text-text-main truncate max-w-[200px]">
-                        {quota.displayName || quota.name || quota.modelKey}
-                      </span>
-                      <div class="flex items-center gap-2">
-                        {#if resetText}
-                          <span class="text-[10px] text-text-muted">{resetText}</span>
-                        {/if}
-                        <span class="font-mono text-[11px] text-text-muted font-semibold">
-                          {remainingPct}%
-                        </span>
-                      </div>
-                    </div>
-
-                    <!-- Progress bar -->
-                    <div class="h-1.5 w-full rounded-full bg-surface-3 overflow-hidden">
-                      <div
-                        class="h-full transition-all duration-300 rounded-full {remainingPct > 50
-                          ? 'bg-emerald-500'
-                          : remainingPct > 20
-                            ? 'bg-amber-500'
-                            : 'bg-red-500'}"
-                        style:width={`${remainingPct}%`}
-                      ></div>
-                    </div>
-                  </div>
-                {/each}
-
-                {#if quotas.length > 4}
-                  <p class="text-[11px] text-text-muted text-center pt-1">
-                    + {quotas.length - 4} more model quotas
-                  </p>
-                {/if}
+            {:else if quota?.message}
+              <div class="py-5 text-center">
+                <p class="text-xs text-text-muted">{quota.message}</p>
               </div>
             {:else}
-              <div class="py-3 text-center text-xs text-text-muted">
-                <span>Account active. No quota limits tracked.</span>
+              <QuotaTable
+                quotas={visibleQuotas}
+                compact
+                sortMode={conn.provider === 'codex' && quotaSortMode !== 'default'
+                  ? (quotaSortMode as 'remaining-asc' | 'remaining-desc')
+                  : 'default'}
+                showSortLabel={conn.provider === 'codex' && quotaSortMode !== 'default'}
+                onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
+              />
+              {#if visibleQuotas.length === 0 && rawQuotas.length === 0}
+                <div class="py-3 text-center text-xs text-text-muted">
+                  Account active. No quota limits tracked.
+                </div>
+              {/if}
+            {/if}
+            {#if hiddenQuotaRows.length > 0}
+              <div
+                class="mt-2 flex min-w-0 items-center gap-1 border-t border-border-subtle/60 pt-2 text-[10px] text-text-muted"
+              >
+                <span class="material-symbols-outlined shrink-0 text-[14px]">visibility_off</span>
+                <span class="shrink-0">Hidden:</span>
+                <div
+                  class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap pb-2"
+                >
+                  {#each hiddenQuotaRows as quotaRow (getQuotaVisibilityKey(quotaRow))}
+                    <button
+                      type="button"
+                      onclick={() => handleShowQuota(conn.provider, quotaRow)}
+                      class="shrink-0 rounded-md border border-border-subtle px-1.5 py-0.5 transition-colors hover:bg-surface-3 hover:text-text-main"
+                      title="Show this quota row"
+                    >
+                      {quotaRow.name}
+                    </button>
+                  {/each}
+                </div>
               </div>
             {/if}
-
-            <!-- Card Footer: Plan and re-check button -->
-            <div class="flex items-center justify-between pt-2 text-[11px] text-text-muted border-t border-border-subtle/50">
-              <span>{usage?.plan || 'Standard Plan'}</span>
-              <button
-                type="button"
-                onclick={() => fetchQuotaForConnection(conn, true)}
-                disabled={isQuotaLoading}
-                class="hover:text-text-main inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              >
-                <span class="material-symbols-outlined text-[13px] {isQuotaLoading ? 'animate-spin' : ''}">
-                  refresh
-                </span>
-                <span>Check</span>
-              </button>
-            </div>
           </div>
         </div>
       {/each}
+    </div>
+
+    <!-- Pagination footer -->
+    <div class="rounded-xl border border-border-subtle bg-surface-2/60 px-3 py-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="text-xs text-text-muted">{connectionsPageSummary}</span>
+        <div class="flex flex-wrap items-center gap-2">
+          <select
+            value={isCustomPageSize ? 'custom' : String(pageSize)}
+            onchange={(e) => {
+              const nextValue = (e.currentTarget as HTMLSelectElement).value
+              if (nextValue === 'custom') return
+              const nextPageSize = Number.parseInt(nextValue, 10)
+              if (Number.isFinite(nextPageSize)) handlePageSizeChange(nextPageSize)
+            }}
+            class="h-8 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main outline-none transition-colors hover:bg-surface-3"
+            aria-label="Accounts per page"
+          >
+            {#each ACCOUNT_PAGE_SIZE_OPTIONS as option (option)}
+              <option value={String(option)}>{option} / page</option>
+            {/each}
+            <option value="custom">Custom</option>
+          </select>
+          <input
+            type="number"
+            min="1"
+            max={String(ACCOUNT_PAGE_SIZE_MAX)}
+            inputmode="numeric"
+            bind:value={customPageSizeInput}
+            onblur={commitCustomPageSize}
+            onkeydown={handleCustomPageSizeKeydown}
+            class="h-8 w-20 rounded-lg border border-border-subtle bg-surface-2 px-2 text-xs text-text-main outline-none transition-colors hover:bg-surface-3"
+            aria-label="Custom accounts per page"
+            placeholder="Custom"
+          />
+          <span class="text-xs text-text-muted">
+            Page {pagination.page} / {pagination.totalPages}
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button
+            type="button"
+            onclick={() => (page = 1)}
+            disabled={pagination.page <= 1 || connectionsLoading || refreshingAll}
+            class="flex h-8 items-center rounded-lg border border-border-subtle px-3 text-xs text-text-main transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            First Page
+          </button>
+          <button
+            type="button"
+            onclick={() => (page = Math.max(1, page - 1))}
+            disabled={pagination.page <= 1 || connectionsLoading || refreshingAll}
+            aria-label="Previous accounts page"
+            class="flex h-8 w-8 items-center justify-center rounded-lg border border-border-subtle text-text-main transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span class="material-symbols-outlined text-[16px]">chevron_left</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => (page = Math.min(pagination.totalPages, page + 1))}
+            disabled={pagination.page >= pagination.totalPages || connectionsLoading || refreshingAll}
+            aria-label="Next accounts page"
+            class="flex h-8 w-8 items-center justify-center rounded-lg border border-border-subtle text-text-main transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span class="material-symbols-outlined text-[16px]">chevron_right</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => (page = pagination.totalPages)}
+            disabled={pagination.page >= pagination.totalPages || connectionsLoading || refreshingAll}
+            class="flex h-8 items-center rounded-lg border border-border-subtle px-3 text-xs text-text-main transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Last Page
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 </div>

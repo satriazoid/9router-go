@@ -182,4 +182,127 @@ func TestHandleFreebuffSessionStatus_Unauthorized(t *testing.T) {
 	if res["status"] != "unauthorized" {
 		t.Errorf("expected status=unauthorized, got %v", res["status"])
 	}
+	if res["connectionId"] != "fb-conn-2" {
+		t.Errorf("expected the report to name its connection, got %v", res["connectionId"])
+	}
+}
+
+// A banned account is refused with its own status upstream. Reporting it as a
+// plain unauthorized would send the user back through the login flow for a
+// credential that can never work.
+func TestHandleFreebuffSessionStatus_Banned(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	handler := NewOAuthHandler(db.NewRepo(database))
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"status":"banned"}`))
+	}))
+	defer mockUpstream.Close()
+
+	origBaseURL := freebuffAPIBaseURL
+	freebuffAPIBaseURL = mockUpstream.URL
+	defer func() { freebuffAPIBaseURL = origBaseURL }()
+
+	_, err := database.Exec(`
+		INSERT INTO providerConnections (id, provider, authType, name, isActive, data, createdAt, updatedAt)
+		VALUES ('fb-banned', 'freebuff', 'oauth', 'Banned Account', 1, '{"accessToken":"dead-token"}', '2026-09-17T00:00:00Z', '2026-09-17T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatalf("failed to seed connection: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/freebuff/session?connectionId=fb-banned", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleFreebuffSessionStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if res["status"] != "banned" {
+		t.Errorf("expected status=banned, got %v", res["status"])
+	}
+	if res["connectionName"] != "Banned Account" {
+		t.Errorf("expected connectionName to be reported, got %v", res["connectionName"])
+	}
+}
+
+func TestHandleFreebuffSessionStatus_ReportsQuotaAndCountry(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	handler := NewOAuthHandler(db.NewRepo(database))
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status": "active",
+			"accessTier": "limited",
+			"model": "deepseek/deepseek-v4-flash",
+			"instanceId": "inst-quota",
+			"expiresAt": "2026-09-21T17:10:47.306Z",
+			"countryCode": "ID",
+			"countryBlockReason": "country_not_allowed",
+			"rateLimit": {
+				"model": "deepseek/deepseek-v4-flash",
+				"limit": 6,
+				"recentCount": 1,
+				"poolLabel": "Daily",
+				"resetAt": "2026-09-22T07:00:00.000Z",
+				"resetTimeZone": "America/Los_Angeles"
+			}
+		}`))
+	}))
+	defer mockUpstream.Close()
+
+	origBaseURL := freebuffAPIBaseURL
+	freebuffAPIBaseURL = mockUpstream.URL
+	defer func() { freebuffAPIBaseURL = origBaseURL }()
+
+	_, err := database.Exec(`
+		INSERT INTO providerConnections (id, provider, authType, name, isActive, data, createdAt, updatedAt)
+		VALUES ('fb-quota', 'freebuff', 'oauth', 'Quota Account', 1, '{"accessToken":"tok"}', '2026-09-17T00:00:00Z', '2026-09-17T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatalf("failed to seed connection: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/freebuff/session?connectionId=fb-quota", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleFreebuffSessionStatus(rec, req)
+
+	var res map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if res["status"] != "active" {
+		t.Fatalf("expected status=active, got %v", res["status"])
+	}
+	if res["accessTier"] != "limited" {
+		t.Errorf("expected accessTier=limited, got %v", res["accessTier"])
+	}
+	if res["countryCode"] != "ID" {
+		t.Errorf("expected countryCode=ID, got %v", res["countryCode"])
+	}
+	if res["countryBlockReason"] != "country_not_allowed" {
+		t.Errorf("expected countryBlockReason to be reported, got %v", res["countryBlockReason"])
+	}
+
+	rateLimit, ok := res["rateLimit"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a rateLimit block, got %v", res["rateLimit"])
+	}
+	if rateLimit["limit"] != float64(6) || rateLimit["recentCount"] != float64(1) {
+		t.Errorf("unexpected rateLimit: %v", rateLimit)
+	}
+	if rateLimit["poolLabel"] != "Daily" {
+		t.Errorf("expected poolLabel=Daily, got %v", rateLimit["poolLabel"])
+	}
 }

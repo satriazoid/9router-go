@@ -8,6 +8,7 @@
   let {
     variant = 'primary',
     size = 'md',
+    type = 'button',
     disabled = false,
     loading = false,
     fullWidth = false,
@@ -17,6 +18,7 @@
   }: {
     variant?: Variant
     size?: Size
+    type?: 'button' | 'submit' | 'reset'
     disabled?: boolean
     loading?: boolean
     fullWidth?: boolean
@@ -45,13 +47,13 @@
 </script>
 
 <button
-  type="button"
+  {type}
   class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 {variants[variant]} {sizes[size]} {fullWidth ? 'w-full' : ''} {klass}"
-  {disabled}
+  disabled={disabled || loading}
   {onclick}
 >
   {#if loading}
-    <span class="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+    <span class="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
   {/if}
   {@render children?.()}
 </button>

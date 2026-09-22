@@ -32,6 +32,17 @@ func shortHash(s string) string {
 	return hex.EncodeToString(h[:])[:12]
 }
 
+// firstString returns the first non-empty string stored under any of keys.
+// A nil map is safe and yields "".
+func firstString(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // HandleFreebuffInitiate initiates the Freebuff device authorization flow by
 // generating a secure auth code, fingerprint hash, and login URL.
 // POST /api/oauth/freebuff/initiate
@@ -256,6 +267,10 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// The upstream CLI contract returns the credentials nested under `user`
+	// once the browser flow completes, so the token has to be looked up there.
+	userObj, _ := rawUpstream["user"].(map[string]any)
+
 	authToken := upstream.AuthToken
 	if authToken == "" {
 		authToken = upstream.AuthTokenSnake
@@ -277,13 +292,16 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 			authToken = at
 		}
 	}
+	if authToken == "" {
+		authToken = firstString(userObj, "authToken", "auth_token", "accessToken", "access_token", "token", "apiKey")
+	}
 
 	status := strings.ToLower(strings.TrimSpace(upstream.Status))
 	if status == "success" || status == "ok" {
 		status = "authorized"
 	}
 	if status == "" {
-		if authToken != "" {
+		if authToken != "" || userObj != nil {
 			status = "authorized"
 		} else if strings.Contains(strings.ToLower(upstream.Error), "expired") || strings.Contains(strings.ToLower(upstream.Message), "expired") {
 			status = "expired"
@@ -293,41 +311,24 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 	}
 
 	email := upstream.Email
+	if email == "" {
+		email = firstString(rawUpstream, "email")
+	}
+	if email == "" {
+		email = firstString(userObj, "email")
+	}
+
 	name := upstream.Name
-	userId := ""
-	if rawUpstream != nil {
-		if email == "" {
-			if e, ok := rawUpstream["email"].(string); ok {
-				email = e
-			}
-		}
-		if name == "" {
-			if n, ok := rawUpstream["name"].(string); ok {
-				name = n
-			}
-		}
-		if uid, ok := rawUpstream["userId"].(string); ok {
-			userId = uid
-		} else if uid, ok := rawUpstream["user_id"].(string); ok {
-			userId = uid
-		}
-		if userObj, ok := rawUpstream["user"].(map[string]any); ok {
-			if email == "" {
-				if e, ok := userObj["email"].(string); ok {
-					email = e
-				}
-			}
-			if name == "" {
-				if n, ok := userObj["name"].(string); ok {
-					name = n
-				}
-			}
-			if userId == "" {
-				if uid, ok := userObj["id"].(string); ok {
-					userId = uid
-				}
-			}
-		}
+	if name == "" {
+		name = firstString(rawUpstream, "name")
+	}
+	if name == "" {
+		name = firstString(userObj, "name")
+	}
+
+	userId := firstString(rawUpstream, "userId", "user_id")
+	if userId == "" {
+		userId = firstString(userObj, "id", "userId", "user_id")
 	}
 
 	if status == "pending" {
@@ -405,6 +406,13 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 			"connectionId": connID,
 		})
 		return
+	}
+
+	if status == "authorized" {
+		// Authorized but no usable token in the payload — keep the client
+		// polling instead of reporting a success that saved nothing.
+		log.Warn("oauth", "freebuff authorized without token in payload")
+		status = "pending"
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{

@@ -15,6 +15,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +85,26 @@ func md5Hex(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// qoderCosySigPath mirrors upstream shared/qoder/cosy.js computeSigPath: the
+// request pathname with the leading "/algo" stripped.
+func qoderCosySigPath(requestURL string) string {
+	u, err := url.Parse(requestURL)
+	if err != nil {
+		return requestURL
+	}
+	pathname := u.Path
+	if pathname == "" {
+		pathname = requestURL
+	}
+	return strings.TrimPrefix(pathname, "/algo")
+}
+
+// BuildQoderCosyHeaders signs a Qoder request for any COSY path (chat and the
+// model list share the scheme). Exported for the dashboard key-validate probe.
+func BuildQoderCosyHeaders(body []byte, requestURL string, userID string, token string) (map[string]string, error) {
+	return buildQoderCosyHeaders(body, requestURL, userID, token)
+}
+
 func buildQoderCosyHeaders(body []byte, requestURL string, userID string, token string) (map[string]string, error) {
 	if userID == "" {
 		userID = "user-" + uuid.New().String()[:8]
@@ -127,7 +149,7 @@ func buildQoderCosyHeaders(body []byte, requestURL string, userID string, token 
 	})
 	payloadB64 := base64.StdEncoding.EncodeToString(payloadJSON)
 
-	sigPath := "/api/v2/service/pro/sse/agent_chat_generation"
+	sigPath := qoderCosySigPath(requestURL)
 	sigInput := fmt.Sprintf("%s\n%s\n%s\n%s\n%s", payloadB64, cosyKeyB64, timestamp, string(body), sigPath)
 	sig := md5Hex([]byte(sigInput))
 

@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { X } from 'lucide-svelte'
+  import { api } from '../../api/client'
+  import Badge from '../../lib/ui/Badge.svelte'
   import Button from '../../lib/ui/Button.svelte'
+  import Input from '../../lib/ui/Input.svelte'
+  import Modal from '../../lib/ui/Modal.svelte'
 
   interface Props {
     isOpen: boolean
-    type: 'openai-compatible' | 'anthropic-compatible'
+    type?: 'openai-compatible' | 'anthropic-compatible'
     isSubmitting?: boolean
     onClose: () => void
     onSubmit: (data: {
@@ -12,148 +15,203 @@
       prefix: string
       baseUrl: string
       apiType?: 'chat' | 'responses'
-      apiKey?: string
       type: string
     }) => Promise<void> | void
   }
 
   let {
     isOpen,
-    type,
-    isSubmitting = false,
+    type = 'openai-compatible',
     onClose,
     onSubmit,
   }: Props = $props()
 
-  let customFormName = $state('')
-  let customFormPrefix = $state('')
-  let customFormBaseUrl = $state('')
-  let customFormApiType = $state<'chat' | 'responses'>('chat')
-  let customFormApiKey = $state('')
+  const VARIANT_CONFIG = {
+    'openai-compatible': {
+      title: 'Add OpenAI Compatible',
+      defaultBaseUrl: 'https://api.openai.com/v1',
+      namePlaceholder: 'OpenAI Compatible (Prod)',
+      prefixPlaceholder: 'oc-prod',
+      baseUrlHint: 'Use the base URL (ending in /v1) for your OpenAI-compatible API.',
+      modelIdPlaceholder: 'e.g. gpt-4, claude-3-opus',
+      hasApiType: true,
+    },
+    'anthropic-compatible': {
+      title: 'Add Anthropic Compatible',
+      defaultBaseUrl: 'https://api.anthropic.com/v1',
+      namePlaceholder: 'Anthropic Compatible (Prod)',
+      prefixPlaceholder: 'ac-prod',
+      baseUrlHint: 'Use the base URL (ending in /v1) for your Anthropic-compatible API. The system will append /messages.',
+      modelIdPlaceholder: 'e.g. claude-3-opus',
+      hasApiType: false,
+    },
+  }
 
-  let isOpenAI = $derived(type === 'openai-compatible')
+  let config = $derived(VARIANT_CONFIG[type] || VARIANT_CONFIG['openai-compatible'])
+
+  let formName = $state('')
+  let formPrefix = $state('')
+  let formApiType = $state<'chat' | 'responses'>('chat')
+  let formBaseUrl = $state('')
+  let checkKey = $state('')
+  let checkModelId = $state('')
+  let validating = $state(false)
+  let validationResult = $state<{ valid: boolean; error?: string; method?: string } | null>(null)
+  let submitting = $state(false)
+
+  // Reset the form when the modal opens.
 
   $effect(() => {
     if (isOpen) {
-      customFormName = ''
-      customFormPrefix = ''
-      customFormBaseUrl = isOpenAI ? 'https://api.openai.com/v1' : 'https://api.anthropic.com/v1'
-      customFormApiType = 'chat'
-      customFormApiKey = ''
+      formName = ''
+      formPrefix = ''
+      formApiType = 'chat'
+      checkKey = ''
+      checkModelId = ''
+      validationResult = null
+      submitting = false
+      formBaseUrl = config.defaultBaseUrl
     }
   })
 
-  function handleSubmit(e: SubmitEvent) {
-    e.preventDefault()
-    if (!customFormName.trim() || !customFormPrefix.trim()) return
-    onSubmit({
-      name: customFormName.trim(),
-      prefix: customFormPrefix.trim(),
-      baseUrl: customFormBaseUrl.trim(),
-      apiType: isOpenAI ? customFormApiType : undefined,
-      apiKey: customFormApiKey.trim() || undefined,
+  // Mirrors upstream: when the API type changes (OpenAI only), snap the base
+  // URL back to the provider default so a stale path isn't reused across API shapes.
+
+  $effect(() => {
+    if (config.hasApiType) {
+      formBaseUrl = config.defaultBaseUrl
+    }
+  })
+
+  async function handleCheck() {
+    validating = true
+    try {
+      validationResult = await api.validateProviderNode({
+        baseUrl: formBaseUrl.trim(),
+        apiKey: checkKey.trim(),
+        type,
+        modelId: checkModelId.trim() || undefined,
+      })
+    } catch (err) {
+      validationResult = {
+        valid: false,
+        error: err instanceof Error ? err.message : String(err),
+      }
+    } finally {
+      validating = false
+    }
+  }
+
+  function handleSubmit(e?: SubmitEvent) {
+    e?.preventDefault()
+    if (!formName.trim() || !formPrefix.trim() || !formBaseUrl.trim() || submitting) return
+    submitting = true
+    Promise.resolve(onSubmit({
+      name: formName.trim(),
+      prefix: formPrefix.trim(),
+      baseUrl: formBaseUrl.trim(),
+      apiType: config.hasApiType ? formApiType : undefined,
       type,
+    })).finally(() => {
+      submitting = false
     })
   }
 </script>
 
-{#if isOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-    <div class="w-full max-w-md bg-surface border border-border rounded-2xl shadow-2xl overflow-hidden animate-scale-in">
-      <div class="px-6 py-4 border-b border-border flex items-center justify-between">
-        <h3 class="font-bold text-text-main text-base">
-          {isOpenAI ? 'Add OpenAI Compatible' : 'Add Anthropic Compatible'}
-        </h3>
-        <button type="button" onclick={onClose} class="text-text-muted hover:text-text-main cursor-pointer">
-          <X class="w-5 h-5" />
-        </button>
+<Modal {isOpen} title={config.title} {onClose}>
+  <div class="flex flex-col gap-4">
+    <Input
+      label="Name"
+      bind:value={formName}
+      placeholder={config.namePlaceholder}
+      hint="Required. A friendly label for this node."
+      required
+    />
+
+    <Input
+      label="Prefix"
+      bind:value={formPrefix}
+      placeholder={config.prefixPlaceholder}
+      hint="Required. Used as the provider prefix for model IDs."
+      required
+    />
+
+    {#if config.hasApiType}
+      <div>
+        <label for="api-type" class="text-sm font-medium text-text-main mb-1.5 block">API Type</label>
+        <select
+          id="api-type"
+          bind:value={formApiType}
+          class="w-full py-2.5 px-3 text-sm text-text-main bg-surface-2 rounded-[10px] border border-transparent focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/40 transition-all duration-150 ease-out text-[16px] sm:text-sm"
+        >
+          <option value="chat">Chat Completions</option>
+          <option value="responses">Responses API</option>
+        </select>
       </div>
+    {/if}
 
-      <form onsubmit={handleSubmit} class="p-6 flex flex-col gap-4">
-        <div>
-          <label for="nodeName" class="block text-xs font-medium text-text-muted mb-1">Name</label>
-          <input
-            id="nodeName"
-            type="text"
-            required
-            bind:value={customFormName}
-            placeholder={isOpenAI ? 'e.g. sumopod, local-vllm' : 'e.g. anthropic-prod, mini-claude'}
-            class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main focus:outline-none focus:border-brand-500"
-          />
-        </div>
+    <Input
+      label="Base URL"
+      bind:value={formBaseUrl}
+      placeholder={config.defaultBaseUrl}
+      hint={config.baseUrlHint}
+      inputClass="font-mono"
+      required
+    />
 
-        {#if isOpenAI}
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label for="nodePrefixOAI" class="block text-xs font-medium text-text-muted mb-1">Prefix</label>
-              <input
-                id="nodePrefixOAI"
-                type="text"
-                required
-                bind:value={customFormPrefix}
-                placeholder="e.g. sp, vllm"
-                class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main focus:outline-none focus:border-brand-500"
-              />
-            </div>
-            <div>
-              <label for="nodeApiType" class="block text-xs font-medium text-text-muted mb-1">API Type</label>
-              <select
-                id="nodeApiType"
-                bind:value={customFormApiType}
-                class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main focus:outline-none focus:border-brand-500"
-              >
-                <option value="chat">Chat Completions</option>
-                <option value="responses">Responses API</option>
-              </select>
-            </div>
-          </div>
+    <Input
+      label="API Key (for Check)"
+      type="password"
+      bind:value={checkKey}
+    />
+
+    <Input
+      label="Model ID (optional)"
+      bind:value={checkModelId}
+      placeholder={config.modelIdPlaceholder}
+      hint="If provider lacks /models endpoint, enter a model ID to validate via chat/completions instead."
+    />
+
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <Button
+        onclick={handleCheck}
+        disabled={!checkKey.trim() || validating || !formBaseUrl.trim()}
+        variant="secondary"
+        class="w-full sm:w-auto"
+      >
+        {validating ? 'Checking...' : 'Check'}
+      </Button>
+      {#if validationResult}
+        {#if validationResult.valid}
+          <span class="inline-flex items-center gap-1.5">
+            <Badge tone="success">Valid</Badge>
+            {#if validationResult.method === 'chat'}
+              <span class="text-sm text-text-muted">(via inference test)</span>
+            {/if}
+          </span>
         {:else}
-          <div>
-            <label for="nodePrefixAnth" class="block text-xs font-medium text-text-muted mb-1">Prefix</label>
-            <input
-              id="nodePrefixAnth"
-              type="text"
-              required
-              bind:value={customFormPrefix}
-              placeholder="e.g. ac, cl"
-              class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main focus:outline-none focus:border-brand-500"
-            />
+          <div class="flex flex-col gap-1">
+            <Badge tone="error">Invalid</Badge>
+            {#if validationResult.error}
+              <span class="text-sm text-red-500">{validationResult.error}</span>
+            {/if}
           </div>
         {/if}
+      {/if}
+    </div>
 
-        <div>
-          <label for="nodeBaseUrl" class="block text-xs font-medium text-text-muted mb-1">Base URL</label>
-          <input
-            id="nodeBaseUrl"
-            type="text"
-            required
-            bind:value={customFormBaseUrl}
-            placeholder={isOpenAI ? 'https://api.openai.com/v1' : 'https://api.anthropic.com/v1'}
-            class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main font-mono focus:outline-none focus:border-brand-500"
-          />
-          <p class="text-[11px] text-text-muted mt-1">
-            {isOpenAI ? 'Use the base URL (ending in /v1) for your OpenAI compatible API.' : 'System will append /messages automatically.'}
-          </p>
-        </div>
-
-        <div>
-          <label for="nodeApiKey" class="block text-xs font-medium text-text-muted mb-1">Initial API Key (Optional)</label>
-          <input
-            id="nodeApiKey"
-            type="password"
-            bind:value={customFormApiKey}
-            placeholder={isOpenAI ? 'sk-...' : 'sk-ant-...'}
-            class="w-full px-3 py-2 text-xs rounded-xl bg-bg border border-border text-text-main font-mono focus:outline-none focus:border-brand-500"
-          />
-        </div>
-
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-border">
-          <Button size="sm" variant="ghost" onclick={onClose}>Cancel</Button>
-          <Button size="sm" variant="primary" type="submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Creating...' : 'Create Endpoint'}
-          </Button>
-        </div>
-      </form>
+    <div class="flex flex-col gap-2 sm:flex-row">
+      <Button
+        type="button"
+        onclick={handleSubmit}
+        fullWidth
+        disabled={!formName.trim() || !formPrefix.trim() || !formBaseUrl.trim() || submitting}
+      >
+        {submitting ? 'Creating...' : 'Create'}
+      </Button>
+      <Button onclick={onClose} variant="ghost" fullWidth>
+        Cancel
+      </Button>
     </div>
   </div>
-{/if}
+</Modal>

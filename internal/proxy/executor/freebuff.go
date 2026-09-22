@@ -301,10 +301,12 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 		resp.Body.Close()
 
 		var errData struct {
-			Status       string `json:"status"`
-			Error        string `json:"error"`
-			Message      string `json:"message"`
-			CurrentModel string `json:"currentModel"`
+			Status             string `json:"status"`
+			Error              string `json:"error"`
+			Message            string `json:"message"`
+			CurrentModel       string `json:"currentModel"`
+			CountryCode        string `json:"countryCode"`
+			CountryBlockReason string `json:"countryBlockReason"`
 		}
 		_ = json.Unmarshal(respBytes, &errData)
 
@@ -315,6 +317,11 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 				currentModel = model
 			}
 			return newModelLockedError(w, currentModel, model)
+		}
+
+		// A blocked region is not a stale seat: re-claiming would loop.
+		if freebuffCountryRefusal(respBytes) {
+			return newCountryBlockedError(w, errData.CountryCode, errData.CountryBlockReason)
 		}
 
 		// If limited IP, fail immediately
@@ -357,9 +364,11 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 		resp.Body.Close()
 
 		var errData struct {
-			Status       string `json:"status"`
-			Error        string `json:"error"`
-			CurrentModel string `json:"currentModel"`
+			Status             string `json:"status"`
+			Error              string `json:"error"`
+			CurrentModel       string `json:"currentModel"`
+			CountryCode        string `json:"countryCode"`
+			CountryBlockReason string `json:"countryBlockReason"`
 		}
 		_ = json.Unmarshal(respBytes, &errData)
 		if errData.Status == "model_locked" || errData.Error == "model_locked" || strings.Contains(string(respBytes), "model_locked") {
@@ -368,6 +377,9 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 				currentModel = model
 			}
 			return newModelLockedError(w, currentModel, model)
+		}
+		if freebuffCountryRefusal(respBytes) {
+			return newCountryBlockedError(w, errData.CountryCode, errData.CountryBlockReason)
 		}
 		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: respBytes}
 	}

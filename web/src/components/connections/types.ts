@@ -1,4 +1,4 @@
-import { api, type ProviderConnection } from '../../api/client'
+import { api, getAuthHeaders, type ProviderConnection } from '../../api/client'
 import { getModelCaps, getModelKind } from '../../lib/models'
 import { PROVIDER_CATALOG, PROVIDER_CATALOG_MAP } from '../../lib/providers'
 
@@ -41,6 +41,8 @@ export interface CustomModelData {
   name?: string
   providerAlias?: string
   type?: string
+  /** Capability flags saved from the Add Custom Model modal (upstream parity). */
+  caps?: { vision?: boolean; reasoning?: boolean }
 }
 
 export function getIconPath(id?: string | null, apiType?: string): string {
@@ -122,6 +124,40 @@ export async function fetchProviderModelsData(
     }
   } catch {
     return { customModels: [], disabledModelIds: [] }
+  }
+}
+
+export interface SuggestedModel {
+  id: string
+  name: string
+  contextLength?: number
+}
+
+// In-memory cache for suggested-model catalogs (upstream parity:
+// providerModelsFetcher.js CACHE_TTL_MS).
+const suggestedCache = new Map<string, { data: SuggestedModel[]; expiresAt: number }>()
+const SUGGESTED_CACHE_TTL_MS = 5 * 60 * 1000
+
+/** Port of fetchSuggestedModels (upstream providerModelsFetcher.js). */
+export async function fetchSuggestedModels(fetcher: {
+  url: string
+  type: string
+}): Promise<SuggestedModel[]> {
+  if (!fetcher?.url || !fetcher?.type) return []
+  const cached = suggestedCache.get(fetcher.url)
+  if (cached && Date.now() < cached.expiresAt) return cached.data
+  try {
+    const params = new URLSearchParams({ url: fetcher.url, type: fetcher.type })
+    const res = await fetch(`/api/providers/suggested-models?${params}`, {
+      headers: getAuthHeaders(),
+    })
+    if (!res.ok) return []
+    const json = await res.json()
+    const data = Array.isArray(json?.data) ? json.data : []
+    suggestedCache.set(fetcher.url, { data, expiresAt: Date.now() + SUGGESTED_CACHE_TTL_MS })
+    return data
+  } catch {
+    return []
   }
 }
 

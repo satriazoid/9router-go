@@ -3,7 +3,12 @@ package dashboard
 import (
 	json "encoding/json/v2"
 	"io"
+	"math"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -26,21 +31,270 @@ func (h *DashboardHandler) HandleGetConnections(w http.ResponseWriter, r *http.R
 }
 
 // HandleGetProvidersClient handles GET /api/providers and GET /api/providers/client.
-// Upstream Next.js wraps connections in a root object: {"connections": [...]}.
+// Mirrors upstream 9router providers/client route: usage-eligible connections
+// only, with provider/accountStatus filters, priority|provider sort, and
+// page/pageSize pagination plus providerOptions and totals.
 func (h *DashboardHandler) HandleGetProvidersClient(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	providerFilter := q.Get("provider")
+	if providerFilter == "" {
+		providerFilter = "all"
+	}
+	accountStatus := q.Get("accountStatus")
+	if accountStatus == "" {
+		accountStatus = "all"
+	}
+	sortMode := q.Get("sort")
+	if sortMode == "" {
+		sortMode = "priority"
+	}
+	page := parsePositiveIntQuery(q.Get("page"), 1)
+	pageSize := parsePositiveIntQuery(q.Get("pageSize"), defaultProvidersPageSize)
+	if pageSize > maxProvidersPageSize {
+		pageSize = maxProvidersPageSize
+	}
+
 	conns, err := h.Repo.GetProviderConnections("", false)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if conns == nil {
-		conns = []*models.ProviderConnection{}
+	eligible := make([]*models.ProviderConnection, 0, len(conns))
+	for _, c := range conns {
+		if c != nil && isUsageEligibleConnection(c) {
+			eligible = append(eligible, c)
+		}
 	}
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"connections": conns})
+	providerOptions := uniqueSortedProviders(eligible)
+	providerFiltered := make([]*models.ProviderConnection, 0, len(eligible))
+	for _, c := range eligible {
+		if providerFilter == "all" || c.Provider == providerFilter {
+			providerFiltered = append(providerFiltered, c)
+		}
+	}
+	accountFiltered := make([]*models.ProviderConnection, 0, len(providerFiltered))
+	for _, c := range providerFiltered {
+		active := c.IsActive != 0
+		if accountStatus == "active" && !active {
+			continue
+		}
+		if accountStatus == "inactive" && active {
+			continue
+		}
+		accountFiltered = append(accountFiltered, c)
+	}
+	sortProviderConnections(accountFiltered, sortMode)
+
+	total := len(accountFiltered)
+	totalPages := 1
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	currentPage := page
+	if currentPage > totalPages {
+		currentPage = totalPages
+	}
+	start := (currentPage - 1) * pageSize
+	end := start + pageSize
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	pageConns := accountFiltered[start:end]
+	sanitized := make([]map[string]any, 0, len(pageConns))
+	for _, c := range pageConns {
+		sanitized = append(sanitized, sanitizeProviderConnection(c))
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"connections":     sanitized,
+		"providerOptions": providerOptions,
+		"pagination": map[string]any{
+			"page": currentPage, "pageSize": pageSize, "total": total, "totalPages": totalPages,
+		},
+		"totals": map[string]any{
+			"eligibleConnections": len(eligible), "providerFilteredConnections": len(providerFiltered),
+		},
+	})
+}
+
+const (
+	defaultProvidersPageSize = 20
+	maxProvidersPageSize     = 500
+)
+
+// usageSupportedProviders mirrors upstream USAGE_SUPPORTED_PROVIDERS
+// (registry features.usage).
+var usageSupportedProviders = []string{
+	"antigravity", "claude", "codebuddy-cn", "codebuddy-intl", "codex",
+	"commandcode", "deepseek", "gemini-cli", "github", "glm", "glm-cn",
+	"grok-cli", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
+	"opencode-go", "qoder", "trae", "vercel-ai-gateway", "xiaomi-mimo", "zed",
+}
+
+// usageApikeyProviders mirrors upstream USAGE_APIKEY_PROVIDERS
+// (registry features.usageApikey).
+var usageApikeyProviders = []string{
+	"codebuddy-cn", "codebuddy-intl", "commandcode", "deepseek", "glm",
+	"glm-cn", "groq", "kimi", "kiro", "minimax", "minimax-cn", "ollama",
+	"opencode-go", "qoder", "vercel-ai-gateway", "xiaomi-mimo",
+}
+
+func strSliceContains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+func isUsageEligibleConnection(c *models.ProviderConnection) bool {
+	if !strSliceContains(usageSupportedProviders, c.Provider) {
+		return false
+	}
+	return c.AuthType == "oauth" || strSliceContains(usageApikeyProviders, c.Provider)
+}
+
+func uniqueSortedProviders(conns []*models.ProviderConnection) []string {
+	set := map[string]struct{}{}
+	for _, c := range conns {
+		set[c.Provider] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortProviderConnections(conns []*models.ProviderConnection, sortMode string) {
+	order := map[string]int{}
+	for i, p := range usageSupportedProviders {
+		order[p] = i
+	}
+	priorityOf := func(c *models.ProviderConnection) int {
+		if c.Priority != nil {
+			return *c.Priority
+		}
+		return math.MaxInt
+	}
+	sort.SliceStable(conns, func(i, j int) bool {
+		a, b := conns[i], conns[j]
+		if sortMode == "provider" {
+			oa, oka := order[a.Provider]
+			if !oka {
+				oa = len(order)
+			}
+			ob, okb := order[b.Provider]
+			if !okb {
+				ob = len(order)
+			}
+			if oa != ob {
+				return oa < ob
+			}
+			return a.Provider < b.Provider
+		}
+		if pa, pb := priorityOf(a), priorityOf(b); pa != pb {
+			return pa < pb
+		}
+		return a.Provider < b.Provider
+	})
+}
+
+func parsePositiveIntQuery(v string, fallback int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
+}
+
+var longTokenPattern = regexp.MustCompile(`[A-Za-z0-9_-]{32,}`)
+
+// maskConnectionName mirrors upstream maskName: long token-like names are truncated.
+func maskConnectionName(name string) string {
+	if len(name) > 16 && longTokenPattern.MatchString(name) {
+		return name[:8] + "***"
+	}
+	return name
+}
+
+// sanitizeProviderConnection mirrors upstream sanitize(): only safe fields,
+// secrets in data JSON never leave the server.
+func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
+	safe := map[string]any{
+		"id": c.ID, "provider": c.Provider, "authType": c.AuthType,
+		"isActive": c.IsActive, "createdAt": c.CreatedAt, "updatedAt": c.UpdatedAt,
+	}
+	if c.Name != nil {
+		safe["name"] = maskConnectionName(*c.Name)
+	}
+	if c.Email != nil {
+		safe["email"] = *c.Email
+	}
+	if c.Priority != nil {
+		safe["priority"] = *c.Priority
+	}
+	if strings.TrimSpace(c.Data) == "" {
+		return safe
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(c.Data), &data); err != nil || data == nil {
+		return safe
+	}
+	for _, f := range []string{
+		"displayName", "defaultModel", "testStatus", "lastError", "lastErrorAt",
+		"errorCode", "expiresAt", "lastUsedAt", "consecutiveUseCount",
+		"globalPriority", "plan", "message",
+	} {
+		if v, ok := data[f]; ok && v != nil {
+			safe[f] = v
+		}
+	}
+	if psd, ok := data["providerSpecificData"].(map[string]any); ok {
+		out := map[string]any{}
+		for _, f := range []string{
+			"baseUrl", "azureEndpoint", "deployment", "apiVersion", "accountId",
+			"region", "projectId", "resourceUrl", "proxyPoolId",
+			"connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy",
+			"githubLogin", "githubName", "githubEmail", "githubUserId",
+			"username", "firstName", "lastName", "authMethod", "authKind",
+			"profileArn",
+		} {
+			if v, ok := psd[f]; ok && v != nil {
+				out[f] = v
+			}
+		}
+		if len(out) > 0 {
+			safe["providerSpecificData"] = out
+		}
+	}
+	return safe
+}
+
+// createConnectionRequest is the POST /api/connections body. Beyond the legacy
+// id/provider/authType/name/apiKey/data fields it accepts what the dashboard
+// add-key modal sends, mirroring upstream POST /api/providers: priority,
+// providerSpecificData, testStatus and proxyPoolId.
+type createConnectionRequest struct {
+	ID                   string         `json:"id"`
+	Provider             string         `json:"provider"`
+	AuthType             string         `json:"authType"`
+	Name                 string         `json:"name"`
+	DisplayName          string         `json:"displayName"`
+	APIKey               string         `json:"apiKey"`
+	TestStatus           string         `json:"testStatus"`
+	ProxyPoolID          string         `json:"proxyPoolId"`
+	Priority             *int           `json:"priority"`
+	ProviderSpecificData map[string]any `json:"providerSpecificData"`
+	Data                 any            `json:"data"`
 }
 
 // HandleCreateConnection handles POST /api/connections.
-// Parses id, provider, authType, name, apiKey, data and calls CreateProviderConnection.
+// Builds the connection data payload (apiKey + providerSpecificData +
+// testStatus + proxyPoolId) and inserts the row with an explicit priority.
 func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -49,14 +303,7 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 	}
 	defer r.Body.Close()
 
-	var req struct {
-		ID       string `json:"id"`
-		Provider string `json:"provider"`
-		AuthType string `json:"authType"`
-		Name     string `json:"name"`
-		APIKey   string `json:"apiKey"`
-		Data     any    `json:"data"`
-	}
+	var req createConnectionRequest
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
@@ -74,52 +321,82 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 	if req.AuthType == "" {
 		req.AuthType = "apikey"
 	}
+	name := req.Name
+	if name == "" {
+		name = req.DisplayName
+	}
+
+	dataMap, rawData := decodeConnectionData(req.Data)
+	if dataMap == nil {
+		dataMap = make(map[string]any)
+	}
 
 	apiKey := req.APIKey
-	var dataStr string
-	if req.Data != nil {
-		switch d := req.Data.(type) {
-		case string:
-			dataStr = d
-			if apiKey == "" {
-				var m map[string]any
-				if err := json.Unmarshal([]byte(d), &m); err == nil {
-					if k, ok := m["apiKey"].(string); ok {
-						apiKey = k
-					}
-				}
-			}
-		case map[string]any:
-			if apiKey == "" {
-				if k, ok := d["apiKey"].(string); ok {
-					apiKey = k
-				}
-			}
-			b, err := json.Marshal(d)
-			if err == nil {
-				dataStr = string(b)
-			}
-		default:
-			b, err := json.Marshal(d)
-			if err == nil {
-				dataStr = string(b)
-			}
+	if apiKey == "" {
+		if k, ok := dataMap["apiKey"].(string); ok {
+			apiKey = k
 		}
 	}
-
-	if err := h.Repo.CreateProviderConnection(req.ID, req.Provider, req.AuthType, req.Name, apiKey); err != nil {
-		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
-		return
+	if apiKey != "" {
+		dataMap["apiKey"] = apiKey
+	}
+	if len(req.ProviderSpecificData) > 0 {
+		dataMap["providerSpecificData"] = req.ProviderSpecificData
+	}
+	if req.TestStatus != "" {
+		dataMap["testStatus"] = req.TestStatus
+	}
+	if req.ProxyPoolID != "" {
+		dataMap["proxyPoolId"] = req.ProxyPoolID
 	}
 
-	if dataStr != "" {
-		_ = h.Repo.UpdateProviderConnection(req.ID, req.Name, 0, true, dataStr)
+	dataStr := rawData
+	if len(dataMap) > 0 {
+		encoded, err := json.Marshal(dataMap)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to encode connection data")
+			return
+		}
+		dataStr = string(encoded)
+	}
+
+	if err := h.Repo.CreateProviderConnectionFull(req.ID, req.Provider, req.AuthType, name, req.Priority, dataStr); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"id":     req.ID,
 	})
+}
+
+// decodeConnectionData normalises the legacy `data` field into a mutable map
+// plus the raw string form for payloads that are not a JSON object (those are
+// stored verbatim, as before).
+func decodeConnectionData(data any) (map[string]any, string) {
+	switch d := data.(type) {
+	case nil:
+		return nil, ""
+	case string:
+		var m map[string]any
+		if err := json.Unmarshal([]byte(d), &m); err == nil {
+			return m, ""
+		}
+		return nil, d
+	case map[string]any:
+		return d, ""
+	default:
+		encoded, err := json.Marshal(d)
+		if err != nil {
+			return nil, ""
+		}
+		var m map[string]any
+		if err := json.Unmarshal(encoded, &m); err == nil {
+			return m, ""
+		}
+		return nil, string(encoded)
+	}
 }
 
 // HandleUpdateConnection handles PUT /api/connections/{id}.

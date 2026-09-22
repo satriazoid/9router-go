@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"9router/proxy/internal/handlerutil"
-	"9router/proxy/internal/handlers/chat"
 )
 
 // HandleGetConnectionUsage handles GET /api/usage/{connectionId}
@@ -36,33 +35,25 @@ func (h *DashboardHandler) HandleGetConnectionUsage(w http.ResponseWriter, r *ht
 		_ = json.Unmarshal([]byte(conn.Data), &data)
 	}
 
-	// Antigravity quota resolution
+	// Live provider quota fetchers (ports of open-sse/services/usage/*.js).
+	// Antigravity keeps its existing dedicated path below.
+	if res, ok := fetchProviderUsage(r.Context(), conn.Provider, data); ok {
+		handlerutil.WriteJSON(w, http.StatusOK, res.toResponse())
+		return
+	}
+
+	// Antigravity quota resolution (dashboard presentation with tier check +
+	// weekly overlay — parity with open-sse/services/usage/google.js).
 	if conn.Provider == "antigravity" && data != nil {
 		accessToken, _ := data["accessToken"].(string)
 		projectID, _ := data["projectId"].(string)
 		if accessToken != "" {
-			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
 
-			quotas, qErr := chat.RefreshAntigravityQuota(ctx, http.DefaultClient, conn.ID, accessToken, projectID)
-			if qErr == nil && len(quotas) > 0 {
-				respQuotas := make(map[string]any)
-				for m, q := range quotas {
-					respQuotas[m] = map[string]any{
-						"used":                100 - q.RemainingPercentage,
-						"total":               100,
-						"remainingPercentage": q.RemainingPercentage,
-						"resetAt":             q.ResetAt.Format(time.RFC3339),
-						"unlimited":           false,
-						"displayName":         m,
-					}
-				}
-				handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-					"plan":   "Antigravity",
-					"quotas": respQuotas,
-				})
-				return
-			}
+			res := fetchAntigravityDashboardUsage(ctx, accessToken, projectID)
+			handlerutil.WriteJSON(w, http.StatusOK, res.toResponse())
+			return
 		}
 	}
 

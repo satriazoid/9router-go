@@ -62,6 +62,7 @@ func TestSetupRoutes_OAuthEndpointsMounted(t *testing.T) {
 		{"POST", "/api/oauth/freebuff/initiate"},
 		{"POST", "/api/oauth/freebuff/poll"},
 		{"GET", "/api/oauth/freebuff/session"},
+		{"POST", "/api/oauth/freebuff/session/switch"},
 		{"GET", "/api/oauth/antigravity/authorize"},
 		{"GET", "/api/oauth/antigravity/callback"},
 		{"POST", "/api/oauth/antigravity/callback"},

@@ -65,3 +65,102 @@ func TestGetBestConnection_NoAuth_WithProxyStrategy(t *testing.T) {
 		t.Errorf("expected ProxyPoolID %s from settings strategy, got %s", poolID, connData.ProxyPoolID)
 	}
 }
+
+func TestResolveProviderProxyPoolID_CrossAlias(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+
+	if _, err := database.Exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, data TEXT);`); err != nil {
+		t.Fatalf("create settings table: %v", err)
+	}
+
+	// User sets proxyPoolId under "antigravity", but request asks for "opencode"
+	settingsJSON := `{
+		"providerStrategies": {
+			"antigravity": {
+				"proxyPoolId": "pool-antigravity-123"
+			}
+		}
+	}`
+	if _, err := database.Exec(`INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, settingsJSON); err != nil {
+		t.Fatalf("insert settings: %v", err)
+	}
+
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	// 1. Direct match on antigravity
+	if got := h.ResolveProviderProxyPoolID("antigravity"); got != "pool-antigravity-123" {
+		t.Errorf("expected pool-antigravity-123 for antigravity, got %q", got)
+	}
+
+	// 2. Cross-alias match on opencode (should find antigravity proxy pool)
+	if got := h.ResolveProviderProxyPoolID("opencode"); got != "pool-antigravity-123" {
+		t.Errorf("expected opencode to inherit pool-antigravity-123 from antigravity strategy, got %q", got)
+	}
+
+	// 3. Reverse cross-alias: set under "opencode", check "antigravity"
+	settingsJSON2 := `{
+		"providerStrategies": {
+			"opencode": {
+				"proxyPoolId": "pool-opencode-456"
+			}
+		}
+	}`
+	if _, err := database.Exec(`UPDATE settings SET data = ? WHERE id = 1`, settingsJSON2); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	if got := h.ResolveProviderProxyPoolID("antigravity"); got != "pool-opencode-456" {
+		t.Errorf("expected antigravity to inherit pool-opencode-456 from opencode strategy, got %q", got)
+	}
+
+	// 4. Cline <-> clinepass alias
+	settingsJSON3 := `{
+		"providerStrategies": {
+			"cline": {
+				"proxyPoolId": "pool-cline-789"
+			}
+		}
+	}`
+	if _, err := database.Exec(`UPDATE settings SET data = ? WHERE id = 1`, settingsJSON3); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	if got := h.ResolveProviderProxyPoolID("clinepass"); got != "pool-cline-789" {
+		t.Errorf("expected clinepass to inherit pool-cline-789 from cline strategy, got %q", got)
+	}
+}
+
+func TestGetBestConnection_Opencode_InheritsProxyFromAntigravity(t *testing.T) {
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+
+	if _, err := database.Exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, data TEXT);`); err != nil {
+		t.Fatalf("create settings table: %v", err)
+	}
+
+	settingsJSON := `{
+		"providerStrategies": {
+			"antigravity": {
+				"proxyPoolId": "pool-vercel-relay-xyz"
+			}
+		}
+	}`
+	if _, err := database.Exec(`INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, settingsJSON); err != nil {
+		t.Fatalf("insert settings: %v", err)
+	}
+
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	// Opencode is NoAuth, so GetBestConnection returns a virtual connection
+	conn, connData, err := h.GetBestConnection("opencode", "", nil, "")
+	if err != nil {
+		t.Fatalf("GetBestConnection(opencode) failed: %v", err)
+	}
+	if conn == nil || connData == nil {
+		t.Fatal("expected virtual connection for opencode")
+	}
+	if connData.ProxyPoolID != "pool-vercel-relay-xyz" {
+		t.Errorf("expected ProxyPoolID 'pool-vercel-relay-xyz' on opencode virtual connection, got %q", connData.ProxyPoolID)
+	}
+}

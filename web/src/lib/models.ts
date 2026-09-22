@@ -19,9 +19,11 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "anthropic": "anthropic",
   "antigravity": "ag",
   "assemblyai": "assemblyai",
+  "aws-polly": "aws-polly",
   "azure": "azure",
   "blackbox": "blackbox",
   "byteplus": "byteplus",
+  "cartesia": "cartesia",
   "cerebras": "cerebras",
   "chutes": "chutes",
   "claude": "cc",
@@ -32,11 +34,15 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "codex": "cx",
   "cohere": "cohere",
   "commandcode": "commandcode",
+  "coqui": "coqui",
   "cursor": "cu",
   "deepgram": "deepgram",
   "deepseek": "deepseek",
+  "devin-cli": "devin-cli",
+  "elevenlabs": "elevenlabs",
   "featherless": "featherless",
   "fireworks": "fireworks",
+  "fish-audio": "fish-audio",
   "freebuff": "fb",
   "gemini-cli": "gc",
   "gemini": "gemini",
@@ -49,6 +55,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "groq": "groq",
   "hyperbolic": "hyperbolic",
   "iflow": "if",
+  "inworld": "inworld",
+  "jina-ai": "jina-ai",
   "kilocode": "kc",
   "kimchi": "kimchi",
   "kimi": "kimi",
@@ -70,14 +78,17 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "perplexity-web": "perplexity-web",
   "perplexity": "perplexity",
   "perplexity-agent": "perplexity-agent",
+  "playht": "playht",
   "qoder": "qd",
   "siliconflow": "siliconflow",
   "together": "together",
+  "trae": "trae",
   "venice": "venice",
   "vercel-ai-gateway": "vercel-ai-gateway",
   "vertex-partner": "vertex-partner",
   "vertex": "vertex",
   "volcengine-ark": "volcengine-ark",
+  "windsurf": "windsurf",
   "xai": "xai",
   "xiaomi-mimo": "xiaomi-mimo",
   "xiaomi-tokenplan": "xiaomi-tokenplan",
@@ -95,6 +106,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "morph": "morph",
   "poolside": "poolside",
   "tokenrouter": "tokenrouter",
+  "tortoise": "tortoise",
   "alitp-intl": "alitp-intl"
 };
 
@@ -347,6 +359,28 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "stt"
     }
   ],
+  "aws-polly": [
+    {
+      "id": "standard",
+      "name": "Standard",
+      "kind": "tts"
+    },
+    {
+      "id": "neural",
+      "name": "Neural",
+      "kind": "tts"
+    },
+    {
+      "id": "long-form",
+      "name": "Long-Form",
+      "kind": "tts"
+    },
+    {
+      "id": "generative",
+      "name": "Generative",
+      "kind": "tts"
+    }
+  ],
   "black-forest-labs": [
     {
       "id": "flux-pro-1.1",
@@ -486,6 +520,18 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gpt-oss-120b-250805",
       "name": "GPT-OSS-120B"
+    }
+  ],
+  "cartesia": [
+    {
+      "id": "sonic-2",
+      "name": "Sonic 2",
+      "kind": "tts"
+    },
+    {
+      "id": "sonic-3",
+      "name": "Sonic 3",
+      "kind": "tts"
     }
   ],
   "cerebras": [
@@ -817,6 +863,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "cx": [
     {
+      "id": "codex-auto-review",
+      "name": "Codex Auto Review"
+    },
+    {
       "id": "gpt-6-astra",
       "name": "GPT 6.0 Astra"
     },
@@ -1106,6 +1156,13 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "image"
     }
   ],
+  "coqui": [
+    {
+      "id": "tts_models/en/ljspeech/tacotron2-DDC",
+      "name": "Tacotron2 DDC (LJSpeech)",
+      "kind": "tts"
+    }
+  ],
   "commandcode": [
     {
       "id": "deepseek/deepseek-v4-pro",
@@ -1273,6 +1330,148 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek V3.2 Reasoner"
     }
   ],
+  "devin-cli": [
+    {
+      "id": "swe-1.6-fast",
+      "name": "SWE 1.6 Fast"
+    },
+    {
+      "id": "swe-1.6",
+      "name": "SWE 1.6"
+    },
+    {
+      "id": "swe-1.5-fast",
+      "name": "SWE 1.5 Fast"
+    },
+    {
+      "id": "swe-1.5",
+      "name": "SWE 1.5"
+    },
+    {
+      "id": "claude-opus-4.7-max",
+      "name": "Claude Opus 4.7 Max"
+    },
+    {
+      "id": "claude-opus-4.7-high",
+      "name": "Claude Opus 4.7 High"
+    },
+    {
+      "id": "claude-opus-4.7-medium",
+      "name": "Claude Opus 4.7 Medium"
+    },
+    {
+      "id": "claude-opus-4.7-low",
+      "name": "Claude Opus 4.7 Low"
+    },
+    {
+      "id": "claude-sonnet-4.6-thinking-1m",
+      "name": "Claude Sonnet 4.6 Thinking 1M"
+    },
+    {
+      "id": "claude-sonnet-4.6-thinking",
+      "name": "Claude Sonnet 4.6 Thinking"
+    },
+    {
+      "id": "claude-sonnet-4.6",
+      "name": "Claude Sonnet 4.6"
+    },
+    {
+      "id": "claude-opus-4.6-thinking",
+      "name": "Claude Opus 4.6 Thinking"
+    },
+    {
+      "id": "claude-opus-4.6",
+      "name": "Claude Opus 4.6"
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "name": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "claude-haiku-4.5",
+      "name": "Claude Haiku 4.5"
+    },
+    {
+      "id": "gpt-5.5-xhigh",
+      "name": "GPT 5.5 XHigh"
+    },
+    {
+      "id": "gpt-5.5-high",
+      "name": "GPT 5.5 High"
+    },
+    {
+      "id": "gpt-5.5-medium",
+      "name": "GPT 5.5 Medium"
+    },
+    {
+      "id": "gpt-5.5-low",
+      "name": "GPT 5.5 Low"
+    },
+    {
+      "id": "gpt-5.4-high",
+      "name": "GPT 5.4 High"
+    },
+    {
+      "id": "gpt-5.4-medium",
+      "name": "GPT 5.4 Medium"
+    },
+    {
+      "id": "gpt-5.4-low",
+      "name": "GPT 5.4 Low"
+    },
+    {
+      "id": "gpt-5.3-codex-high",
+      "name": "GPT 5.3 Codex High"
+    },
+    {
+      "id": "gpt-5.3-codex-medium",
+      "name": "GPT 5.3 Codex Medium"
+    },
+    {
+      "id": "gpt-5.3-codex-low",
+      "name": "GPT 5.3 Codex Low"
+    },
+    {
+      "id": "gpt-5.2-high",
+      "name": "GPT 5.2 High"
+    },
+    {
+      "id": "gpt-5.2-medium",
+      "name": "GPT 5.2 Medium"
+    },
+    {
+      "id": "gpt-5.2-low",
+      "name": "GPT 5.2 Low"
+    },
+    {
+      "id": "gemini-3.1-pro-high",
+      "name": "Gemini 3.1 Pro High"
+    },
+    {
+      "id": "gemini-3.1-pro-low",
+      "name": "Gemini 3.1 Pro Low"
+    },
+    {
+      "id": "gemini-3.0-flash-high",
+      "name": "Gemini 3.0 Flash High"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro"
+    },
+    {
+      "id": "deepseek-v4",
+      "name": "DeepSeek V4"
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6"
+    },
+    {
+      "id": "glm-5.1",
+      "name": "GLM 5.1"
+    }
+  ],
   "fal-ai": [
     {
       "id": "fal-ai/flux/schnell",
@@ -1387,6 +1586,28 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "nomic-ai/nomic-embed-text-v1.5",
       "name": "Nomic Embed Text v1.5",
       "kind": "embedding"
+    }
+  ],
+  "fish-audio": [
+    {
+      "id": "s2.1-pro-free",
+      "name": "S2.1 Pro Free",
+      "kind": "tts"
+    },
+    {
+      "id": "s2.1-pro",
+      "name": "S2.1 Pro",
+      "kind": "tts"
+    },
+    {
+      "id": "s2-pro",
+      "name": "S2 Pro",
+      "kind": "tts"
+    },
+    {
+      "id": "s1",
+      "name": "S1",
+      "kind": "tts"
     }
   ],
   "gc": [
@@ -1718,12 +1939,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "gcli": [
     {
-      "id": "grok-build",
-      "name": "Grok Build",
-      "contextLength": 500000,
-      "maxOutputTokens": 64000
-    },
-    {
       "id": "grok-4.5",
       "name": "Grok 4.5"
     },
@@ -1968,6 +2183,35 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "iflow-rome-30ba3b",
       "name": "iFlow ROME"
+    }
+  ],
+  "inworld": [
+    {
+      "id": "inworld-tts-1.5-mini",
+      "name": "Inworld TTS 1.5 Mini",
+      "kind": "tts"
+    },
+    {
+      "id": "inworld-tts-1.5-max",
+      "name": "Inworld TTS 1.5 Max",
+      "kind": "tts"
+    }
+  ],
+  "jina-ai": [
+    {
+      "id": "jina-embeddings-v3",
+      "name": "Jina Embeddings V3",
+      "kind": "embedding"
+    },
+    {
+      "id": "jina-embeddings-v2-base-en",
+      "name": "Jina Embeddings V2 Base EN",
+      "kind": "embedding"
+    },
+    {
+      "id": "jina-embeddings-v2-base-code",
+      "name": "Jina Embeddings V2 Base Code",
+      "kind": "embedding"
     }
   ],
   "kc": [
@@ -2579,6 +2823,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "minimax-m3",
       "name": "MiniMax M3"
+    },
+    {
+      "id": "deepseek-v4.1-flash:cloud",
+      "name": "DeepSeek V4.1 Flash (Cloud)"
     }
   ],
   "openai": [
@@ -3021,38 +3269,15 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "capabilities": ["reasoning"]
     },
     {
-      "id": "laguna-s-2.1-free",
-      "name": "laguna-s-2.1-free",
-      "supportedFormats": ["openai"],
-      "capabilities": ["reasoning"]
-    },
-    {
       "id": "big-pickle",
       "name": "big-pickle",
       "supportedFormats": ["openai"]
-    },
-    {
-      "id": "north-mini-code-free",
-      "name": "north-mini-code-free",
-      "supportedFormats": ["openai"]
-    },
-    {
-      "id": "ling-3.0-flash-free",
-      "name": "ling-3.0-flash-free",
-      "supportedFormats": ["openai"],
-      "capabilities": ["reasoning"]
     },
     {
       "id": "nemotron-3.5-lightning-free",
       "name": "nemotron-3.5-lightning-free",
       "supportedFormats": ["openai"],
       "capabilities": ["reasoning"]
-    },
-    {
-      "id": "union-alpha",
-      "name": "union-alpha",
-      "supportedFormats": ["openai"],
-      "capabilities": ["vision", "reasoning"]
     },
     {
       "id": "muse-spark-1.2-contributor-free",
@@ -3273,6 +3498,18 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "nvidia/nemotron-3-super-120b-a12b",
       "name": "Nemotron 3 Super 120B"
+    }
+  ],
+  "playht": [
+    {
+      "id": "PlayDialog",
+      "name": "PlayDialog",
+      "kind": "tts"
+    },
+    {
+      "id": "Play3.0-mini",
+      "name": "Play3.0 Mini",
+      "kind": "tts"
     }
   ],
   "qd": [
@@ -3550,6 +3787,13 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "embedding"
     }
   ],
+  "tortoise": [
+    {
+      "id": "tortoise-v2",
+      "name": "Tortoise V2",
+      "kind": "tts"
+    }
+  ],
   "venice": [
     {
       "id": "venice-uncensored-1-2",
@@ -3796,6 +4040,308 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "embedding"
     }
   ],
+  "windsurf": [
+    {
+      "id": "swe-1.6-fast",
+      "name": "SWE 1.6 Fast"
+    },
+    {
+      "id": "swe-1.6",
+      "name": "SWE 1.6"
+    },
+    {
+      "id": "swe-1.5-fast",
+      "name": "SWE 1.5 Fast"
+    },
+    {
+      "id": "swe-1.5",
+      "name": "SWE 1.5"
+    },
+    {
+      "id": "claude-opus-4.7-max",
+      "name": "Claude Opus 4.7 Max"
+    },
+    {
+      "id": "claude-opus-4.7-xhigh",
+      "name": "Claude Opus 4.7 XHigh"
+    },
+    {
+      "id": "claude-opus-4.7-high",
+      "name": "Claude Opus 4.7 High"
+    },
+    {
+      "id": "claude-opus-4.7-medium",
+      "name": "Claude Opus 4.7 Medium"
+    },
+    {
+      "id": "claude-opus-4.7-low",
+      "name": "Claude Opus 4.7 Low"
+    },
+    {
+      "id": "claude-opus-4.7-review",
+      "name": "Claude Opus 4.7 Review"
+    },
+    {
+      "id": "claude-sonnet-4.6-thinking-1m",
+      "name": "Claude Sonnet 4.6 Thinking 1M"
+    },
+    {
+      "id": "claude-sonnet-4.6-1m",
+      "name": "Claude Sonnet 4.6 1M"
+    },
+    {
+      "id": "claude-sonnet-4.6-thinking",
+      "name": "Claude Sonnet 4.6 Thinking"
+    },
+    {
+      "id": "claude-sonnet-4.6",
+      "name": "Claude Sonnet 4.6"
+    },
+    {
+      "id": "claude-opus-4.6-thinking",
+      "name": "Claude Opus 4.6 Thinking"
+    },
+    {
+      "id": "claude-opus-4.6",
+      "name": "Claude Opus 4.6"
+    },
+    {
+      "id": "claude-opus-4.5-thinking",
+      "name": "Claude Opus 4.5 Thinking"
+    },
+    {
+      "id": "claude-opus-4.5",
+      "name": "Claude Opus 4.5"
+    },
+    {
+      "id": "claude-sonnet-4.5-thinking",
+      "name": "Claude Sonnet 4.5 Thinking"
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "name": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "claude-haiku-4.5",
+      "name": "Claude Haiku 4.5"
+    },
+    {
+      "id": "gpt-5.5-xhigh-fast",
+      "name": "GPT 5.5 XHigh Fast"
+    },
+    {
+      "id": "gpt-5.5-xhigh",
+      "name": "GPT 5.5 XHigh"
+    },
+    {
+      "id": "gpt-5.5-high-fast",
+      "name": "GPT 5.5 High Fast"
+    },
+    {
+      "id": "gpt-5.5-high",
+      "name": "GPT 5.5 High"
+    },
+    {
+      "id": "gpt-5.5-medium-fast",
+      "name": "GPT 5.5 Medium Fast"
+    },
+    {
+      "id": "gpt-5.5-medium",
+      "name": "GPT 5.5 Medium"
+    },
+    {
+      "id": "gpt-5.5-low-fast",
+      "name": "GPT 5.5 Low Fast"
+    },
+    {
+      "id": "gpt-5.5-low",
+      "name": "GPT 5.5 Low"
+    },
+    {
+      "id": "gpt-5.5-none-fast",
+      "name": "GPT 5.5 None Fast"
+    },
+    {
+      "id": "gpt-5.5-none",
+      "name": "GPT 5.5 None"
+    },
+    {
+      "id": "gpt-5.4-xhigh-fast",
+      "name": "GPT 5.4 XHigh Fast"
+    },
+    {
+      "id": "gpt-5.4-xhigh",
+      "name": "GPT 5.4 XHigh"
+    },
+    {
+      "id": "gpt-5.4-high-fast",
+      "name": "GPT 5.4 High Fast"
+    },
+    {
+      "id": "gpt-5.4-high",
+      "name": "GPT 5.4 High"
+    },
+    {
+      "id": "gpt-5.4-medium-fast",
+      "name": "GPT 5.4 Medium Fast"
+    },
+    {
+      "id": "gpt-5.4-medium",
+      "name": "GPT 5.4 Medium"
+    },
+    {
+      "id": "gpt-5.4-low-fast",
+      "name": "GPT 5.4 Low Fast"
+    },
+    {
+      "id": "gpt-5.4-low",
+      "name": "GPT 5.4 Low"
+    },
+    {
+      "id": "gpt-5.4-none-fast",
+      "name": "GPT 5.4 None Fast"
+    },
+    {
+      "id": "gpt-5.4-none",
+      "name": "GPT 5.4 None"
+    },
+    {
+      "id": "gpt-5.4-mini-xhigh",
+      "name": "GPT 5.4 Mini XHigh"
+    },
+    {
+      "id": "gpt-5.4-mini-high",
+      "name": "GPT 5.4 Mini High"
+    },
+    {
+      "id": "gpt-5.4-mini-medium",
+      "name": "GPT 5.4 Mini Medium"
+    },
+    {
+      "id": "gpt-5.4-mini-low",
+      "name": "GPT 5.4 Mini Low"
+    },
+    {
+      "id": "gpt-5.3-codex-xhigh-fast",
+      "name": "GPT 5.3 Codex XHigh Fast"
+    },
+    {
+      "id": "gpt-5.3-codex-xhigh",
+      "name": "GPT 5.3 Codex XHigh"
+    },
+    {
+      "id": "gpt-5.3-codex-high-fast",
+      "name": "GPT 5.3 Codex High Fast"
+    },
+    {
+      "id": "gpt-5.3-codex-high",
+      "name": "GPT 5.3 Codex High"
+    },
+    {
+      "id": "gpt-5.3-codex-medium-fast",
+      "name": "GPT 5.3 Codex Medium Fast"
+    },
+    {
+      "id": "gpt-5.3-codex-medium",
+      "name": "GPT 5.3 Codex Medium"
+    },
+    {
+      "id": "gpt-5.3-codex-low-fast",
+      "name": "GPT 5.3 Codex Low Fast"
+    },
+    {
+      "id": "gpt-5.3-codex-low",
+      "name": "GPT 5.3 Codex Low"
+    },
+    {
+      "id": "gpt-5.2-xhigh",
+      "name": "GPT 5.2 XHigh"
+    },
+    {
+      "id": "gpt-5.2-high",
+      "name": "GPT 5.2 High"
+    },
+    {
+      "id": "gpt-5.2-medium",
+      "name": "GPT 5.2 Medium"
+    },
+    {
+      "id": "gpt-5.2-low",
+      "name": "GPT 5.2 Low"
+    },
+    {
+      "id": "gpt-5.2-none",
+      "name": "GPT 5.2 None"
+    },
+    {
+      "id": "gpt-5",
+      "name": "GPT 5"
+    },
+    {
+      "id": "gpt-4.1",
+      "name": "GPT 4.1"
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "name": "GPT 4.1 Mini"
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "name": "GPT-4.1 Nano"
+    },
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "name": "GPT-4o Mini"
+    },
+    {
+      "id": "gemini-3.1-pro-high",
+      "name": "Gemini 3.1 Pro High"
+    },
+    {
+      "id": "gemini-3.1-pro-low",
+      "name": "Gemini 3.1 Pro Low"
+    },
+    {
+      "id": "gemini-3.0-flash-high",
+      "name": "Gemini 3.0 Flash High"
+    },
+    {
+      "id": "gemini-3.0-flash-medium",
+      "name": "Gemini 3.0 Flash Medium"
+    },
+    {
+      "id": "gemini-3.0-flash-low",
+      "name": "Gemini 3.0 Flash Low"
+    },
+    {
+      "id": "gemini-3.0-flash-minimal",
+      "name": "Gemini 3.0 Flash Minimal"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro"
+    },
+    {
+      "id": "deepseek-v4",
+      "name": "DeepSeek V4"
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6"
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi K2.5"
+    },
+    {
+      "id": "glm-5.1",
+      "name": "GLM 5.1"
+    }
+  ],
   "xai": [
     {
       "id": "grok-4.6",
@@ -4004,8 +4550,8 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek-V4-Pro"
     },
     {
-      "id": "deepseek-v4-flash",
-      "name": "DeepSeek-V4-Flash"
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek-V4.1-Flash"
     },
     {
       "id": "deepseek-v3-2-volc",
@@ -4468,6 +5014,44 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Grok 4.5"
     }
   ],
+  "trae": [
+    {
+      "id": "auto",
+      "name": "Auto"
+    },
+    {
+      "id": "work",
+      "name": "Work"
+    },
+    {
+      "id": "gemini-3.1-pro",
+      "name": "Gemini 3.1 Pro"
+    },
+    {
+      "id": "gemini-3-flash-solo",
+      "name": "Gemini 3 Flash Solo"
+    },
+    {
+      "id": "minimax-m3",
+      "name": "Minimax M3"
+    },
+    {
+      "id": "minimax-m2.7",
+      "name": "Minimax M2.7"
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi K2.5"
+    },
+    {
+      "id": "gpt-5.4",
+      "name": "GPT 5.4"
+    },
+    {
+      "id": "gpt-5.2",
+      "name": "GPT 5.2"
+    }
+  ],
   "selfhosted-stt": [
     {
       "id": "whisper-1",
@@ -4692,6 +5276,18 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "verse",
       "name": "Verse",
       "type": "tts"
+    }
+  ],
+  "elevenlabs": [
+    {
+      "id": "eleven_multilingual_v2",
+      "name": "Eleven Multilingual v2",
+      "kind": "tts"
+    },
+    {
+      "id": "eleven_turbo_v2_5",
+      "name": "Eleven Turbo v2.5",
+      "kind": "tts"
     }
   ],
   "elevenlabs-tts-models": [
@@ -5276,7 +5872,7 @@ export function getModelCaps(modelId: string, modelObj?: any): { vision: boolean
   const caps = modelObj?.capabilities || [];
   const upstreamLower = (modelObj?.upstreamModelId || "").toLowerCase();
 
-  const vision =
+  let vision =
     caps.includes("vision") ||
     caps.includes("image") ||
     idLower.includes("vision") ||
@@ -5311,6 +5907,16 @@ export function getModelCaps(modelId: string, modelObj?: any): { vision: boolean
 
   if (modelObj?.thinking === false) {
     reasoning = false;
+  }
+
+  // Explicit capability flags saved from the Add Custom Model modal
+  // (upstream `caps` object) override the id/name heuristics above.
+  const objCaps = (modelObj as any)?.caps;
+  if (objCaps && typeof objCaps === "object") {
+    if (objCaps.vision === true) vision = true;
+    if (objCaps.vision === false) vision = false;
+    if (objCaps.reasoning === true) reasoning = true;
+    if (objCaps.reasoning === false) reasoning = false;
   }
   return { vision, reasoning };
 }

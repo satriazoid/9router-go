@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	json "encoding/json/v2"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,6 +12,32 @@ import (
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 )
+
+// countProxyPoolBindings counts provider connections bound to the given pool,
+// checking both the top-level proxyPoolId and providerSpecificData.proxyPoolId.
+func (h *DashboardHandler) countProxyPoolBindings() map[string]int {
+	boundCounts := make(map[string]int)
+	conns, _ := h.Repo.GetProviderConnections("", false)
+	for _, c := range conns {
+		if c == nil {
+			continue
+		}
+		var dataMap map[string]any
+		if c.Data != "" {
+			_ = json.Unmarshal([]byte(c.Data), &dataMap)
+		}
+		poolID := handlerutil.GetString(dataMap, "proxyPoolId")
+		if poolID == "" {
+			if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok {
+				poolID = handlerutil.GetString(psd, "proxyPoolId")
+			}
+		}
+		if poolID != "" {
+			boundCounts[poolID]++
+		}
+	}
+	return boundCounts
+}
 
 // HandleGetProxyPools handles GET /api/proxy-pools.
 func (h *DashboardHandler) HandleGetProxyPools(w http.ResponseWriter, r *http.Request) {
@@ -22,26 +49,7 @@ func (h *DashboardHandler) HandleGetProxyPools(w http.ResponseWriter, r *http.Re
 	}
 
 	if includeUsage {
-		conns, _ := h.Repo.GetProviderConnections("", false)
-		boundCounts := make(map[string]int)
-		for _, c := range conns {
-			if c == nil {
-				continue
-			}
-			var dataMap map[string]any
-			if c.Data != "" {
-				_ = json.Unmarshal([]byte(c.Data), &dataMap)
-			}
-			poolID := handlerutil.GetString(dataMap, "proxyPoolId")
-			if poolID == "" {
-				if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok {
-					poolID = handlerutil.GetString(psd, "proxyPoolId")
-				}
-			}
-			if poolID != "" {
-				boundCounts[poolID]++
-			}
-		}
+		boundCounts := h.countProxyPoolBindings()
 
 		for _, p := range pools {
 			if id, ok := p["id"].(string); ok {
@@ -136,10 +144,19 @@ func (h *DashboardHandler) HandleUpdateProxyPool(w http.ResponseWriter, r *http.
 }
 
 // HandleDeleteProxyPool handles DELETE /api/proxy-pools/{id}.
+// Upstream parity: refuse with 409 while connections are still bound to the pool.
 func (h *DashboardHandler) HandleDeleteProxyPool(w http.ResponseWriter, r *http.Request) {
 	id := getURLParam(r, "id")
 	if id == "" {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing proxy pool id")
+		return
+	}
+
+	if bound := h.countProxyPoolBindings()[id]; bound > 0 {
+		handlerutil.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":                "Proxy pool is currently in use",
+			"boundConnectionCount": bound,
+		})
 		return
 	}
 
@@ -172,6 +189,15 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 			"success": false,
 			"error":   "no proxy URLs configured",
 		})
+		return
+	}
+
+	// Upstream parity: relay-type pools (vercel/cloudflare/deno) are not HTTP
+	// proxies but plain HTTPS endpoints that forward based on x-relay-*
+	// headers. Dialing them via http.ProxyURL breaks with
+	// "malformed HTTP status code", so they get the upstream relay test.
+	if pool.Type == "vercel" || pool.Type == "cloudflare" || pool.Type == "deno" {
+		h.testRelayPool(w, id, targetURL)
 		return
 	}
 
@@ -219,4 +245,57 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 		"status":  "passed",
 		"latency": latencyMs,
 	})
+}
+
+// testRelayPool tests a deploy-relay pool (vercel/cloudflare/deno) the way
+// upstream does: a plain GET to the relay URL with x-relay-target and
+// x-relay-path headers (mirrors testVercelRelay in the Next.js dashboard).
+func (h *DashboardHandler) testRelayPool(w http.ResponseWriter, id, relayURL string) {
+	start := time.Now()
+	finish := func(ok bool, errStr string) {
+		latencyMs := time.Since(start).Milliseconds()
+		status := "passed"
+		var lastError any
+		if !ok {
+			status = "failed"
+			lastError = errStr
+		}
+		_ = h.Repo.UpdateProxyPool(id, map[string]any{
+			"testStatus":   status,
+			"lastTestedAt": time.Now().UTC().Format(time.RFC3339),
+			"lastError":    lastError,
+			"latency":      latencyMs,
+			"isActive":     ok,
+		})
+		body := map[string]any{"success": ok, "status": status, "latency": latencyMs}
+		if !ok {
+			body["error"] = errStr
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, body)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, relayURL, nil)
+	if err != nil {
+		finish(false, "invalid relay URL format")
+		return
+	}
+	req.Header.Set("x-relay-target", "https://httpbin.org")
+	req.Header.Set("x-relay-path", "/get")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		msg := err.Error()
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Timeout() {
+			msg = "Relay test timed out"
+		}
+		finish(false, msg)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		finish(false, "relay test failed with status "+resp.Status)
+		return
+	}
+	finish(true, "")
 }

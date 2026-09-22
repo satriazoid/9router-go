@@ -135,8 +135,13 @@ To prevent maintenance bottlenecks and "god components", every single subcompone
   - Endpoint Backend:
     - `POST /api/oauth/freebuff/poll`: Polling token Freebuff selama device flow berlangsung.
     - `GET /api/oauth/freebuff/session`: Mengambil status sesi aktif langsung dari Freebuff upstream (`/api/v1/freebuff/session`).
-  - File handler backend: `internal/handlers/oauth/freebuff_session.go` & `internal/proxy/executor/freebuff_session.go`.
-  - Komponen Frontend: `web/src/components/connections/FreebuffSessionBanner.svelte` yang menampilkan status login, sisa waktu sesi, dan indikator aktif/kedaluwarsa.
+    - `POST /api/oauth/freebuff/session/switch`: Mengakhiri sesi yang sedang dipegang lalu melakukan admission ulang pada model yang diminta.
+  - **Status sesi yang informatif**: `GET /api/oauth/freebuff/session` kini mengembalikan `connectionId`/`connectionName` (akun mana yang dilaporkan), `accessTier`, `countryCode`, `countryBlockReason`, dan `rateLimit` (`limit`, `recentCount`, `poolLabel`, `resetAt`). Status `banned` (upstream 403 `{"status":"banned"}`) dibedakan dari `unauthorized`, karena artinya tambahkan akun lain — bukan ulangi login. Field identitas sesi (`currentModel`/`instanceId`/`expiresAt`) hanya dikirim saat sesi benar-benar dipegang (active/queued).
+  - **Penanganan blokir region**: `freebuffCountryRefusal()` + `newCountryBlockedError()` di `internal/proxy/executor/freebuff_session.go` mengenali penolakan berbasis negara (`country_blocked`, `country_not_allowed`, "not available in your country") pada respons 403 dan mengembalikan error terstruktur 403 `type: country_blocked` dengan nama negara + alasannya. Deteksi hanya diterapkan pada respons **non-200** — sesi yang tetap di-admit untuk region terbatas juga membawa `countryBlockReason`, dan memperlakukannya sebagai kegagalan akan mematikan setiap request di region itu.
+  - **Panel sesi selalu tampil**: `FreebuffSessionBanner` dirender untuk semua status (active, queued, none, unauthorized, banned, country_blocked), bukan hanya saat active — sebelumnya status non-active tidak menampilkan apa pun sehingga tombol switch ikut hilang. Panel memilih koneksi Freebuff lewat `isActive === 1`, bukan `providerConnections[0]` (yang diurutkan by priority dan bisa berisi akun non-aktif/banned, sehingga panel tampak kosong walau seat hidupnya ada di akun berikutnya).
+  - File handler backend: `internal/handlers/oauth/freebuff_session.go`, `internal/handlers/oauth/freebuff_session_switch.go` & `internal/proxy/executor/freebuff_session.go`.
+  - **Switch model tanpa menunggu 1 jam**: Freebuff mengikat satu akun ke satu model per sesi, dan sesi tetap hidup 1 jam walau idle — request ke model lain ditolak dengan `model_locked`. Ini mengikuti jalur *explicit pick* CLI (`cli/src/hooks/use-freebuff-session.ts`): `DELETE /api/v1/freebuff/session` dengan header `x-freebuff-instance-id` untuk melepas seat, lalu `POST` admission dengan header `x-freebuff-model` untuk model baru. Respons DELETE dapat membawa `freebucksRefund` yang ikut dilaporkan ke dashboard. Penggantian model **hanya** terjadi lewat aksi eksplisit pengguna (setiap switch memakai satu sesi baru); request background tetap tidak melepas seat.
+  - Komponen Frontend: `web/src/components/connections/FreebuffSessionBanner.svelte` yang menampilkan status login, sisa waktu sesi, pemilih model + tombol switch, dan refund Freebucks; badge 🔒 pada daftar model sudah dihapus karena model lain kini bisa dipilih.
 
 ---
 
@@ -187,6 +192,7 @@ To prevent maintenance bottlenecks and "god components", every single subcompone
   - `HandleFreebuffPoll`: Menggunakan `GET https://freebuff.com/api/auth/cli/status?fingerprintId=...&fingerprintHash=...&expiresAt=...` dengan query params resmi.
   - Mengatasi bug fatal `unexpected EOF` (502 Bad Gateway) dengan mengenali respon HTTP 401 dan empty body sebagai status `pending` (HTTP 200).
   - Menangani fleksibilitas token upstream (`accessToken`, `access_token`, `authToken`, `token`) serta metadata user (`userId`, `email`, `name`).
+  - **Membaca kredensial dari objek `user` bersarang**: sesuai kontrak CLI resmi (`cli/src/login/login-flow.ts`), status sukses berbentuk `{"user":{"authToken":...,"email":...,"name":...,"id":...}}` dengan HTTP 200. Sebelumnya token hanya dicari di level atas sehingga polling selalu berakhir `pending` walau otorisasi browser sudah sukses. Jika payload menyatakan authorized tanpa token yang bisa dipakai, status dipertahankan `pending` (disertai log warning) agar klien tidak menerima sukses palsu.
 - **Implementasi Frontend Catalog (`web/src/lib/providers.ts`)**:
   - Memastikan `freebuff` dikategorikan sebagai `"oauth"` (bukan `"free"` no-auth dan bukan `"apikey"`), sehingga form koneksi dan alur device flow muncul sesuai peruntukannya.
 - **Implementasi Frontend UI & Modal (`web/src/components/connections/ProviderDetailView.svelte`)**:
@@ -252,8 +258,6 @@ To prevent maintenance bottlenecks and "god components", every single subcompone
 │           │   ├── ConnectionsView.svelte
 │           │   ├── ProvidersOverviewGrid.svelte
 │           │   ├── ProviderCard.svelte
-│           │   ├── ConnectionRow.svelte
-│           │   ├── AvailableModelsCard.svelte
 │           │   └── FreebuffSessionBanner.svelte
 │           ├── combos/                  # Combo builder & routing subcomponents
 │           │   ├── CombosView.svelte

@@ -9,6 +9,21 @@ export interface ProviderCatalogItem {
   noAuth?: boolean
   priority?: number
   serviceKinds?: string[]
+  /** auth modes from upstream registry (e.g. clinepass ["apikey","oauth"] = dual buttons). */
+  authModes?: string[]
+  /** hidden from provider list (upstream parity) but detail page stays reachable. */
+  hidden?: boolean
+  /** Region choices for cluster-specific providers (upstream registry `regions`). */
+  regions?: { id: string; label: string }[]
+  defaultRegion?: string
+  /** Upstream display.website + display.notice (signup/apiKey links). */
+  website?: string
+  notice?: { text?: string; apiKeyUrl?: string; signupUrl?: string }
+  /** Upstream registry authType/authHint (cookie login hint, apikey/oauth/none markers). */
+  authType?: string
+  authHint?: string
+  /** Upstream registry modelsFetcher (public catalog for "Suggested free models"). */
+  modelsFetcher?: { url: string; type: string }
 }
 
 export const PROVIDER_CATEGORIES = [
@@ -28,6 +43,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ag",
     "color": "#F59E0B",
     "icon": "rocket_launch",
+    "website": "https://antigravity.google",
+    "notice": {"signupUrl":"https://antigravity.google"},
     "noAuth": false,
     "priority": 20,
     "serviceKinds": [
@@ -43,6 +60,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cc",
     "color": "#D97757",
     "icon": "smart_toy",
+    "website": "https://claude.ai",
+    "notice": {"signupUrl":"https://claude.ai"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -55,6 +74,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cl",
     "color": "#5B9BD5",
     "icon": "smart_toy",
+    "website": "https://cline.bot",
+    "notice": {"signupUrl":"https://cline.bot"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -68,6 +89,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#5B9BD5",
     "icon": "vpn_key",
     "noAuth": false,
+    "authModes": ["apikey", "oauth"],
+    "website": "https://cline.bot",
+    "notice": { "signupUrl": "https://app.cline.bot" },
     "serviceKinds": [
       "llm"
     ]
@@ -79,7 +103,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cbai",
     "color": "#006EFF",
     "icon": "smart_toy",
+    "website": "https://www.codebuddy.ai",
+    "notice": {"signupUrl":"https://www.codebuddy.ai"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]
@@ -91,7 +118,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cbcn",
     "color": "#006EFF",
     "icon": "smart_toy",
+    "website": "https://copilot.tencent.com",
+    "notice": {"signupUrl":"https://copilot.tencent.com"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]
@@ -103,6 +133,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cu",
     "color": "#00D4AA",
     "icon": "edit_note",
+    "website": "https://cursor.com",
+    "notice": {"signupUrl":"https://cursor.com"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -115,6 +147,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gh",
     "color": "#333333",
     "icon": "code",
+    "website": "https://github.com/features/copilot",
+    "notice": {"signupUrl":"https://github.com/features/copilot"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -127,6 +162,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gitlab",
     "color": "#FC6D26",
     "icon": "code",
+    "website": "https://gitlab.com",
+    "notice": {"signupUrl":"https://gitlab.com"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -139,6 +176,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gcli",
     "color": "#1DA1F2",
     "icon": "auto_awesome",
+    "website": "https://x.ai",
+    "notice": {"text":"Sign in with your xAI / Grok account via device code. Uses Grok Build subscription credits (cli-chat-proxy.grok.com).","signupUrl":"https://grok.com/supergrok"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -151,6 +190,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "if",
     "color": "#6366F1",
     "icon": "water_drop",
+    "website": "https://iflow.cn",
+    "notice": {"signupUrl":"https://iflow.cn"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -163,10 +204,13 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "kc",
     "color": "#FF6B35",
     "icon": "code",
+    "website": "https://kilocode.ai",
+    "notice": {"signupUrl":"https://kilocode.ai"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
-    ]
+    ],
+    "modelsFetcher": {"url":"https://api.kilo.ai/api/gateway/models","type":"openrouter-free"}
   },
   {
     "id": "kimi",
@@ -175,7 +219,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "kimi",
     "color": "#1E3A8A",
     "icon": "psychology",
+    "website": "https://kimi.moonshot.cn",
+    "notice": {"apiKeyUrl":"https://platform.moonshot.ai/console/api-keys","signupUrl":"https://www.kimi.com/code"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "priority": 170,
     "serviceKinds": [
       "llm",
@@ -189,6 +236,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cx",
     "color": "#3B82F6",
     "icon": "code",
+    "website": "https://chatgpt.com/codex",
+    "notice": {"signupUrl":"https://chatgpt.com/codex"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -201,7 +250,11 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "qd",
     "color": "#EC4899",
     "icon": "water_drop",
+    "website": "https://qoder.com",
+    "notice": {"signupUrl":"https://qoder.com"},
+    "authHint": "Personal Access Token (pt-...) từ https://qoder.com/account/integrations",
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]
@@ -213,7 +266,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "xai",
     "color": "#1DA1F2",
     "icon": "auto_awesome",
+    "website": "https://x.ai",
+    "notice": {"apiKeyUrl":"https://console.x.ai"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "priority": 280,
     "serviceKinds": [
       "llm",
@@ -229,7 +285,11 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "mimo",
     "color": "#FF6900",
     "icon": "smart_toy",
+    "website": "https://xiaomimimo.com",
+    "notice": {"apiKeyUrl":"https://platform.xiaomimimo.com/console/api-keys","signupUrl":"https://mimo.xiaomimimo.com/desktop/invite/"},
+    "authType": "apikey",
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm",
       "tts"
@@ -242,6 +302,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "zd",
     "color": "#A855F7",
     "icon": "code",
+    "website": "https://zed.dev",
+    "notice": {"signupUrl":"https://zed.dev/native_app_signin"},
+    "authType": "oauth",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -266,6 +329,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gc",
     "color": "#4285F4",
     "icon": "terminal",
+    "website": "https://github.com/google-gemini/gemini-cli",
+    "notice": {"signupUrl":"https://github.com/google-gemini/gemini-cli"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -278,6 +343,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "kr",
     "color": "#FF6B35",
     "icon": "psychology_alt",
+    "website": "https://kiro.dev",
+    "notice": {"signupUrl":"https://kiro.dev"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -293,7 +360,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "noAuth": true,
     "serviceKinds": [
       "llm"
-    ]
+    ],
+    "modelsFetcher": {"url":"https://models.dev/api.json","type":"mimo-free"}
   },
   {
     "id": "opencode",
@@ -305,7 +373,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "noAuth": true,
     "serviceKinds": [
       "llm"
-    ]
+    ],
+    "modelsFetcher": {"url":"https://opencode.ai/zen/v1/models","type":"opencode-free"}
   },
   {
     "id": "api-airforce",
@@ -314,10 +383,14 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "af",
     "color": "#0EA5E9",
     "icon": "flight",
+    "website": "https://api.airforce",
+    "notice": {"apiKeyUrl":"https://api.airforce"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
-    ]
+    ],
+    "modelsFetcher": {"url":"https://api.airforce/v1/models","type":"airforce-free"}
   },
   {
     "id": "bazaarlink",
@@ -326,6 +399,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "bzl",
     "color": "#DC2626",
     "icon": "storefront",
+    "website": "https://bazaarlink.ai",
+    "notice": {"apiKeyUrl":"https://bazaarlink.ai"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -338,6 +414,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "bpm",
     "color": "#2563EB",
     "icon": "cloud",
+    "website": "https://console.byteplus.com/ark",
+    "notice": {"text":"Free credits for new accounts. Access to Seed 2.0, Kimi K2 Thinking, GLM 4.7, GPT-OSS-120B models.","apiKeyUrl":"https://console.byteplus.com/ark/region:ark+ap-southeast-1/apiKey"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -350,6 +428,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cf",
     "color": "#F38020",
     "icon": "cloud",
+    "website": "https://developers.cloudflare.com/workers-ai/",
+    "notice": {"text":"Workers AI free tier. Requires a Cloudflare API token and Account ID.","apiKeyUrl":"https://dash.cloudflare.com/profile/api-tokens"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -363,6 +444,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "coqui",
     "color": "#10B981",
     "icon": "record_voice_over",
+    "website": "https://github.com/coqui-ai/TTS",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -375,6 +458,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "edge-tts",
     "color": "#0078D4",
     "icon": "record_voice_over",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -387,6 +471,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gemini",
     "color": "#4285F4",
     "icon": "diamond",
+    "website": "https://ai.google.dev",
+    "notice": {"apiKeyUrl":"https://aistudio.google.com/app/apikey"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 50,
     "serviceKinds": [
@@ -405,6 +492,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "google-tts",
     "color": "#4285F4",
     "icon": "record_voice_over",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -417,6 +505,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "kgw",
     "color": "#8B5CF6",
     "icon": "login",
+    "website": "https://kilo.ai",
+    "notice": {"apiKeyUrl":"https://kilo.ai/dashboard?tab=apiKeys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -429,7 +520,10 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "kimchi",
     "color": "#FF521D",
     "icon": "restaurant",
+    "website": "https://kimchi.dev",
+    "notice": {"signupUrl":"https://app.kimchi.dev"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]
@@ -441,6 +535,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "local-device",
     "color": "#64748B",
     "icon": "speaker",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -453,6 +548,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "nvidia",
     "color": "#76B900",
     "icon": "developer_board",
+    "website": "https://developer.nvidia.com/nim",
+    "notice": {"text":"Free access for NVIDIA Developer Program members (prototyping & testing).","apiKeyUrl":"https://build.nvidia.com/settings/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -468,6 +566,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ollama",
     "color": "#ffffffff",
     "icon": "cloud",
+    "website": "https://ollama.com",
+    "notice": {"text":"Free tier: light usage, 1 cloud model at a time (limits reset every 5h & 7d). Pro $20/mo · Max $100/mo.","apiKeyUrl":"https://ollama.com/settings/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 30,
     "serviceKinds": [
@@ -482,10 +583,14 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "openrouter",
     "color": "#F97316",
     "icon": "router",
+    "website": "https://openrouter.ai",
+    "notice": {"text":"Free tier: 27+ free models, no credit card needed, 200 req/day. After  0 credit: 1,000 req/day.","apiKeyUrl":"https://openrouter.ai/settings/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
-    ]
+    ],
+    "modelsFetcher": {"url":"https://openrouter.ai/api/v1/models","type":"openrouter-free"}
   },
   {
     "id": "poolside",
@@ -494,6 +599,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ps",
     "color": "#0EA5E9",
     "icon": "water_drop",
+    "website": "https://poolside.ai",
+    "notice": {"apiKeyUrl":"https://platform.poolside.ai/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -506,6 +614,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "searxng",
     "color": "#3B82F6",
     "icon": "saved_search",
+    "website": "https://docs.searxng.org",
+    "authType": "none",
     "noAuth": true,
     "priority": 999,
     "serviceKinds": [
@@ -519,6 +629,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "tortoise",
     "color": "#7C3AED",
     "icon": "record_voice_over",
+    "website": "https://github.com/neonbjb/tortoise-tts",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -531,6 +643,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "vx",
     "color": "#4285F4",
     "icon": "cloud",
+    "website": "https://cloud.google.com/vertex-ai",
+    "notice": {"text":"New Google Cloud accounts get $300 free credits. Requires GCP project + Service Account with Vertex AI API enabled.","apiKeyUrl":"https://console.cloud.google.com/iam-admin/serviceaccounts"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -543,6 +657,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "alicode",
     "color": "#FF6A00",
     "icon": "cloud",
+    "website": "https://bailian.console.aliyun.com",
+    "notice": {"apiKeyUrl":"https://bailian.console.aliyun.com/?apiKey=1"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -555,6 +671,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "alicode-intl",
     "color": "#FF6A00",
     "icon": "cloud",
+    "website": "https://www.alibabacloud.com/product/coding",
+    "notice": {"apiKeyUrl":"https://www.alibabacloud.com/product/coding"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -567,6 +685,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "alims-intl",
     "color": "#FF6A00",
     "icon": "cloud",
+    "website": "https://modelstudio.console.alibabacloud.com",
+    "notice": {"apiKeyUrl":"https://modelstudio.console.alibabacloud.com/?apiKey=1"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -579,6 +699,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "alitp-intl",
     "color": "#FF6A00",
     "icon": "cloud",
+    "website": "https://www.alibabacloud.com/campaign/ai-landing-page-token",
+    "notice": {"apiKeyUrl":"https://modelstudio.console.alibabacloud.com/?apiKey=1"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -591,6 +713,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "anthropic",
     "color": "#D97757",
     "icon": "smart_toy",
+    "website": "https://console.anthropic.com",
+    "notice": {"apiKeyUrl":"https://console.anthropic.com/settings/keys"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -615,6 +739,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "aai",
     "color": "#0062FF",
     "icon": "record_voice_over",
+    "website": "https://assemblyai.com",
+    "notice": {"apiKeyUrl":"https://www.assemblyai.com/app/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "stt"
@@ -627,6 +754,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "polly",
     "color": "#FF9900",
     "icon": "record_voice_over",
+    "website": "https://aws.amazon.com/polly/",
+    "notice": {"text":"Use AWS Secret Access Key as API key; set providerSpecificData.accessKeyId and optional region.","apiKeyUrl":"https://console.aws.amazon.com/iam/home#/security_credentials"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -639,6 +769,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "azure",
     "color": "#0078D4",
     "icon": "cloud",
+    "website": "https://azure.microsoft.com/en-us/products/ai-services/openai-service",
+    "notice": {"apiKeyUrl":"https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI"},
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -655,6 +787,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "qianfan",
     "color": "#2932E1",
     "icon": "search",
+    "website": "https://cloud.baidu.com/product/qianfan.html",
+    "notice": {"apiKeyUrl":"https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -667,6 +802,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "bfl",
     "color": "#111827",
     "icon": "image",
+    "website": "https://blackforestlabs.ai",
+    "notice": {"apiKeyUrl":"https://api.bfl.ai"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "image"
@@ -679,6 +817,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "bb",
     "color": "#5B5FEF",
     "icon": "smart_toy",
+    "website": "https://blackbox.ai",
+    "notice": {"apiKeyUrl":"https://www.blackbox.ai/api-management"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -691,6 +831,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "bm",
     "color": "#2563EB",
     "icon": "psychology",
+    "website": "https://bluesminds.com",
+    "notice": {"apiKeyUrl":"https://bluesminds.com"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -703,6 +846,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "brave",
     "color": "#FB542B",
     "icon": "travel_explore",
+    "website": "https://brave.com/search/api",
+    "notice": {"apiKeyUrl":"https://api-dashboard.search.brave.com/app/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -716,6 +862,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cartesia",
     "color": "#FF4F8B",
     "icon": "spatial_audio",
+    "website": "https://cartesia.ai",
+    "notice": {"apiKeyUrl":"https://play.cartesia.ai/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -728,6 +877,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cerebras",
     "color": "#FF4F00",
     "icon": "memory",
+    "website": "https://www.cerebras.ai",
+    "notice": {"apiKeyUrl":"https://cloud.cerebras.ai/platform"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -740,6 +891,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ch",
     "color": "#ffffffff",
     "icon": "water_drop",
+    "website": "https://chutes.ai",
+    "notice": {"apiKeyUrl":"https://chutes.ai/app/api"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -752,6 +905,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cohere",
     "color": "#39594D",
     "icon": "hub",
+    "website": "https://cohere.com",
+    "notice": {"apiKeyUrl":"https://dashboard.cohere.com/api-keys"},
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -765,7 +920,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "comfyui",
     "color": "#4CAF50",
     "icon": "account_tree",
-    "noAuth": false,
+    "website": "https://github.com/comfyanonymous/ComfyUI",
     "serviceKinds": [
       "image"
     ]
@@ -777,6 +932,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "cmc",
     "color": "#000000",
     "icon": "smart_toy",
+    "website": "https://commandcode.ai",
+    "notice": {"text":"Use your CommandCode CLI API key (starts with user_...) from ~/.commandcode/auth.json or commandcode.ai/studio.","apiKeyUrl":"https://commandcode.ai/studio"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -789,6 +946,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "dg",
     "color": "#13EF93",
     "icon": "mic",
+    "website": "https://deepgram.com",
+    "notice": {"text":"$200 free credit on signup (no card required). Aura-1: $0.015/1k chars, Aura-2: $0.030/1k chars (Pay-As-You-Go).","apiKeyUrl":"https://console.deepgram.com/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "stt"
@@ -801,6 +961,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ds",
     "color": "#4D6BFE",
     "icon": "bolt",
+    "website": "https://deepseek.com",
+    "notice": {"apiKeyUrl":"https://platform.deepseek.com/api_keys"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -808,12 +970,15 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "devin-cli",
-    "name": "devin-cli",
-    "category": "apikey",
+    "name": "Devin CLI",
+    "category": "free",
     "alias": "devin-cli",
     "color": "#888888",
     "icon": "dns",
-    "noAuth": false,
+    "website": "https://devin.ai",
+    "notice": {"text":"Install: `curl -fsSL https://cli.devin.ai/install.sh | bash` (macOS: `brew install --cask devin-cli`, Windows PowerShell: `irm https://static.devin.ai/cli/setup.ps1 | iex`). Then run `devin auth login`. No API key needed.","signupUrl":"https://cli.devin.ai"},
+    "authType": "none",
+    "noAuth": true,
     "serviceKinds": [
       "llm"
     ]
@@ -825,6 +990,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "el",
     "color": "#6C47FF",
     "icon": "record_voice_over",
+    "website": "https://elevenlabs.io",
+    "notice": {"apiKeyUrl":"https://elevenlabs.io/app/settings/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -837,6 +1005,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "exa",
     "color": "#2563EB",
     "icon": "manage_search",
+    "website": "https://exa.ai",
+    "notice": {"apiKeyUrl":"https://dashboard.exa.ai/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -852,6 +1023,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "fal",
     "color": "#2563EB",
     "icon": "image",
+    "website": "https://fal.ai",
+    "notice": {"apiKeyUrl":"https://fal.ai/dashboard/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "image"
@@ -864,6 +1038,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "fl",
     "color": "#111827",
     "icon": "flutter_dash",
+    "website": "https://featherless.ai",
+    "notice": {"apiKeyUrl":"https://featherless.ai/account/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -877,6 +1054,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "firecrawl",
     "color": "#F59E0B",
     "icon": "local_fire_department",
+    "website": "https://firecrawl.dev",
+    "notice": {"apiKeyUrl":"https://www.firecrawl.dev/app/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -890,6 +1070,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "fireworks",
     "color": "#7B2EF2",
     "icon": "local_fire_department",
+    "website": "https://fireworks.ai",
+    "notice": {"apiKeyUrl":"https://fireworks.ai/account/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -902,6 +1085,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "fish",
     "color": "#1E9BF0",
     "icon": "record_voice_over",
+    "website": "https://fish.audio",
+    "notice": {"apiKeyUrl":"https://fish.audio/app/api-keys/"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -914,6 +1100,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "glm-cn",
     "color": "#DC2626",
     "icon": "code",
+    "website": "https://open.bigmodel.cn",
+    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -926,6 +1114,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "glm",
     "color": "#2563EB",
     "icon": "code",
+    "website": "https://open.bigmodel.cn",
+    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 140,
     "serviceKinds": [
@@ -940,6 +1131,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gpse",
     "color": "#4285F4",
     "icon": "search",
+    "website": "https://programmablesearchengine.google.com",
+    "notice": {"apiKeyUrl":"https://programmablesearchengine.google.com/controlpanel/create"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -953,6 +1147,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "groq",
     "color": "#F55036",
     "icon": "speed",
+    "website": "https://groq.com",
+    "notice": {"apiKeyUrl":"https://console.groq.com/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -966,6 +1163,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "hf",
     "color": "#FFD21E",
     "icon": "face",
+    "website": "https://huggingface.co",
+    "notice": {"apiKeyUrl":"https://huggingface.co/settings/tokens"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -980,6 +1180,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "hyp",
     "color": "#00D4FF",
     "icon": "bolt",
+    "website": "https://hyperbolic.xyz",
+    "notice": {"apiKeyUrl":"https://app.hyperbolic.xyz/settings"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -993,6 +1196,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "inworld",
     "color": "#FF6B6B",
     "icon": "record_voice_over",
+    "website": "https://inworld.ai",
+    "notice": {"text":"Free tier: 40 minutes/month TTS. Paid: TTS-1.5 Mini $0.01/min ($15/1M chars), TTS-1.5 Max $0.025/min ($30/1M chars). 270+ voices, 15 languages.","apiKeyUrl":"https://platform.inworld.ai/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -1005,6 +1211,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "jina",
     "color": "#2563EB",
     "icon": "blur_on",
+    "website": "https://jina.ai",
+    "notice": {"text":"10M free tokens on signup (non-commercial), no credit card required.","apiKeyUrl":"https://jina.ai/?sui=apikey"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "embedding"
@@ -1017,6 +1226,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "jina-reader",
     "color": "#000000",
     "icon": "menu_book",
+    "website": "https://jina.ai/reader",
+    "notice": {"apiKeyUrl":"https://jina.ai/?sui=apikey"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1026,7 +1238,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   {
     "id": "kimi-coding",
     "name": "kimi-coding",
-    "category": "apikey",
+    "category": "oauth",
     "alias": "kimi-coding",
     "color": "#888888",
     "icon": "dns",
@@ -1042,6 +1254,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "linkup",
     "color": "#0EA5E9",
     "icon": "link",
+    "website": "https://linkup.so",
+    "notice": {"apiKeyUrl":"https://app.linkup.so/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1055,6 +1270,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "llm7",
     "color": "#7C3AED",
     "icon": "pool",
+    "website": "https://llm7.io",
+    "notice": {"apiKeyUrl":"https://llm7.io"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1067,6 +1285,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "minimax-cn",
     "color": "#DC2626",
     "icon": "memory",
+    "website": "https://www.minimaxi.com",
+    "notice": {"apiKeyUrl":"https://platform.minimaxi.com/user-center/basic-information/interface-key"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1081,6 +1302,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "minimax",
     "color": "#7C3AED",
     "icon": "memory",
+    "website": "https://www.minimaxi.com",
+    "notice": {"apiKeyUrl":"https://platform.minimaxi.com/user-center/basic-information/interface-key"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 90,
     "serviceKinds": [
@@ -1091,12 +1315,29 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
+    "id": "mmf",
+    "name": "MMF",
+    "category": "apikey",
+    "alias": "mmf",
+    "color": "#6366F1",
+    "icon": "hub",
+    "noAuth": false,
+    "priority": 200,
+    "hidden": true,
+    "serviceKinds": [
+      "llm"
+    ]
+  },
+  {
     "id": "mistral",
     "name": "Mistral",
     "category": "apikey",
     "alias": "mistral",
     "color": "#FF7000",
     "icon": "air",
+    "website": "https://mistral.ai",
+    "notice": {"apiKeyUrl":"https://console.mistral.ai/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1110,6 +1351,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "morph",
     "color": "#14B8A6",
     "icon": "change_history",
+    "website": "https://morphllm.com",
+    "notice": {"apiKeyUrl":"https://morphllm.com"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1122,6 +1366,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "nb",
     "color": "#FFD700",
     "icon": "extension",
+    "website": "https://nanobananaapi.ai",
+    "notice": {"text":"3rd-party proxy for Google Nano Banana (Gemini 2.5/3 Flash Image). For official, use Gemini provider.","apiKeyUrl":"https://nanobananaapi.ai/dashboard"},
     "noAuth": false,
     "serviceKinds": [
       "image"
@@ -1134,6 +1380,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "nebius",
     "color": "#6C5CE7",
     "icon": "cloud",
+    "website": "https://nebius.com",
+    "notice": {"apiKeyUrl":"https://studio.nebius.com/settings/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1147,6 +1396,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ollama-local",
     "color": "#ffffffff",
     "icon": "cloud",
+    "website": "https://ollama.com",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1159,6 +1409,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ollama-search",
     "color": "#ffffff",
     "icon": "cloud",
+    "website": "https://ollama.com",
+    "notice": {"text":"Web search via Ollama Cloud subscription. Reuses the API key from the Ollama (chat) provider.","apiKeyUrl":"https://ollama.com/settings/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1172,6 +1425,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "openai",
     "color": "#10A37F",
     "icon": "auto_awesome",
+    "website": "https://platform.openai.com",
+    "notice": {"apiKeyUrl":"https://platform.openai.com/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 30,
     "serviceKinds": [
@@ -1202,6 +1458,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ocg",
     "color": "#E87040",
     "icon": "terminal",
+    "website": "https://opencode.ai/auth",
+    "notice": {"text":"OpenCode Go subscription: $5/mo (then 10/mo). Access to Kimi, GLM, Qwen, MiMo, MiniMax models.","apiKeyUrl":"https://opencode.ai/auth"},
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1230,6 +1488,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "pplx",
     "color": "#20808D",
     "icon": "search",
+    "website": "https://www.perplexity.ai",
+    "notice": {"apiKeyUrl":"https://www.perplexity.ai/settings/api"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 180,
     "serviceKinds": [
@@ -1244,6 +1505,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "pa",
     "color": "#20808D",
     "icon": "travel_explore",
+    "website": "https://www.perplexity.ai",
+    "notice": {"text":"Perplexity Agent API exposes GPT, Claude, Gemini, Grok, GLM, Kimi, and Sonar models through one OpenAI-compatible Responses API.","apiKeyUrl":"https://www.perplexity.ai/settings/api"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 181,
     "serviceKinds": [
@@ -1258,6 +1522,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "playht",
     "color": "#00B4D8",
     "icon": "play_circle",
+    "website": "https://play.ht",
+    "notice": {"apiKeyUrl":"https://play.ht/studio/api-access"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "tts"
@@ -1270,7 +1537,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "recraft",
     "color": "#EC4899",
     "icon": "image",
-    "noAuth": false,
+    "website": "https://recraft.ai",
+    "notice": {"apiKeyUrl":"https://www.recraft.ai/profile/api"},
+    "authType": "apikey",
     "serviceKinds": [
       "image"
     ]
@@ -1282,6 +1551,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "runway",
     "color": "#000000",
     "icon": "movie",
+    "website": "https://runwayml.com",
+    "notice": {"apiKeyUrl":"https://dev.runwayml.com"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "image",
@@ -1295,6 +1567,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "samba",
     "color": "#F97316",
     "icon": "memory",
+    "website": "https://sambanova.ai",
+    "notice": {"apiKeyUrl":"https://cloud.sambanova.ai/apis"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1307,7 +1582,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "sdwebui",
     "color": "#FF7043",
     "icon": "brush",
-    "noAuth": false,
+    "website": "https://github.com/AUTOMATIC1111/stable-diffusion-webui",
     "serviceKinds": [
       "image"
     ]
@@ -1319,6 +1594,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "searchapi",
     "color": "#0EA5A4",
     "icon": "search",
+    "website": "https://www.searchapi.io",
+    "notice": {"apiKeyUrl":"https://www.searchapi.io/dashboard"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1332,6 +1610,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "serper",
     "color": "#4F46E5",
     "icon": "search",
+    "website": "https://serper.dev",
+    "notice": {"apiKeyUrl":"https://serper.dev/api-key"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1345,6 +1626,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "siliconflow",
     "color": "#5B6EF5",
     "icon": "cloud_queue",
+    "website": "https://cloud.siliconflow.com",
+    "notice": {"apiKeyUrl":"https://cloud.siliconflow.com/account/ak"},
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1358,6 +1641,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "stability",
     "color": "#8B5CF6",
     "icon": "image",
+    "website": "https://stability.ai",
+    "notice": {"apiKeyUrl":"https://platform.stability.ai/account/keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "image"
@@ -1370,6 +1656,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "tavily",
     "color": "#5B21B6",
     "icon": "search",
+    "website": "https://tavily.com",
+    "notice": {"apiKeyUrl":"https://app.tavily.com/home"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1385,6 +1674,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "hunyuan",
     "color": "#0052D9",
     "icon": "cloud",
+    "website": "https://cloud.tencent.com/product/hunyuan",
+    "notice": {"apiKeyUrl":"https://console.cloud.tencent.com/hunyuan/api-key"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1397,6 +1689,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "together",
     "color": "#0F6FFF",
     "icon": "group_work",
+    "website": "https://www.together.ai",
+    "notice": {"apiKeyUrl":"https://api.together.xyz/settings/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1411,6 +1706,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "tokenrouter",
     "color": "#0EA5E9",
     "icon": "hub",
+    "website": "https://www.tokenrouter.com",
+    "notice": {"text":"OpenAI-compatible gateway. 300+ models (OpenAI, Claude, Gemini, Qwen, DeepSeek, Kimi, GLM, dsb).","apiKeyUrl":"https://www.tokenrouter.com"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1423,6 +1721,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "topaz",
     "color": "#059669",
     "icon": "image",
+    "website": "https://topazlabs.com",
+    "notice": {"apiKeyUrl":"https://topazlabs.com/account"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "image"
@@ -1431,10 +1732,13 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   {
     "id": "trae",
     "name": "trae",
-    "category": "apikey",
+    "category": "oauth",
     "alias": "trae",
     "color": "#888888",
     "icon": "dns",
+    "website": "https://www.trae.ai",
+    "notice": {"signupUrl":"https://www.trae.ai"},
+    "authType": "oauth",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1459,6 +1763,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "venice",
     "color": "#DC2626",
     "icon": "shield",
+    "website": "https://venice.ai",
+    "notice": {"text":"OpenAI-compatible. Private inference + uncensored models (Venice Uncensored, GLM, Qwen, DeepSeek, Llama).","apiKeyUrl":"https://venice.ai/settings/api"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1473,6 +1780,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "vercel",
     "color": "#111827",
     "icon": "deployed_code",
+    "website": "https://vercel.com/ai-gateway",
+    "notice": {"text":"Unified OpenAI-compatible endpoint from Vercel. Use your AI Gateway API key, then pick models with provider/model IDs like anthropic/claude-sonnet-4.6 or openai/gpt-5.4.","apiKeyUrl":"https://vercel.com/dashboard/~/ai-gateway"},
     "noAuth": false,
     "priority": 160,
     "serviceKinds": [
@@ -1487,6 +1796,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "vxp",
     "color": "#34A853",
     "icon": "cloud",
+    "website": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-partner-models",
+    "notice": {"apiKeyUrl":"https://console.cloud.google.com/iam-admin/serviceaccounts"},
     "noAuth": false,
     "serviceKinds": [
       "llm",
@@ -1500,6 +1811,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "ark",
     "color": "#1677FF",
     "icon": "cloud",
+    "website": "https://ark.cn-beijing.volces.com",
+    "notice": {"apiKeyUrl":"https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"},
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1512,6 +1825,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "voyage",
     "color": "#0EA5E9",
     "icon": "data_array",
+    "website": "https://www.voyageai.com",
+    "notice": {"apiKeyUrl":"https://dash.voyageai.com/api-keys"},
+    "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
       "embedding"
@@ -1520,11 +1836,15 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   {
     "id": "windsurf",
     "name": "windsurf",
-    "category": "apikey",
+    "category": "oauth",
     "alias": "windsurf",
     "color": "#888888",
     "icon": "dns",
+    "website": "https://windsurf.com",
+    "notice": {"signupUrl":"https://windsurf.com"},
+    "authType": "oauth",
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm"
     ]
@@ -1584,7 +1904,24 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "xmtp",
     "color": "#FF6700",
     "icon": "smart_toy",
+    "website": "https://mimo.xiaomi.com",
+    "notice": {"text":"Xiaomi MiMo Token Plan subscription (API key starts with tp-). Token Plan keys are cluster-specific — select the region matching your subscription.","apiKeyUrl":"https://mimo.xiaomi.com"},
     "noAuth": false,
+    "regions": [
+      {
+        "id": "sgp",
+        "label": "Singapore (新加坡)"
+      },
+      {
+        "id": "cn",
+        "label": "China (中国大陆)"
+      },
+      {
+        "id": "ams",
+        "label": "Amsterdam (阿姆斯特丹)"
+      }
+    ],
+    "defaultRegion": "sgp",
     "serviceKinds": [
       "llm"
     ]
@@ -1596,6 +1933,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "xquik",
     "color": "#5C3327",
     "icon": "tag",
+    "website": "https://docs.xquik.com/api-reference/x/search-tweets",
+    "notice": {"text":"Searches public X posts. Billing uses 1 Xquik credit per returned post.","apiKeyUrl":"https://xquik.com"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1609,6 +1949,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "youcom",
     "color": "#7C3AED",
     "icon": "search",
+    "website": "https://you.com",
+    "notice": {"apiKeyUrl":"https://api.you.com"},
+    "authType": "apikey",
     "noAuth": false,
     "priority": 999,
     "serviceKinds": [
@@ -1634,6 +1977,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "gw",
     "color": "#1DA1F2",
     "icon": "auto_awesome",
+    "website": "https://grok.com",
+    "authType": "cookie",
+    "authHint": "Paste your sso= cookie value from grok.com",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1646,6 +1992,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "pw",
     "color": "#20808D",
     "icon": "search",
+    "website": "https://www.perplexity.ai",
+    "authType": "cookie",
+    "authHint": "Paste your __Secure-next-auth.session-token cookie value from perplexity.ai",
     "noAuth": false,
     "serviceKinds": [
       "llm"
@@ -1658,6 +2007,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "selfhosted-tts",
     "color": "#10B981",
     "icon": "volume_up",
+    "website": "https://github.com/remsky/Kokoro-FastAPI",
+    "authType": "none",
     "noAuth": true,
     "serviceKinds": [
       "tts"
@@ -1670,9 +2021,11 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "selfhosted-stt",
     "color": "#3B82F6",
     "icon": "mic",
-    "noAuth": true,
+    "website": "https://github.com/ggml-org/whisper.cpp",
+    "authType": "apikey",
+    "noAuth": false,
     "serviceKinds": [
-      "stt"
+      "llm"
     ]
   },
   {
@@ -1682,6 +2035,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "alias": "selfhosted-embedding",
     "color": "#8B5CF6",
     "icon": "layers",
+    "website": "https://github.com/ggml-org/llama.cpp",
+    "authType": "apikey",
     "noAuth": true,
     "serviceKinds": [
       "embedding"

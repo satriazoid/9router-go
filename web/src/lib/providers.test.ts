@@ -71,4 +71,99 @@ describe('providers & media separation', () => {
     assert.strictEqual(TAB_ROUTES['media-video'], '/dashboard/media-providers/video')
     assert.strictEqual(TAB_ROUTES['media-web'], '/dashboard/media-providers/web')
   })
+
+  it('marks clinepass as dual-auth (oauth + apikey, upstream parity)', () => {
+    const clinepass = PROVIDER_CATALOG.find((p) => p.id === 'clinepass')
+    assert.ok(clinepass)
+    assert.strictEqual(clinepass.category, 'oauth')
+    assert.ok(clinepass.authModes?.includes('oauth'))
+    assert.ok(clinepass.authModes?.includes('apikey'))
+    assert.strictEqual(clinepass.website, 'https://cline.bot')
+    assert.strictEqual(clinepass.notice?.signupUrl, 'https://app.cline.bot')
+  })
+
+  it('marks all upstream dual-auth providers (oauth+apikey registry modes)', () => {
+    const dual = [
+      'clinepass',
+      'codebuddy-cn',
+      'codebuddy-intl',
+      'kimchi',
+      'kimi',
+      'qoder',
+      'windsurf',
+      'xai',
+      'xiaomi-mimo',
+    ]
+    for (const id of dual) {
+      const p = PROVIDER_CATALOG.find((e) => e.id === id)
+      assert.ok(p, `${id} missing from catalog`)
+      assert.ok(p.authModes?.includes('oauth'), `${id} missing oauth mode`)
+      assert.ok(p.authModes?.includes('apikey'), `${id} missing apikey mode`)
+    }
+  })
+
+  it('matches upstream oauth category for trae and windsurf', () => {
+    assert.strictEqual(PROVIDER_CATALOG.find((p) => p.id === 'trae')?.category, 'oauth')
+    assert.strictEqual(PROVIDER_CATALOG.find((p) => p.id === 'windsurf')?.category, 'oauth')
+  })
+
+  it('carries upstream display links (website/notice) for all registry providers', () => {
+    // No upstream registry counterpart (Go-only or pseudo header entries),
+    // or no display link upstream by design (mimo-free, mmf, opencode).
+    const exempt = new Set([
+      'freebuff',
+      'kimi-coding',
+      'mimo-free',
+      'mmf',
+      'opencode',
+      'zai-search',
+      'x-codebuddy-request',
+      'x-github-api-version',
+      'x-requested-with',
+      'x-vscode-user-agent-library-version',
+      'anthropic-version',
+      'openai-intent',
+      'originator',
+      'user-agent',
+    ])
+    for (const p of PROVIDER_CATALOG) {
+      if (exempt.has(p.id)) continue
+      assert.ok(
+        p.website || p.notice || p.authType || p.authHint,
+        `${p.id} missing upstream display data (website/notice/authType/authHint)`
+      )
+    }
+    const grokWeb = PROVIDER_CATALOG.find((p) => p.id === 'grok-web')
+    assert.strictEqual(grokWeb?.authType, 'cookie')
+    assert.ok(grokWeb?.authHint)
+    const openai = PROVIDER_CATALOG.find((p) => p.id === 'openai')
+    assert.strictEqual(openai?.notice?.apiKeyUrl, 'https://platform.openai.com/api-keys')
+  })
+
+  it('keeps self-hosted/image providers on required API key (upstream parity)', () => {
+    for (const id of ['comfyui', 'sdwebui', 'recraft']) {
+      const p = PROVIDER_CATALOG.find((e) => e.id === id)
+      assert.ok(p, `${id} missing from catalog`)
+      assert.strictEqual(p.category, 'apikey')
+      assert.strictEqual(p.noAuth, undefined)
+    }
+  })
+
+  it('marks devin-cli as free noAuth (upstream parity)', () => {
+    const p = PROVIDER_CATALOG.find((e) => e.id === 'devin-cli')
+    assert.ok(p)
+    assert.strictEqual(p.category, 'free')
+    assert.strictEqual(p.noAuth, true)
+  })
+
+  it('matches upstream free category for gemini-cli', () => {
+    assert.strictEqual(PROVIDER_CATALOG.find((p) => p.id === 'gemini-cli')?.category, 'free')
+  })
+
+  it('includes hidden mmf provider (upstream parity)', () => {
+    const p = PROVIDER_CATALOG.find((e) => e.id === 'mmf')
+    assert.ok(p)
+    assert.strictEqual(p.category, 'apikey')
+    assert.strictEqual(p.hidden, true)
+  })
 })

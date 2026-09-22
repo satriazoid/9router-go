@@ -24,7 +24,6 @@
 
   let showAddOpenAIModal = $state(false)
   let showAddAnthropicModal = $state(false)
-  let isSubmitting = $state(false)
 
   async function handleToggleAll(providerId: string, newActive: boolean) {
     const conns = connections.filter((c) => c.provider === providerId)
@@ -39,10 +38,8 @@
     prefix: string
     baseUrl: string
     apiType?: 'chat' | 'responses'
-    apiKey?: string
     type: string
   }) {
-    isSubmitting = true
     try {
       const node = await api.createProviderNode({
         name: data.name,
@@ -51,14 +48,6 @@
         apiType: data.apiType,
         type: data.type as unknown as string
       })
-      if (data.apiKey) {
-        await api.createConnection({
-          provider: node.id,
-          authType: 'compatible',
-          name: `${data.name} Key`,
-          apiKey: data.apiKey
-        })
-      }
       showAddOpenAIModal = false
       showAddAnthropicModal = false
       onRefresh()
@@ -66,8 +55,6 @@
       onSelectProvider?.(node.id)
     } catch (err) {
       alert(`Failed to add provider node: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      isSubmitting = false
     }
   }
 </script>
@@ -100,14 +87,12 @@
 <AddCompatibleNodeModal
   isOpen={showAddOpenAIModal}
   type="openai-compatible"
-  {isSubmitting}
   onClose={() => (showAddOpenAIModal = false)}
   onSubmit={handleCreateNode}
 />
 <AddCompatibleNodeModal
   isOpen={showAddAnthropicModal}
   type="anthropic-compatible"
-  {isSubmitting}
   onClose={() => (showAddAnthropicModal = false)}
   onSubmit={handleCreateNode}
 />

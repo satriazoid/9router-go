@@ -22,6 +22,38 @@ var CredentialFallbacks = map[string]string{
 	"clinepass":     "cline",
 }
 
+// ResolveProviderProxyPoolID returns the active proxy pool ID configured for a provider,
+// checking both the canonical provider name and its alias/counterpart (e.g. antigravity <-> opencode).
+func (h *ChatHandler) ResolveProviderProxyPoolID(provider string) string {
+	if h.Repo == nil {
+		return ""
+	}
+	settings, err := h.Repo.GetSettings()
+	if err != nil || settings == nil || settings.ProviderStrategies == nil {
+		return ""
+	}
+
+	checkList := []string{provider}
+	switch provider {
+	case "antigravity", "ag":
+		checkList = append(checkList, "opencode", "oc", "antigravity")
+	case "opencode", "oc":
+		checkList = append(checkList, "antigravity", "ag", "opencode")
+	case "cline":
+		checkList = append(checkList, "clinepass")
+	case "clinepass":
+		checkList = append(checkList, "cline")
+	}
+
+	for _, p := range checkList {
+		if strat, ok := settings.ProviderStrategies[p]; ok {
+			if strat.ProxyPoolID != "" && strat.ProxyPoolID != "__none__" {
+				return strat.ProxyPoolID
+			}
+		}
+	}
+	return ""
+}
 // GetBestConnection retrieves the highest-priority active connection for a provider.
 // When connectionID is non-empty, it fetches that specific connection directly.
 func (h *ChatHandler) GetBestConnection(provider string, connectionID string, excludeIDs []string, model string) (*models.ProviderConnection, *ConnectionData, error) {
@@ -63,14 +95,7 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 				connData := &ConnectionData{
 					AccessToken: "public",
 				}
-				settings, err := h.Repo.GetSettings()
-				if err == nil && settings != nil && settings.ProviderStrategies != nil {
-					if strat, ok := settings.ProviderStrategies[provider]; ok {
-						if strat.ProxyPoolID != "" && strat.ProxyPoolID != "__none__" {
-							connData.ProxyPoolID = strat.ProxyPoolID
-						}
-					}
-				}
+				connData.ProxyPoolID = h.ResolveProviderProxyPoolID(provider)
 				publicName := "Public"
 				conn := &models.ProviderConnection{
 					ID:       "noauth",
@@ -199,6 +224,7 @@ func (h *ChatHandler) getProviderConfig(provider string, connData *ConnectionDat
 				if pool.Type == "vercel" || pool.Type == "cloudflare" || pool.Type == "deno" {
 					relayURL = pool.NextURL()
 					noProxy = pool.NoProxy
+					logProxyOnce(connData.ProxyPoolID, relayURL, pool.Type)
 				}
 			}
 		}

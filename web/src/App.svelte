@@ -15,6 +15,7 @@
   import CliToolsView from './components/CliToolsView.svelte'
   import CombosView from './components/combos/CombosView.svelte'
   import ConnectionsView from './components/connections/ConnectionsView.svelte'
+  import OAuthCallbackView from './components/connections/OAuthCallbackView.svelte'
   import EndpointView from './components/EndpointView.svelte'
   import LoginView from './components/LoginView.svelte'
   import MediaKindView from './components/media/MediaKindView.svelte'
@@ -26,6 +27,7 @@
   import SkillsView from './components/SkillsView.svelte'
   import SettingsView from './components/SettingsView.svelte'
   import Sidebar from './components/Sidebar.svelte'
+  import Toasts from './lib/ui/Toasts.svelte'
   import TerminalView from './components/TerminalView.svelte'
   import TokenSaverView from './components/TokenSaverView.svelte'
   import TopBar from './components/TopBar.svelte'
@@ -52,6 +54,11 @@
   )
   let selectedMedia = $state<MediaProviderRoute | null>(
     typeof window !== 'undefined' ? parseMediaProvider(window.location.pathname) : null
+  )
+  // OAuth callback tab (provider redirect target): standalone page, no login
+  // gate — it only hands the code over to the dashboard tab via storage.
+  let isOAuthCallback = $state(
+    typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/callback'
   )
 
   function navigate(tab: ActiveTab, replace = false, providerId?: string | null) {
@@ -205,8 +212,8 @@
     'media-web': { title: 'Web Fetch & Search', description: 'Configure web search and scrape tools' },
     'proxy-pools': { title: 'Proxy Pools', description: 'Manage your proxy pool configurations' },
     skills: { title: 'Agent Skills', description: 'Copy a link and paste to your AI to use 9Router — no install needed' },
-    'console-log': { title: 'Console Logs', description: 'Live gateway event stream' },
-    terminal: { title: 'Console Logs', description: 'Live gateway event stream' },
+    'console-log': { title: 'Console Log', description: 'Live server console output' },
+    terminal: { title: 'Console Log', description: 'Live server console output' },
     settings: { title: 'Settings', description: 'Manage your preferences and configuration' },
     keys: { title: 'CLI & Remote Access', description: 'API keys for your CLI tools' },
   }
@@ -217,7 +224,9 @@
   }
 </script>
 
-{#if isAuthChecking}
+{#if isOAuthCallback}
+  <OAuthCallbackView />
+{:else if isAuthChecking}
   <div class="min-h-screen flex items-center justify-center bg-bg p-4">
     <div class="text-center">
       <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -236,6 +245,7 @@
   />
 {:else}
   <div class="flex h-screen w-full overflow-hidden bg-bg text-text-main font-body transition-colors duration-300">
+    <Toasts />
     <!-- Mobile sidebar drawer backdrop -->
     {#if isMobileMenuOpen}
       <div

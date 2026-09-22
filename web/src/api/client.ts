@@ -57,6 +57,31 @@ export interface Settings {
   headroomTimeoutMs?: number
   headroomKompress?: boolean
   autoUpdate?: boolean
+  /** Dashboard security & SSO (profile page, Next parity). */
+  requireLogin?: boolean
+  hasPassword?: boolean
+  authMode?: string
+  ssoType?: string
+  oidcIssuerUrl?: string
+  oidcClientId?: string
+  oidcScopes?: string
+  oidcLoginLabel?: string
+  samlEntryPoint?: string
+  samlIssuer?: string
+  samlCert?: string
+  samlLoginLabel?: string
+  samlAttributeEmail?: string
+  samlAttributeName?: string
+  /** Language, routing and network preferences (profile page). */
+  language?: string
+  fallbackStrategy?: string
+  comboStrategy?: string
+  stickyRoundRobinLimit?: number
+  comboStickyRoundRobinLimit?: number
+  enableObservability?: boolean
+  outboundProxyEnabled?: boolean
+  outboundProxyUrl?: string
+  outboundNoProxy?: string
   providerStrategies?: Record<string, ProviderStrategyConfig>
   [key: string]: unknown
 }
@@ -108,6 +133,30 @@ export interface ProxyPool {
   [key: string]: unknown
 }
 
+/** Payload accepted by POST /api/connections (upstream POST /api/providers). */
+export interface CreateConnectionPayload {
+  id?: string
+  provider: string
+  authType: string
+  name?: string
+  displayName?: string
+  apiKey?: string
+  data?: string
+  priority?: number
+  testStatus?: 'active' | 'unknown' | string
+  proxyPoolId?: string | null
+  defaultModel?: string
+  providerSpecificData?: Record<string, unknown>
+}
+
+/** Result of POST /api/providers/validate. supported=false means this backend
+ * has no probe for the provider, so the UI must not claim the key is invalid. */
+export interface ValidateProviderResult {
+  supported: boolean
+  valid: boolean
+  error?: string
+}
+
 export interface ProviderNode {
   id: string
   type: string
@@ -155,11 +204,38 @@ export interface ConnectionUsageResponse {
   error?: string
 }
 
+export interface FreebuffSessionSwitchResponse {
+  status: 'active'
+  currentModel: string
+  instanceId?: string
+  expiresAt?: string
+  /** False when the session was already on the requested model. */
+  switched: boolean
+  /** Freebucks the server credited back for the released session. */
+  freebucksRefund?: number
+}
+
 export interface FreebuffSessionStatusResponse {
-  status: 'active' | 'none' | 'unauthorized'
+  status: 'active' | 'none' | 'unauthorized' | 'banned' | 'country_blocked'
+  /** Account this report describes — set so the UI can name it. */
+  connectionId?: string
+  connectionName?: string
   currentModel?: string
   instanceId?: string
   expiresAt?: string
+  accessTier?: string
+  countryCode?: string
+  /** Present when the server refuses this region, even on an active session. */
+  countryBlockReason?: string
+  /** Sessions the account has left today, for the model in currentModel. */
+  rateLimit?: {
+    model?: string
+    limit?: number
+    recentCount?: number
+    poolLabel?: string
+    resetAt?: string
+    resetTimeZone?: string
+  }
   freebucks?: {
     balance?: number
     daily?: {
@@ -260,11 +336,32 @@ export const api = {
       } as ProviderConnection
     })
   },
-  createConnection: (payload: { id?: string; provider: string; authType: string; name?: string; apiKey?: string; data?: string }) =>
+  createConnection: (payload: CreateConnectionPayload) =>
     request<{ success: boolean; id: string }>('/api/connections', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  /** Probe a raw API key against the provider (upstream POST /api/providers/validate). */
+  validateProvider: async (payload: {
+    provider: string
+    apiKey?: string
+    providerSpecificData?: Record<string, unknown>
+  }): Promise<ValidateProviderResult> => {
+    try {
+      const res = await request<{ valid?: boolean; supported?: boolean; error?: string | null }>(
+        '/api/providers/validate',
+        { method: 'POST', body: JSON.stringify(payload) }
+      )
+      return {
+        supported: res.supported !== false,
+        valid: res.valid === true,
+        error: typeof res.error === 'string' && res.error ? res.error : undefined,
+      }
+    } catch {
+      // 400 "Provider validation not supported" and transport errors both land here.
+      return { supported: false, valid: false }
+    }
+  },
   updateConnection: (
     id: string,
     payload:
@@ -306,6 +403,14 @@ export const api = {
     })
     return res.node
   },
+  validateProviderNode: (payload: { baseUrl: string; apiKey: string; type?: string; modelId?: string }) =>
+    request<{ valid: boolean; error?: string; method?: string; dimensions?: number }>(
+      '/api/provider-nodes/validate',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
   deleteProviderNode: (id: string) =>
     request<{ success: boolean }>(`/api/provider-nodes/${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -393,11 +498,106 @@ export const api = {
     request<FreebuffSessionStatusResponse>(
       `/api/oauth/freebuff/session${connectionId ? `?connectionId=${encodeURIComponent(connectionId)}` : ''}`
     ),
+  switchFreebuffSession: (model: string, connectionId?: string) =>
+    request<FreebuffSessionSwitchResponse>('/api/oauth/freebuff/session/switch', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, model }),
+    }),
   getAntigravityAuthorizeUrl: () => request<{ url: string; redirectUrl: string; state: string }>('/api/oauth/antigravity/authorize'),
   antigravityCallback: (code: string, redirectUri?: string) =>
     request<{ success: boolean; error?: string }>('/api/oauth/antigravity/callback', {
       method: 'POST',
       body: JSON.stringify({ code, redirect_uri: redirectUri, redirectUri: redirectUri }),
+    }),
+  getClineAuthorizeUrl: (provider: string, redirectUri?: string) =>
+    request<{ url: string; authUrl: string; state: string; codeVerifier: string; codeChallenge: string; redirectUri: string }>(
+      `/api/oauth/cline/authorize?provider=${encodeURIComponent(provider)}${redirectUri ? `&redirect_uri=${encodeURIComponent(redirectUri)}` : ''}`
+    ),
+  clineExchange: (provider: string, code: string, codeVerifier: string, redirectUri?: string, name?: string) =>
+    request<{ status: string; connectionId: string; error?: string }>('/api/oauth/cline/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ provider, code, codeVerifier, redirectUri, name }),
+    }),
+  importOAuthToken: (provider: string, accessToken: string, refreshToken?: string, name?: string) =>
+    request<{ id: string; connection: string; error?: string }>(`/api/oauth/${encodeURIComponent(provider)}/import`, {
+      method: 'POST',
+      body: JSON.stringify({ accessToken, refreshToken, name }),
+    }),
+  pkceAuthorize: (provider: string, opts?: { redirectUri?: string; baseUrl?: string; clientId?: string }) => {
+    const q = new URLSearchParams({ provider })
+    if (opts?.redirectUri) q.set('redirect_uri', opts.redirectUri)
+    if (opts?.baseUrl) q.set('baseUrl', opts.baseUrl)
+    if (opts?.clientId) q.set('clientId', opts.clientId)
+    return request<{ url: string; authUrl: string; state: string; codeVerifier: string; codeChallenge: string; redirectUri: string }>(
+      `/api/oauth/pkce/authorize?${q.toString()}`
+    )
+  },
+  pkceExchange: (payload: { provider: string; code: string; codeVerifier: string; redirectUri?: string; state?: string; baseUrl?: string; clientId?: string; clientSecret?: string; name?: string }) =>
+    request<{ status: string; connectionId: string; error?: string }>('/api/oauth/pkce/exchange', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  authcodeAuthorize: (provider: string, redirectUri?: string) => {
+    const q = new URLSearchParams({ provider })
+    if (redirectUri) q.set('redirect_uri', redirectUri)
+    return request<{ url: string; authUrl: string; state: string; redirectUri: string }>(
+      `/api/oauth/authcode/authorize?${q.toString()}`
+    )
+  },
+  authcodeExchange: (payload: { provider: string; code: string; redirectUri?: string; state?: string; name?: string }) =>
+    request<{ status: string; connectionId: string; error?: string }>('/api/oauth/authcode/exchange', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  customAuthorize: (provider: 'trae' | 'windsurf' | 'zed', redirectUri?: string) =>
+    request<{ url: string; authUrl: string; state?: string; codeVerifier?: string; redirectUri?: string; loginTraceId?: string; systemId?: string }>(
+      `/api/oauth/${provider}/authorize${redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : ''}`
+    ),
+  customExchange: (provider: 'trae' | 'windsurf' | 'zed', payload: { code: string; state?: string; codeVerifier?: string; systemId?: string; name?: string }) =>
+    request<{ status: string; connectionId: string; error?: string }>(`/api/oauth/${provider}/exchange`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deviceStart: (provider: string, opts?: { region?: string; startUrl?: string; authMethod?: string }) =>
+    request<{ device_code: string; user_code: string; verification_uri: string; verification_uri_complete: string; expires_in: number; interval: number; session: Record<string, unknown> }>(
+      '/api/oauth/device/start',
+      { method: 'POST', body: JSON.stringify({ provider, ...opts }) }
+    ),
+  devicePoll: (provider: string, deviceCode: string, session?: Record<string, unknown>) =>
+    request<{ status: string; connectionId?: string; error?: string }>('/api/oauth/device/poll', {
+      method: 'POST',
+      body: JSON.stringify({ provider, device_code: deviceCode, session }),
+    }),
+  cursorImport: (accessToken: string, machineId: string) =>
+    request<{ success: boolean; id: string; error?: string }>('/api/oauth/cursor/import', {
+      method: 'POST',
+      body: JSON.stringify({ accessToken, machineId }),
+    }),
+  cursorAutoImport: () => request<{ success: boolean; id: string; error?: string }>('/api/oauth/cursor/auto-import'),
+  kimchiAuthorize: (redirectUri?: string) => request<{ url: string; authUrl: string; state: string }>(`/api/oauth/kimchi/authorize${redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : ''}`),
+  kimchiExchange: (code: string) =>
+    request<{ status: string; connectionId: string; error?: string }>('/api/oauth/kimchi/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  gitlabPAT: (token: string, baseUrl?: string) =>
+    request<{ success: boolean; error?: string }>('/api/oauth/gitlab/pat', {
+      method: 'POST',
+      body: JSON.stringify({ token, baseUrl }),
+    }),
+  iflowCookie: (cookie: string) =>
+    request<{ success: boolean; error?: string }>('/api/oauth/iflow/cookie', {
+      method: 'POST',
+      body: JSON.stringify({ cookie }),
+    }),
+  mimoAuthorize: (redirectUri?: string) => {
+    const q = redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : ''
+    return request<{ url: string; authUrl: string; codeVerifier: string }>(`/api/oauth/xiaomi-mimo/authorize${q}`)
+  },
+  mimoExchange: (code: string, codeVerifier: string) =>
+    request<{ status: string; connectionId: string; error?: string }>('/api/oauth/xiaomi-mimo/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code, codeVerifier }),
     }),
   getSystemVersion: () => request<{ currentVersion: string; latestVersion?: string }>('/api/version'),
 
@@ -416,6 +616,28 @@ export const api = {
     } catch {}
     const conns = await api.getConnections().catch(() => [])
     return { connections: conns }
+  },
+  // Paginated provider fetch with filters (mirrors Next.js /api/providers/client).
+  // The Go backend currently returns the full list; pagination is applied client-side.
+  getProvidersClientPage: async (
+    query: string,
+  ): Promise<{
+    connections: ProviderConnection[]
+    providerOptions?: string[]
+    pagination?: { page: number; pageSize: number; total: number; totalPages: number }
+    totals?: { eligibleConnections: number; providerFilteredConnections: number }
+  }> => {
+    try {
+      const res = await request<{
+        connections: ProviderConnection[]
+        providerOptions?: string[]
+        pagination?: { page: number; pageSize: number; total: number; totalPages: number }
+        totals?: { eligibleConnections: number; providerFilteredConnections: number }
+      }>(`/api/providers/client${query ? `?${query}` : ''}`)
+      if (res && res.connections) return res
+    } catch {}
+    const fallback = await api.getProvidersClient()
+    return { connections: fallback.connections }
   },
   getConnectionUsage: async (connectionId: string, force = false): Promise<ConnectionUsageResponse> => {
     return request<ConnectionUsageResponse>(`/api/usage/${encodeURIComponent(connectionId)}${force ? '?force=1' : ''}`)
@@ -479,17 +701,17 @@ export const api = {
       { method: 'POST' }
     ),
   deployVercelRelay: (payload: { vercelToken: string; projectName?: string }) =>
-    request<{ success?: boolean; proxyUrl?: string; error?: string }>('/proxy-pools/vercel-deploy', {
+    request<{ success?: boolean; proxyUrl?: string; deployUrl?: string; error?: string }>('/proxy-pools/vercel-deploy', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  deployCloudflareRelay: (payload: { accountId: string; apiToken: string; workerName?: string }) =>
-    request<{ success?: boolean; proxyUrl?: string; error?: string }>('/proxy-pools/cloudflare-deploy', {
+  deployCloudflareRelay: (payload: { accountId: string; apiToken: string; projectName?: string }) =>
+    request<{ success?: boolean; proxyUrl?: string; deployUrl?: string; error?: string }>('/proxy-pools/cloudflare-deploy', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
   deployDenoRelay: (payload: { denoToken: string; orgDomain: string; projectName?: string }) =>
-    request<{ success?: boolean; proxyUrl?: string; error?: string }>('/proxy-pools/deno-deploy', {
+    request<{ success?: boolean; proxyUrl?: string; deployUrl?: string; error?: string }>('/proxy-pools/deno-deploy', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

@@ -38,10 +38,12 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Delete("/providers/{id}", h.HandleDeleteConnection)
 		r.Post("/connections/{id}/test", h.HandleTestConnection)
 		r.Post("/providers/{id}/test", h.HandleTestConnection)
+		r.Post("/providers/validate", h.HandleValidateProvider)
 
 		// Provider Nodes (Custom Endpoints)
 		r.Get("/provider-nodes", h.HandleGetProviderNodes)
 		r.Post("/provider-nodes", h.HandleCreateProviderNode)
+		r.Post("/provider-nodes/validate", h.HandleValidateProviderNode)
 		r.Delete("/provider-nodes/{id}", h.HandleDeleteProviderNode)
 
 		// Combos
@@ -73,6 +75,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// Settings
 		r.Get("/settings", h.HandleGetSettings)
 		r.Put("/settings", h.HandleUpdateSettings)
+		r.Get("/settings/database", h.HandleExportDatabase)
+		r.Post("/settings/database", h.HandleImportDatabase)
+		r.Post("/settings/proxy-test", h.HandleProxyTest)
 
 		// Usage & Quotas
 		r.Get("/usage/providers", h.HandleGetUsageProviders)

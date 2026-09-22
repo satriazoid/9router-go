@@ -3,6 +3,7 @@
   import {
     api,
     type ConnectionUsageResponse,
+    type CreateConnectionPayload,
     type FreebuffSessionStatusResponse,
     type ProviderConnection,
     type ProviderNode,
@@ -10,14 +11,27 @@
     type Settings
   } from '../../api/client'
   import { PROVIDER_CATALOG, type ProviderCatalogItem } from '../../lib/providers'
+  import {
+    clearCallback,
+    clearPending,
+    dashboardCallbackURL,
+    loadPendings,
+    matchPending,
+    OAUTH_CALLBACK_KEY,
+    OAUTH_CHANNEL,
+    readCallback,
+    savePending,
+  } from '../../lib/oauth-handoff'
   import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import {
     buildAvailableModels,
     fetchProviderModelsData,
+    fetchSuggestedModels,
     getIconPath,
     isChatModel,
     type CustomModelData,
-    type ProviderModelItem
+    type ProviderModelItem,
+    type SuggestedModel
   } from './types'
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
@@ -51,9 +65,48 @@
   let providerIcon = $derived(getIconPath(providerId, selectedNode?.apiType))
   let providerColor = $derived(selectedCatalogItem?.color || '#f59e0b')
   let providerWebsite = $derived(
-    selectedCatalogItem?.website || (providerId === 'antigravity' ? 'https://antigravity.google' : '')
+    selectedCatalogItem?.notice?.apiKeyUrl ||
+      selectedCatalogItem?.notice?.signupUrl ||
+      selectedCatalogItem?.website ||
+      (providerId === 'antigravity' ? 'https://antigravity.google' : '')
   )
+  // Upstream parity: "Get API Key" when the notice links straight to a key
+  // page, otherwise "Sign up / Learn more".
+  let providerWebsiteLabel = $derived(
+    selectedCatalogItem?.notice?.apiKeyUrl ? 'Get API Key' : 'Sign up / Learn more'
+  )
+  let providerNoticeText = $derived(selectedCatalogItem?.notice?.text || '')
+  let providerNoticeApiKeyUrl = $derived(selectedCatalogItem?.notice?.apiKeyUrl || '')
   let isOAuth = $derived(selectedCatalogItem?.category === 'oauth' || providerId === 'antigravity')
+  let isClineOAuth = $derived(providerId === 'cline' || providerId === 'clinepass')
+  let isPKCEOAuth = $derived(providerId === 'claude' || providerId === 'codex' || providerId === 'xai' || providerId === 'gitlab')
+  let isAuthCodeOAuth = $derived(providerId === 'gemini-cli' || providerId === 'iflow')
+  let isCustomOAuth = $derived(providerId === 'trae' || providerId === 'windsurf' || providerId === 'zed')
+  // Upstream parity: providers with authModes ["apikey","oauth"] offer both an
+  // OAuth login and a manual API Key button (data-driven, category-independent
+  // so freeTier kimchi is covered too — mirrors upstream hasDualAuthModes).
+  let authModes = $derived(selectedCatalogItem?.authModes || [])
+  let hasDualAuthModes = $derived(
+    !selectedNode && authModes.includes('oauth') && authModes.includes('apikey')
+  )
+  // Upstream per-provider button labels ([id]/page.js).
+  let oauthButtonLabel = $derived(
+    providerId === 'xai' ? 'Grok Build OAuth' : providerId === 'kimi' ? 'Kimi Coding OAuth' : 'OAuth'
+  )
+  let apiKeyButtonLabel = $derived(
+    providerId === 'xai'
+      ? 'xAI API Key'
+      : providerId === 'kimi'
+        ? 'Kimi API Key'
+        : providerId === 'qoder'
+          ? 'PAT'
+          : 'API Key'
+  )
+  let isDeviceOAuth = $derived(
+    providerId === 'qoder' || providerId === 'kilocode' || providerId === 'grok-cli' ||
+    providerId === 'github' || providerId === 'kiro' || providerId === 'kimi' ||
+    providerId === 'kimi-coding' || providerId === 'codebuddy-cn' || providerId === 'codebuddy-intl'
+  )
   let isNoAuth = $derived((selectedCatalogItem?.noAuth === true || providerId === 'opencode') && providerId !== 'antigravity')
   let hasRiskNotice = $derived(!isNoAuth && (isOAuth || providerId === 'antigravity'))
 
@@ -103,7 +156,25 @@
   let allAvailableModels = $derived<ProviderModelItem[]>(
     buildAvailableModels(builtInModels, providerCustomModels)
   )
-  let visibleModels = $derived(allAvailableModels.filter((m) => !disabledModelIds.includes(m.id)))
+  // Display-only A–Z sort (case-insensitive) so the list order is stable
+  // instead of catalog insertion order. filter() returns a fresh array,
+  // so the in-place sort below is safe.
+  let visibleModels = $derived(
+    allAvailableModels
+      .filter((m) => !disabledModelIds.includes(m.id))
+      .sort((a, b) =>
+        (a.name || a.id).localeCompare(b.name || b.id, undefined, { sensitivity: 'base' })
+      )
+  )
+  // Suggested free models from the provider's public catalog (upstream parity).
+  let suggestedModels = $state<SuggestedModel[]>([])
+  let suggestedNotAdded = $derived(
+    suggestedModels.filter(
+      (m) =>
+        !builtInModels.some((b) => b.id === m.id) &&
+        !providerCustomModels.some((c) => c.id === m.id)
+    )
+  )
   let allDisabled = $derived(
     allAvailableModels.length > 0 && disabledModelIds.length >= allAvailableModels.length
   )
@@ -146,6 +217,131 @@
   let callbackInput = $state('')
   let oauthError = $state<string | null>(null)
   let isConnecting = $state(false)
+  let clineCodeVerifier = $state('')
+  let clineRedirectUri = $state('')
+  let pkceCodeVerifier = $state('')
+  let pkceState = $state('')
+  let pkceRedirectUri = $state('')
+  let gitlabBaseUrl = $state('')
+  let gitlabClientId = $state('')
+  let gitlabClientSecret = $state('')
+  let customState = $state('')
+  let customVerifier = $state('')
+  let customSystemId = $state('')
+  let deviceUserCode = $state('')
+  let deviceCode = $state('')
+  let deviceSession: Record<string, unknown> = $state({})
+  let deviceInterval = $state(5)
+  let devicePollTimer: ReturnType<typeof setInterval> | null = $state(null)
+  // OAuth auto-handoff: callback tab writes to storage + BroadcastChannel,
+  // this modal restores the pending session and auto-submits.
+  let autoSubmitted = $state(false)
+
+  function dashboardCallback(): string {
+    return dashboardCallbackURL(dashboardOrigin())
+  }
+
+  function rememberPending(p: { state: string; verifier?: string; redirectUri?: string; extra?: Record<string, string> }) {
+    if (typeof window === 'undefined') return
+    try {
+      savePending(window.localStorage, { provider: providerId, ...p })
+    } catch {
+      /* storage blocked — degradasi ke paste manual */
+    }
+  }
+
+  function consumeOAuthCallback(): boolean {
+    if (typeof window === 'undefined' || autoSubmitted || isConnecting || !showOAuthModal) return false
+    let cb
+    try {
+      cb = readCallback(window.localStorage)
+    } catch {
+      return false
+    }
+    if (!cb || (!cb.raw && !cb.error)) return false
+    if (cb.error) {
+      oauthError = `Login gagal: ${cb.error}${cb.errorDesc ? ` — ${cb.errorDesc}` : ''}`
+      try {
+        clearCallback(window.localStorage)
+      } catch {
+        /* noop */
+      }
+      return true
+    }
+    let pendings
+    try {
+      pendings = loadPendings(window.localStorage)
+    } catch {
+      return false
+    }
+    const pending = matchPending(pendings, providerId, cb.state)
+    if (!pending || pending.provider !== providerId) return false
+    // Restore session values saved at authorize time.
+    if (pending.verifier) {
+      if (isClineOAuth) clineCodeVerifier = pending.verifier
+      else if (isPKCEOAuth) pkceCodeVerifier = pending.verifier
+      else customVerifier = pending.verifier
+    }
+    if (pending.redirectUri) {
+      if (isClineOAuth) clineRedirectUri = pending.redirectUri
+      else pkceRedirectUri = pending.redirectUri
+    }
+    const extra = pending.extra || {}
+    if (extra.state) {
+      if (isCustomOAuth) customState = extra.state
+      else pkceState = extra.state
+    }
+    if (providerId === 'gitlab') {
+      if (extra.baseUrl) gitlabBaseUrl = extra.baseUrl
+      if (extra.clientId) gitlabClientId = extra.clientId
+      if (extra.clientSecret) gitlabClientSecret = extra.clientSecret
+    }
+    if (extra.systemId) customSystemId = extra.systemId
+    callbackInput = cb.raw
+    try {
+      clearPending(window.localStorage, pending.provider, pending.state)
+      clearCallback(window.localStorage)
+    } catch {
+      /* noop */
+    }
+    autoSubmitted = true
+    void submitManualCallback()
+    return true
+  }
+
+  // Listen for the callback tab while the OAuth modal is open.
+  $effect(() => {
+    if (!showOAuthModal || typeof window === 'undefined') return
+    autoSubmitted = false
+    consumeOAuthCallback()
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === OAUTH_CALLBACK_KEY || e.key === null) consumeOAuthCallback()
+    }
+    window.addEventListener('storage', onStorage)
+    let bc: BroadcastChannel | null = null
+    try {
+      bc = new BroadcastChannel(OAUTH_CHANNEL)
+      bc.onmessage = () => consumeOAuthCallback()
+    } catch {
+      /* BroadcastChannel unavailable — poll covers it */
+    }
+    const timer = setInterval(consumeOAuthCallback, 1500)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      try {
+        bc?.close()
+      } catch {
+        /* noop */
+      }
+      clearInterval(timer)
+    }
+  })
+  let isSpecialOAuth = $derived(
+    providerId === 'cursor' || providerId === 'kimchi' || providerId === 'xiaomi-mimo'
+  )
+  let specialToken = $state('')
+  let specialExtra = $state('')
+  let specialBaseUrl = $state('')
 
   let showApplyProxyModal = $state(false)
   let isApplyingProxy = $state(false)
@@ -159,11 +355,19 @@
   let isSavingEdit = $state(false)
 
   let showAddKeyModal = $state(false)
+  let addConnectionError = $state('')
   let showAddCustomModelModal = $state(false)
   let showEditNodeModal = $state(false)
   // Freebuff specific state & session tracking
   let isFreebuff = $derived(
     providerId === 'freebuff' || storageAlias === 'fb' || storageAlias === 'freebuff'
+  )
+  // The session API has to be asked about an account that can actually serve.
+  // Connections are ordered by priority, and a disabled one can sort first —
+  // its rejected credential reports `banned`/`unauthorized` and blanks the
+  // panel while the live seat sits on the next account.
+  let freebuffConnection = $derived(
+    providerConnections.find((c) => c.isActive === 1) ?? providerConnections[0]
   )
   let freebuffSession = $state<FreebuffSessionStatusResponse | null>(null)
   let isLoadingSession = $state(false)
@@ -183,8 +387,7 @@
     }
     isLoadingSession = true
     try {
-      const firstConn = providerConnections[0]
-      freebuffSession = await api.getFreebuffSessionStatus(firstConn?.id)
+      freebuffSession = await api.getFreebuffSessionStatus(freebuffConnection?.id)
     } catch (err) {
       console.error('Failed to fetch Freebuff session status:', err)
       freebuffSession = null
@@ -209,11 +412,14 @@
     return mid === cur || mid.endsWith('/' + cur) || cur.endsWith('/' + mid)
   }
 
-  function checkIsLockedBySession(modelId: string): boolean {
-    if (!isFreebuff || freebuffSession?.status !== 'active' || !freebuffSession?.currentModel) {
-      return false
-    }
-    return !checkIsActiveSession(modelId)
+  // Ends the active Freebuff session and re-admits it on the chosen model.
+  // Freebuff serves one model per session and a session lives an hour even when
+  // idle, so this is the only way to change models without waiting it out —
+  // and it must stay an explicit user action (each switch spends a session).
+  async function switchFreebuffModel(model: string) {
+    const res = await api.switchFreebuffSession(model, freebuffConnection?.id)
+    await loadFreebuffSession()
+    return res
   }
 
   async function startFreebuffFlow() {
@@ -278,6 +484,16 @@
       disabledModelIds = modelsData.disabledModelIds
       settings = settingsData
       proxyPools = poolsData
+
+      // Suggested free models from the provider's public catalog (if configured).
+      const fetcher = selectedCatalogItem?.modelsFetcher
+      if (fetcher?.url && fetcher?.type) {
+        fetchSuggestedModels(fetcher).then((list) => {
+          suggestedModels = list
+        })
+      } else {
+        suggestedModels = []
+      }
 
       // Extract Round Robin strategy
       const strategy = settingsData?.providerStrategies?.[providerId]
@@ -748,6 +964,18 @@
       }
     } else if (providerId === 'freebuff') {
       startFreebuffFlow()
+    } else if (isClineOAuth) {
+      openClineOAuth()
+    } else if (isPKCEOAuth) {
+      openPKCEOAuth()
+    } else if (isAuthCodeOAuth) {
+      openAuthCodeOAuth()
+    } else if (isCustomOAuth) {
+      openCustomOAuth()
+    } else if (isDeviceOAuth) {
+      openDeviceOAuth()
+    } else if (isSpecialOAuth) {
+      openSpecialOAuth()
     } else if (isOAuth) {
       openGenericOAuth()
     } else {
@@ -779,8 +1007,234 @@
     }
   }
 
+  async function openPKCEOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    try {
+      const cb = dashboardCallback()
+      const res = await api.pkceAuthorize(
+        providerId,
+        providerId === 'gitlab'
+          ? {
+              redirectUri: cb,
+              baseUrl: gitlabBaseUrl.trim() || undefined,
+              clientId: gitlabClientId.trim() || undefined,
+            }
+          : { redirectUri: cb }
+      )
+      oauthAuthUrl = res.url || res.authUrl
+      pkceCodeVerifier = res.codeVerifier || ''
+      pkceState = res.state || ''
+      pkceRedirectUri = res.redirectUri || ''
+      rememberPending({
+        state: pkceState,
+        verifier: pkceCodeVerifier,
+        redirectUri: pkceRedirectUri,
+        extra: {
+          state: pkceState,
+          baseUrl: gitlabBaseUrl.trim(),
+          clientId: gitlabClientId.trim(),
+          clientSecret: gitlabClientSecret.trim(),
+        },
+      })
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
+      }
+    } catch (err) {
+      alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function openAuthCodeOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    try {
+      const res = await api.authcodeAuthorize(providerId, dashboardCallback())
+      oauthAuthUrl = res.url || res.authUrl
+      pkceState = res.state || ''
+      pkceRedirectUri = res.redirectUri || ''
+      pkceCodeVerifier = ''
+      rememberPending({ state: pkceState, redirectUri: pkceRedirectUri, extra: { state: pkceState } })
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
+      }
+    } catch (err) {
+      alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function openCustomOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    try {
+      const res = await api.customAuthorize(providerId as 'trae' | 'windsurf' | 'zed', dashboardCallback())
+      oauthAuthUrl = res.url || res.authUrl
+      customState = res.state || res.loginTraceId || ''
+      customVerifier = res.codeVerifier || ''
+      customSystemId = res.systemId || ''
+      pkceRedirectUri = res.redirectUri || ''
+      rememberPending({
+        state: customState,
+        verifier: customVerifier,
+        redirectUri: pkceRedirectUri,
+        extra: { state: customState, systemId: customSystemId },
+      })
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
+      }
+    } catch (err) {
+      alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function openDeviceOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    stopDevicePoll()
+    try {
+      const res = await api.deviceStart(providerId)
+      oauthAuthUrl = res.verification_uri_complete || res.verification_uri || ''
+      deviceUserCode = res.user_code || ''
+      deviceCode = res.device_code || ''
+      deviceSession = res.session || {}
+      deviceInterval = res.interval && res.interval > 0 ? res.interval : 5
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank')
+      }
+      pollDeviceOnce()
+      devicePollTimer = setInterval(pollDeviceOnce, deviceInterval * 1000)
+    } catch (err) {
+      oauthError = err instanceof Error ? err.message : String(err)
+      showOAuthModal = true
+    }
+  }
+
+  async function pollDeviceOnce() {
+    if (!showOAuthModal || !deviceCode) return
+    try {
+      const res = await api.devicePoll(providerId, deviceCode, deviceSession)
+      if (res?.status === 'authorized') {
+        stopDevicePoll()
+        showOAuthModal = false
+        onRefresh()
+      } else if (res?.status === 'error') {
+        stopDevicePoll()
+        oauthError = res?.error || 'Authorization failed'
+      }
+    } catch {
+      // Biarkan polling berikutnya mencoba lagi.
+    }
+  }
+
+  function stopDevicePoll() {
+    if (devicePollTimer) {
+      clearInterval(devicePollTimer)
+      devicePollTimer = null
+    }
+    deviceUserCode = ''
+    deviceCode = ''
+  }
+
+  function openSpecialOAuth() {
+    // cursor (import/auto-import), kimchi (browser token), xiaomi-mimo (ECDH).
+    // gitlab PAT & iflow cookie reuse the generic modal + special submit.
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    specialToken = ''
+    specialExtra = ''
+    specialBaseUrl = ''
+    customVerifier = ''
+    oauthAuthUrl = ''
+    if (providerId === 'kimchi' || providerId === 'xiaomi-mimo') {
+      openSpecialAuthorize()
+      return
+    }
+    showOAuthModal = true
+  }
+
+  async function openSpecialAuthorize() {
+    try {
+      const cb = dashboardCallback()
+      const res = providerId === 'kimchi'
+        ? await api.kimchiAuthorize(cb)
+        : await api.mimoAuthorize(cb)
+      oauthAuthUrl = res.url || res.authUrl
+      customVerifier = (res as { codeVerifier?: string }).codeVerifier || ''
+      rememberPending({
+        state: (res as { state?: string }).state || '',
+        verifier: customVerifier || undefined,
+      })
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank')
+      }
+    } catch (err) {
+      oauthError = err instanceof Error ? err.message : String(err)
+      showOAuthModal = true
+    }
+  }
+
+  async function cursorAutoImportNow() {
+    oauthError = null
+    isConnecting = true
+    try {
+      const res = await api.cursorAutoImport()
+      if (!res || (res as { error?: string })?.error || !(res as { success?: boolean })?.success) {
+        oauthError = (res as { error?: string })?.error || 'Auto-import gagal. Pastikan Cursor IDE terinstall & login di host ini.'
+      } else {
+        showOAuthModal = false
+        onRefresh()
+      }
+    } catch (err) {
+      oauthError = err instanceof Error ? err.message : String(err)
+    } finally {
+      isConnecting = false
+    }
+  }
+
+  function dashboardOrigin(): string {
+    if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin
+    return 'http://localhost:20130'
+  }
+
   function openGenericOAuth() {
-    openAntigravityOAuth()
+    // Tidak ada authorize endpoint generik: JANGAN arahkan ke Google/Antigravity.
+    // Tampilkan modal dengan panduan import token manual.
+    oauthError = null
+    oauthAuthUrl = ''
+    callbackInput = ''
+    copiedAuthUrl = false
+    clineCodeVerifier = ''
+    clineRedirectUri = ''
+    showOAuthModal = true
+  }
+
+  async function openClineOAuth() {
+    oauthError = null
+    callbackInput = ''
+    copiedAuthUrl = false
+    try {
+      const res = await api.getClineAuthorizeUrl(providerId, dashboardCallback())
+      oauthAuthUrl = res.url || res.authUrl
+      clineCodeVerifier = res.codeVerifier || ''
+      clineRedirectUri = res.redirectUri || ''
+      rememberPending({ state: res.state || '', verifier: clineCodeVerifier, redirectUri: clineRedirectUri })
+      showOAuthModal = true
+      if (typeof window !== 'undefined' && oauthAuthUrl) {
+        window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
+      }
+    } catch (err) {
+      alert(`Failed to initiate authorization: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   function copyAuthUrl() {
@@ -857,6 +1311,172 @@
           const match = raw.match(/code=([^&]+)/)
           if (match) code = decodeURIComponent(match[1])
         }
+      }
+      if (isClineOAuth) {
+        if (!clineCodeVerifier) {
+          oauthError = 'Sesi otorisasi belum diinisiasi. Tutup modal ini lalu klik Login ulang.'
+          return
+        }
+        try {
+          const res = await api.clineExchange(providerId, code, clineCodeVerifier, redirectUri || clineRedirectUri || undefined)
+          if (!res || (res as { error?: string })?.error || (res as { status?: string })?.status === 'error') {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (isPKCEOAuth) {
+        if (!pkceCodeVerifier) {
+          oauthError = 'Sesi otorisasi belum diinisiasi. Tutup modal ini lalu klik Login ulang.'
+          return
+        }
+        try {
+          const res = await api.pkceExchange({
+            provider: providerId,
+            code,
+            codeVerifier: pkceCodeVerifier,
+            redirectUri: redirectUri || pkceRedirectUri || undefined,
+            state: pkceState || undefined,
+            baseUrl: providerId === 'gitlab' ? gitlabBaseUrl.trim() || undefined : undefined,
+            clientId: providerId === 'gitlab' ? gitlabClientId.trim() || undefined : undefined,
+            clientSecret: providerId === 'gitlab' ? gitlabClientSecret.trim() || undefined : undefined,
+          })
+          if (!res || (res as { error?: string })?.error || (res as { status?: string })?.status === 'error') {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (isAuthCodeOAuth) {
+        try {
+          const res = await api.authcodeExchange({
+            provider: providerId,
+            code,
+            redirectUri: redirectUri || pkceRedirectUri || undefined,
+            state: pkceState || undefined,
+          })
+          if (!res || (res as { error?: string })?.error || (res as { status?: string })?.status === 'error') {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (isCustomOAuth) {
+        if (!raw) return
+        try {
+          const res = await api.customExchange(providerId as 'trae' | 'windsurf' | 'zed', {
+            code: raw,
+            state: customState || undefined,
+            codeVerifier: customVerifier || undefined,
+            systemId: customSystemId || undefined,
+          })
+          if (!res || (res as { error?: string })?.error || (res as { status?: string })?.status === 'error') {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (isSpecialOAuth) {
+        const tok = (specialToken || callbackInput).trim()
+        if (!tok && providerId !== 'cursor') {
+          oauthError = 'Tempel token / callback terlebih dahulu.'
+          return
+        }
+        try {
+          let res: { success?: boolean; status?: string; error?: string } | null = null
+          if (providerId === 'cursor') {
+            if (!tok || !specialExtra.trim()) {
+              oauthError = 'Isi access token dan machine ID.'
+              return
+            }
+            res = await api.cursorImport(tok, specialExtra.trim())
+          } else if (providerId === 'kimchi') {
+            res = await api.kimchiExchange(tok)
+          } else if (providerId === 'xiaomi-mimo') {
+            if (!customVerifier) {
+              oauthError = 'Sesi otorisasi belum diinisiasi. Tutup modal ini lalu klik Login ulang.'
+              return
+            }
+            res = await api.mimoExchange(tok, customVerifier)
+          }
+          if (!res || res?.error || (res.status && res.status === 'error')) {
+            oauthError = res?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (providerId === 'gitlab' && specialToken.trim()) {
+        // GitLab PAT mode (disamping OAuth PKCE).
+        try {
+          const res = await api.gitlabPAT(specialToken.trim(), specialBaseUrl.trim() || undefined)
+          if (!res || (res as { error?: string })?.error || !(res as { success?: boolean })?.success) {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (providerId === 'iflow' && specialToken.trim()) {
+        // iFlow cookie mode (disamping OAuth authcode).
+        try {
+          const res = await api.iflowCookie(specialToken.trim())
+          if (!res || (res as { error?: string })?.error || !(res as { success?: boolean })?.success) {
+            oauthError = (res as { error?: string })?.error || 'Authorization failed'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
+      }
+      if (providerId !== 'antigravity') {
+        if (raw.includes('code=') || raw.includes('http')) {
+          oauthError = `Login OAuth langsung belum didukung untuk ${providerName}. Tempel access token / refresh token sebagai gantinya.`
+          return
+        }
+        try {
+          const res = await api.importOAuthToken(providerId, raw)
+          if (!res || (res as { error?: string })?.error) {
+            oauthError = (res as { error?: string })?.error || 'Import token gagal'
+          } else {
+            showOAuthModal = false
+            onRefresh()
+          }
+        } catch (err) {
+          oauthError = err instanceof Error ? err.message : String(err)
+        }
+        return
       }
       const res = await api.antigravityCallback(code, redirectUri)
       if (res?.success === false) {
@@ -945,13 +1565,14 @@
   }
 
   // Custom Model & Node handlers
-  async function submitAddCustomModel(modelId: string, modelName: string) {
+  // Upstream parity: POST { providerAlias, id, type, caps } — no display name.
+  async function submitAddCustomModel(modelId: string, caps?: { vision?: boolean; reasoning?: boolean }) {
     try {
       await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
         id: modelId,
-        name: modelName || modelId,
         providerAlias: storageAlias,
-        type: 'llm'
+        type: 'llm',
+        ...(caps ? { caps } : {})
       })
       showAddCustomModelModal = false
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
@@ -961,19 +1582,25 @@
     }
   }
 
-  async function handleAddKeyConnection(keyName: string, apiKey: string) {
+  async function handleAddKeyConnection(payload: CreateConnectionPayload) {
+    addConnectionError = ''
     try {
       await api.createConnection({
-        provider: providerId,
-        authType: selectedNode ? 'compatible' : 'apikey',
-        name: keyName || `${providerName} Key`,
-        apiKey
+        ...payload,
+        provider: payload.provider || providerId,
+        name: payload.name || `${providerName} Key`
       })
       showAddKeyModal = false
       onRefresh()
     } catch (err) {
-      alert(`Add connection failed: ${err instanceof Error ? err.message : String(err)}`)
+      // Upstream keeps the modal open and shows the error inline.
+      addConnectionError = err instanceof Error ? err.message : String(err)
     }
+  }
+
+  function openAddKeyModal() {
+    addConnectionError = ''
+    showAddKeyModal = true
   }
 
   async function handleDeleteProviderNode(nodeId: string) {
@@ -1029,7 +1656,7 @@
               class="text-xs text-primary hover:underline inline-flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">open_in_new</span>
-              Sign up / Learn more
+              {providerWebsiteLabel}
             </a>
           {/if}
         </div>
@@ -1047,6 +1674,24 @@
       <p class="text-xs text-red-600 dark:text-yellow-400 leading-relaxed">
         ⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.
       </p>
+    </div>
+  {/if}
+
+  <!-- 1b. Provider notice from upstream registry (apiKeyUrl → Get API Key button) -->
+  {#if providerNoticeText}
+    <div class="flex flex-col gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 sm:flex-row sm:items-center">
+      <span class="material-symbols-outlined text-[16px] text-blue-500 shrink-0">info</span>
+      <p class="min-w-0 flex-1 text-xs leading-relaxed text-blue-600 dark:text-blue-400">{providerNoticeText}</p>
+      {#if providerNoticeApiKeyUrl}
+        <a
+          href={providerNoticeApiKeyUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex justify-center rounded bg-blue-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-600 sm:py-0.5"
+        >
+          Get API Key →
+        </a>
+      {/if}
     </div>
   {/if}
 
@@ -1249,9 +1894,22 @@
     {/if}
 
     <!-- Connections List -->
-    {#if providerConnections.length === 0}
-      <div class="py-8 text-center text-xs text-text-muted flex flex-col items-center justify-center gap-3">
-        <p>No connections found. Authorize an account to get started.</p>
+      {#if providerConnections.length === 0}
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-3">
+          <div class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-primary/10 text-primary shrink-0">
+            <span class="material-symbols-outlined text-[18px]">{isOAuth ? 'lock' : 'key'}</span>
+          </div>
+          <div class="min-w-0">
+            <p class="text-sm text-text-muted">No connections yet</p>
+            {#if hasDualAuthModes}
+              <p class="text-xs text-text-muted">
+                Choose {oauthButtonLabel} or {apiKeyButtonLabel}.
+              </p>
+            {/if}
+          </div>
+        </div>
+        <div class="flex gap-2">
         {#if providerId === 'freebuff'}
           <button
             type="button"
@@ -1271,6 +1929,23 @@
             <span class="material-symbols-outlined text-[18px]">login</span>
             Connect Google Account
           </button>
+        {:else if hasDualAuthModes}
+          <button
+            type="button"
+            onclick={handleAddConnectionClick}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-4 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">lock</span>
+            {oauthButtonLabel}
+          </button>
+          <button
+            type="button"
+            onclick={openAddKeyModal}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">key</span>
+            {apiKeyButtonLabel}
+          </button>
         {:else}
           <button
             type="button"
@@ -1281,6 +1956,7 @@
             Add Connection
           </button>
         {/if}
+        </div>
       </div>
     {:else}
       <div class="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
@@ -1492,6 +2168,23 @@
           <span class="material-symbols-outlined text-[18px]">vpn_key</span>
           {isAuthorizingFreebuff ? 'Polling Authorization...' : 'Authorize Freebuff CLI'}
         </button>
+      {:else if hasDualAuthModes}
+        <button
+          type="button"
+          onclick={handleAddConnectionClick}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+        >
+          <span class="material-symbols-outlined text-[18px]">lock</span>
+          {oauthButtonLabel}
+        </button>
+        <button
+          type="button"
+          onclick={openAddKeyModal}
+          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-7 px-3 text-xs rounded-[8px] w-full sm:w-auto"
+        >
+          <span class="material-symbols-outlined text-[18px]">key</span>
+          {apiKeyButtonLabel}
+        </button>
       {:else}
         <button
           type="button"
@@ -1563,6 +2256,8 @@
           isLoading={isLoadingSession}
           expiresInMin={sessionExpiresInMin}
           onRefresh={loadFreebuffSession}
+          models={visibleModels.map((m) => ({ id: m.id, name: m.name }))}
+          onSwitch={switchFreebuffModel}
         />
       </div>
     {/if}
@@ -1575,7 +2270,6 @@
         {@const testStatus = modelTestStatuses[model.id]}
         {@const isTestingThis = testStatus === 'testing'}
         {@const isSessionActive = checkIsActiveSession(model.id)}
-        {@const isSessionLocked = checkIsLockedBySession(model.id)}
         <div
           class="group min-w-0 max-w-full rounded-lg border px-3 py-2 {testStatus === 'ok' ? 'border-green-500/40' : testStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50 transition-colors"
         >
@@ -1590,10 +2284,6 @@
                   <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                     Active Session
-                  </span>
-                {:else if isSessionLocked}
-                  <span class="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface-2 text-text-muted/80 border border-border/50" title="Locked by active session">
-                    🔒 Locked
                   </span>
                 {/if}
               </div>
@@ -1698,6 +2388,26 @@
       </button>
     </div>
 
+    <!-- Suggested models from provider API — show only models not yet added -->
+    {#if suggestedNotAdded.length > 0}
+      <div class="w-full mt-2">
+        <p class="text-xs text-text-muted mb-2">Suggested free models (≥200k context):</p>
+        <div class="flex flex-wrap gap-2">
+          {#each suggestedNotAdded as m (m.id)}
+            <button
+              type="button"
+              onclick={() => submitAddCustomModel(m.id)}
+              class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 text-xs text-text-muted hover:text-primary hover:border-primary/40 hover:bg-primary/5 transition-colors cursor-pointer"
+              title={m.contextLength ? `${m.name || m.id} · ${Math.round(m.contextLength / 1000)}k ctx` : (m.name || m.id)}
+            >
+              <span class="material-symbols-outlined text-[13px]">add</span>
+              {m.id.split('/').pop()}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <!-- Disabled Models pills -->
     {#if disabledModelIds.length > 0}
       <div class="w-full mt-4">
@@ -1766,17 +2476,17 @@
 <!-- 2. OAuth / Antigravity Connect Modal -->
 {#if showOAuthModal}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <div
-      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
-      onclick={() => (showOAuthModal = false)}
-      role="presentation"
-    ></div>
+      <div
+        class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
+        onclick={() => { showOAuthModal = false; stopDevicePoll() }}
+        role="presentation"
+      ></div>
     <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
       <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
         <h2 class="text-lg font-semibold text-text-main">Connect {providerName}</h2>
         <button
           type="button"
-          onclick={() => (showOAuthModal = false)}
+          onclick={() => { showOAuthModal = false; stopDevicePoll() }}
           class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
         >
           <span class="material-symbols-outlined text-lg">close</span>
@@ -1786,21 +2496,87 @@
       <div class="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50 mb-4">
         <span class="material-symbols-outlined text-base text-primary animate-spin">progress_activity</span>
         <span class="text-sm">
-          {providerId === 'freebuff' ? 'Waiting for Freebuff authorization… (auto-polling active)' : 'Waiting for popup authorization…'}
+          {providerId === 'freebuff'
+            ? 'Waiting for Freebuff authorization… (auto-polling active)'
+            : deviceUserCode
+              ? `Waiting for device authorization… (auto-check every ${deviceInterval}s)`
+              : 'Waiting for popup authorization…'}
         </span>
       </div>
 
       <div class="flex items-center gap-3 my-3">
         <div class="flex-1 h-px bg-border"></div>
         <span class="text-xs text-text-muted uppercase tracking-wider">
-          {providerId === 'freebuff' ? 'Authorization link & manual check' : 'Or paste callback URL manually'}
+          {providerId === 'freebuff'
+            ? 'Authorization link & manual check'
+            : isClineOAuth
+              ? 'Login di Cline, lalu paste callback'
+              : oauthAuthUrl
+                ? 'Or paste callback URL manually'
+                : 'Manual token import'}
         </span>
         <div class="flex-1 h-px bg-border"></div>
       </div>
 
       <div class="space-y-4">
-        <div>
-          <p class="text-sm font-medium mb-1">Step 1: Open this URL in your browser</p>
+        {#if providerId === 'cursor'}
+          <div class="space-y-2 p-3 border border-border rounded-md bg-sidebar/50">
+            <p class="text-[11px] text-text-muted">Ambil dari <span class="font-mono">state.vscdb</span> Cursor IDE (<span class="font-mono">cursorAuth/accessToken</span> + <span class="font-mono">storage.serviceMachineId</span>):</p>
+            <input
+              bind:value={specialToken}
+              placeholder="Access token (cursorAuth/accessToken)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+            <input
+              bind:value={specialExtra}
+              placeholder="Machine ID (storage.serviceMachineId)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+            <button
+              type="button"
+              onclick={cursorAutoImportNow}
+              disabled={isConnecting}
+              class="w-full py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border disabled:opacity-50 cursor-pointer"
+            >
+              {isConnecting ? 'Reading…' : 'Auto-import dari Cursor di host ini'}
+            </button>
+          </div>
+        {/if}
+        {#if providerId === 'gitlab'}
+          <div class="space-y-2 p-3 border border-border rounded-md bg-sidebar/50">
+            <p class="text-[11px] text-text-muted">Atau pakai Personal Access Token (disamping login OAuth di atas):</p>
+            <input
+              bind:value={specialToken}
+              type="password"
+              placeholder="GitLab PAT (scope api, read_user)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+            <input
+              bind:value={specialBaseUrl}
+              placeholder="Base URL (default https://gitlab.com)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+          </div>
+        {/if}
+        {#if providerId === 'iflow'}
+          <div class="space-y-2 p-3 border border-border rounded-md bg-sidebar/50">
+            <p class="text-[11px] text-text-muted">Atau pakai cookie platform.iflow.cn (disamping login OAuth di atas):</p>
+            <input
+              bind:value={specialToken}
+              placeholder="Cookie (harus mengandung BXAuth=...)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+          </div>
+        {/if}
+        {#if deviceUserCode}
+          <div class="p-3 border border-border rounded-md bg-sidebar/50 text-center">
+            <p class="text-[11px] text-text-muted mb-1">Masukkan kode ini di halaman login yang terbuka:</p>
+            <p class="text-2xl font-mono font-bold tracking-[0.3em] text-text-main select-all">{deviceUserCode}</p>
+          </div>
+        {/if}
+        {#if oauthAuthUrl}
+          <div>
+            <p class="text-sm font-medium mb-1">Step 1: Open this URL in your browser</p>
           <div class="flex gap-2">
             <input
               readonly
@@ -1825,20 +2601,58 @@
             </button>
           </div>
         </div>
+        {/if}
 
+        {#if providerId === 'gitlab'}
+          <div class="grid grid-cols-1 gap-2 p-3 border border-border rounded-md bg-sidebar/50 mb-1">
+            <p class="text-[11px] text-text-muted">GitLab self-hosted / OAuth app sendiri (opsional — default gitlab.com tanpa client):</p>
+            <input
+              bind:value={gitlabBaseUrl}
+              placeholder="Base URL (default https://gitlab.com)"
+              class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+            />
+            <div class="grid grid-cols-2 gap-2">
+              <input
+                bind:value={gitlabClientId}
+                placeholder="OAuth Client ID"
+                class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+              />
+              <input
+                bind:value={gitlabClientSecret}
+                type="password"
+                placeholder="OAuth Client Secret"
+                class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
+              />
+            </div>
+          </div>
+        {/if}
         <div>
           <p class="text-sm font-medium mb-1">
-            {providerId === 'freebuff' ? 'Step 2: Selesaikan di browser / paste URL / Code / Token' : 'Step 2: Paste the callback URL here'}
+            {providerId === 'freebuff'
+              ? 'Step 2: Selesaikan di browser / paste URL / Code / Token'
+              : isClineOAuth
+                ? 'Step 2: Paste the callback URL here'
+                : oauthAuthUrl
+                  ? 'Step 2: Paste the callback URL here'
+                  : 'Import token manual (belum ada login browser untuk provider ini)'}
           </p>
           <input
             bind:value={callbackInput}
-            placeholder={providerId === 'freebuff' ? 'https://freebuff.com/onboard?auth_code=... atau paste authToken' : 'http://localhost:8080/api/oauth/antigravity/callback?state=...&code=...'}
+            placeholder={providerId === 'freebuff'
+              ? 'https://freebuff.com/onboard?auth_code=... atau paste authToken'
+              : providerId === 'antigravity'
+                ? `${dashboardOrigin()}/api/oauth/antigravity/callback?state=...&code=...`
+                : `${dashboardOrigin()}/callback?code=...`}
             class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary font-mono"
           />
           <p class="text-[11px] text-text-muted mt-1">
             {providerId === 'freebuff'
               ? 'Jika browser diarahkan ke /onboard, selesaikan onboarding di tab Freebuff lalu paste URL di atas atau langsung klik Check & Connect.'
-              : 'After authorization, copy the full URL from your browser.'}
+              : isClineOAuth
+                ? 'Login di tab Cline yang terbuka — koneksi tersambung otomatis. Kalau gagal, copy URL redirect (berisi code=...) ke sini dan klik Connect.'
+                : oauthAuthUrl
+                  ? 'Selesaikan login di tab browser — koneksi tersambung otomatis. Kalau gagal, copy full URL dari browser ke sini.'
+                  : 'Tempel access token di sini lalu klik Connect.'}
           </p>
         </div>
 
@@ -1849,16 +2663,23 @@
         <div class="flex gap-2 pt-2">
           <button
             type="button"
-            onclick={submitManualCallback}
+            onclick={() => {
+              if (deviceUserCode) {
+                pollDeviceOnce()
+              } else {
+                submitManualCallback()
+              }
+            }}
             disabled={isConnecting}
             class="flex-1 py-1.5 text-xs font-semibold rounded-[8px] bg-brand-500 hover:bg-brand-600 text-white shadow-sm disabled:opacity-50 cursor-pointer"
           >
-            {isConnecting ? 'Checking…' : providerId === 'freebuff' ? 'Check & Connect' : 'Connect'}
+            {isConnecting ? 'Checking…' : deviceUserCode ? 'Check now' : providerId === 'freebuff' ? 'Check & Connect' : 'Connect'}
           </button>
           <button
             type="button"
             onclick={() => {
               showOAuthModal = false
+              stopDevicePoll()
               if (freebuffPollTimer) {
                 clearInterval(freebuffPollTimer)
                 freebuffPollTimer = null
@@ -2046,16 +2867,25 @@
 <!-- 5. Add Custom Model Modal -->
 <AddCustomModelModal
   isOpen={showAddCustomModelModal}
-  isSubmitting={false}
+  providerAlias={storageAlias}
   onClose={() => (showAddCustomModelModal = false)}
-  onSubmit={submitAddCustomModel}
+  onSave={submitAddCustomModel}
 />
 
 <!-- 6. Add Key Connection Modal (for non-oauth providers) -->
 <AddConnectionModal
   isOpen={showAddKeyModal}
-  title="Add Connection to {providerName}"
-  isSubmitting={false}
-  onClose={() => (showAddKeyModal = false)}
+  providerId={providerId}
+  providerName={providerName}
+  isCompatible={!!selectedNode}
+  isAnthropic={selectedNode?.apiType === 'responses'}
+  existingNames={connections.map((c) => c.name).filter((n): n is string => !!n)}
+  {proxyPools}
+  error={addConnectionError}
+  onClose={() => {
+    addConnectionError = ''
+    showAddKeyModal = false
+  }}
   onSubmit={handleAddKeyConnection}
+  onBulkDone={onRefresh}
 />

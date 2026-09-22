@@ -87,6 +87,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader:    "Authorization",
 		AuthScheme:    "bearer",
 		DefaultAPIKey: "public",
+		NoAuth:        true,
 		StaticHeaders: map[string]string{"x-opencode-client": "desktop"},
 	},
 	"gemini": {

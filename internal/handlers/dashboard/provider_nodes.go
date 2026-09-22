@@ -1,10 +1,18 @@
 package dashboard
 
 import (
-	json "encoding/json/v2"
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"syscall"
+
+	json "encoding/json/v2"
 
 	"github.com/google/uuid"
 
@@ -165,6 +173,311 @@ func (h *DashboardHandler) HandleDeleteProviderNode(w http.ResponseWriter, r *ht
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
+}
+
+// HandleValidateProviderNode handles POST /api/provider-nodes/validate.
+// Ports upstream src/app/api/provider-nodes/validate/route.js: probes an
+// OpenAI-compatible / Anthropic-compatible base URL with the supplied key and
+// answers {valid, error, method, dimensions} so the dashboard Check button can
+// show a badge without persisting the key.
+func (h *DashboardHandler) HandleValidateProviderNode(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		BaseURL string `json:"baseUrl"`
+		APIKey  string `json:"apiKey"`
+		Type    string `json:"type"`
+		ModelID string `json:"modelId"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+
+	baseURL := strings.TrimSpace(req.BaseURL)
+	apiKey := strings.TrimSpace(req.APIKey)
+	if baseURL == "" || apiKey == "" {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "Base URL and API key required"})
+		return
+	}
+	if !isValidHTTPURL(baseURL) {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "Invalid URL format"})
+		return
+	}
+
+	// SSRF guard for remote callers; loopback peers keep self-hosted nodes
+	// (e.g. ollama-local) reachable, mirroring upstream isLocalRequest.
+	if !nodeRequestIsLocal(r) {
+		if err := handlerutil.AssertPublicURL(baseURL); err != nil {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": "URL not allowed"})
+			return
+		}
+	}
+
+	ctx := r.Context()
+	switch strings.TrimSpace(req.Type) {
+	case "custom-embedding":
+		validateCustomEmbeddingNode(w, ctx, baseURL, apiKey, strings.TrimSpace(req.ModelID))
+	case "anthropic-compatible":
+		validateAnthropicCompatibleNode(w, ctx, baseURL, apiKey, strings.TrimSpace(req.ModelID))
+	default:
+		validateOpenAICompatibleNode(w, ctx, baseURL, apiKey, strings.TrimSpace(req.ModelID))
+	}
+}
+
+// writeNodeValidation writes a {valid, ...} validation outcome (HTTP 200 for
+// every completed probe, matching the shape the dashboard Check button renders).
+func writeNodeValidation(w http.ResponseWriter, payload map[string]any) {
+	handlerutil.WriteJSON(w, http.StatusOK, payload)
+}
+
+// validateOpenAICompatibleNode probes GET {base}/models, falling back to a
+// minimal chat request when the model endpoint is absent.
+func validateOpenAICompatibleNode(w http.ResponseWriter, ctx context.Context, baseURL, apiKey, modelID string) {
+	base := strings.TrimSuffix(baseURL, "/")
+	headers := map[string]string{"Authorization": "Bearer " + apiKey}
+
+	status, _, err := validateProbeDo(ctx, http.MethodGet, base+"/models", headers, nil)
+	if err != nil {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+		return
+	}
+	if status == http.StatusOK {
+		writeNodeValidation(w, map[string]any{"valid": true})
+		return
+	}
+	// Auth errors — no point trying the chat fallback.
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "API key unauthorized"})
+		return
+	}
+
+	if modelID != "" {
+		payload, _ := json.Marshal(map[string]any{
+			"model":      modelID,
+			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+			"max_tokens": 1,
+		})
+		chatHeaders := map[string]string{
+			"Authorization": "Bearer " + apiKey,
+			"Content-Type":  "application/json",
+		}
+		chatStatus, _, err := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", chatHeaders, payload)
+		if err != nil {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+			return
+		}
+		if chatStatus == http.StatusOK {
+			writeNodeValidation(w, map[string]any{"valid": true, "method": "chat"})
+			return
+		}
+		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeChatStatusMessage(chatStatus), "method": "chat"})
+		return
+	}
+
+	writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeModelsStatusMessage(status)})
+}
+
+// validateAnthropicCompatibleNode probes GET {base}/models with x-api-key,
+// falling back to a chat request when the model endpoint is absent.
+func validateAnthropicCompatibleNode(w http.ResponseWriter, ctx context.Context, baseURL, apiKey, modelID string) {
+	base := strings.TrimSpace(baseURL)
+	if strings.HasSuffix(base, "/messages") {
+		base = base[:len(base)-len("/messages")]
+	}
+	headers := map[string]string{
+		"x-api-key":         apiKey,
+		"anthropic-version": "2023-06-01",
+		"Authorization":     "Bearer " + apiKey,
+	}
+
+	status, _, err := validateProbeDo(ctx, http.MethodGet, base+"/models", headers, nil)
+	if err != nil {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+		return
+	}
+	if status == http.StatusOK {
+		writeNodeValidation(w, map[string]any{"valid": true})
+		return
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "API key unauthorized"})
+		return
+	}
+
+	if modelID != "" {
+		payload, _ := json.Marshal(map[string]any{
+			"model":      modelID,
+			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+			"max_tokens": 1,
+		})
+		chatHeaders := map[string]string{
+			"x-api-key":         apiKey,
+			"anthropic-version": "2023-06-01",
+			"Authorization":     "Bearer " + apiKey,
+			"Content-Type":      "application/json",
+		}
+		chatStatus, _, err := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", chatHeaders, payload)
+		if err != nil {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+			return
+		}
+		if chatStatus == http.StatusOK {
+			writeNodeValidation(w, map[string]any{"valid": true, "method": "chat"})
+			return
+		}
+		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeChatStatusMessage(chatStatus), "method": "chat"})
+		return
+	}
+
+	writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeModelsStatusMessage(status)})
+}
+
+// validateCustomEmbeddingNode probes POST {base}/embeddings and reports the
+// embedding dimension on success.
+func validateCustomEmbeddingNode(w http.ResponseWriter, ctx context.Context, baseURL, apiKey, modelID string) {
+	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	if modelID == "" {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "Model ID required for embedding validation"})
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"model": modelID, "input": "ping"})
+	headers := map[string]string{
+		"Authorization": "Bearer " + apiKey,
+		"Content-Type":  "application/json",
+	}
+
+	status, resBody, err := validateProbeDo(ctx, http.MethodPost, base+"/embeddings", headers, payload)
+	if err != nil {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+		return
+	}
+	if status == http.StatusOK {
+		dims := embeddingDimension(resBody)
+		payload := map[string]any{"valid": true, "method": "embeddings"}
+		if dims > 0 {
+			payload["dimensions"] = dims
+		}
+		writeNodeValidation(w, payload)
+		return
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		writeNodeValidation(w, map[string]any{"valid": false, "error": "API key unauthorized"})
+		return
+	}
+	msg := fmt.Sprintf("Embeddings request failed (%d)", status)
+	if errText := strings.TrimSpace(string(resBody)); errText != "" {
+		msg += ": " + errText
+	}
+	writeNodeValidation(w, map[string]any{"valid": false, "error": msg, "method": "embeddings"})
+}
+
+// embeddingDimension extracts the vector length of the first embedding from a
+// successful /embeddings response, or 0 when the shape is unexpected.
+func embeddingDimension(body []byte) int {
+	var res struct {
+		Data []struct {
+			Embedding []any `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil || len(res.Data) == 0 {
+		return 0
+	}
+	return len(res.Data[0].Embedding)
+}
+
+// isValidHTTPURL reports whether v is an absolute http(s) URL with a host.
+func isValidHTTPURL(v string) bool {
+	parsed, err := url.Parse(v)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
+// loopbackRequestHosts are hosts considered local callers (upstream LOOPBACK_HOSTS).
+var loopbackRequestHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+
+// nodeRequestIsLocal mirrors dashboardGuard.isLocalRequest: loopback peers may
+// reference self-hosted provider nodes, so the SSRF guard is skipped for them.
+func nodeRequestIsLocal(r *http.Request) bool {
+	host := strings.ToLower(r.Host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = strings.Trim(h, "[]")
+	}
+	if loopbackRequestHosts[host] {
+		return true
+	}
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return loopbackRequestHosts[strings.Trim(strings.ToLower(remote), "[]")]
+	}
+	return false
+}
+
+// validateNodeNetworkMessage maps an outbound probe error to a user-friendly
+// message, mirroring upstream route.js getErrorMessage.
+func validateNodeNetworkMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "Request timeout - provider node not responding"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Request timeout - provider node not responding"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "DNS lookup failed - invalid domain or network issue"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return "Connection refused - provider node offline or unreachable"
+	}
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return "SSL certificate verification failed"
+	}
+	return "Network connection failed - check URL and network connectivity"
+}
+
+// validateNodeModelsStatusMessage maps a /models probe status to a message.
+func validateNodeModelsStatusMessage(status int) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "API key unauthorized"
+	case http.StatusNotFound:
+		return "/models endpoint not found - try chat validation with model ID"
+	default:
+		if status >= 500 {
+			return "Server error - try again later"
+		}
+		return fmt.Sprintf("Unexpected response (%d)", status)
+	}
+}
+
+// validateNodeChatStatusMessage maps a /chat/completions probe status to a message.
+func validateNodeChatStatusMessage(status int) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "API key unauthorized"
+	case http.StatusBadRequest:
+		return "Invalid model or bad request"
+	case http.StatusNotFound:
+		return "Chat endpoint not found"
+	default:
+		if status >= 500 {
+			return "Server error - try again later"
+		}
+		return fmt.Sprintf("Chat request failed (%d)", status)
+	}
 }

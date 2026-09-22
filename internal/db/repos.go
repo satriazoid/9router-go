@@ -75,6 +75,47 @@ func (r *Repo) CreateProviderConnection(id, provider, authType, name string, api
 	return nil
 }
 
+// CreateProviderConnectionFull inserts a provider connection with an explicit
+// priority and a full data payload (apiKey + providerSpecificData + testStatus
+// + proxyPoolId, as the dashboard add-key modal sends them). A nil priority
+// falls back to max(existing priority for the provider) + 1, matching upstream
+// connectionsRepo when the caller omits priority.
+func (r *Repo) CreateProviderConnectionFull(id, provider, authType, name string, priority *int, dataJSON string) error {
+	if dataJSON == "" {
+		dataJSON = "{}"
+	}
+	priorityVal := 1
+	if priority != nil {
+		priorityVal = *priority
+	} else if next, err := r.NextConnectionPriority(provider); err == nil && next > 0 {
+		priorityVal = next
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.Exec(
+		`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+		id, provider, authType, name, priorityVal, dataJSON, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("create provider connection: %w", err)
+	}
+	return nil
+}
+
+// NextConnectionPriority returns max(priority) + 1 for a provider, or 1 when the
+// provider has no connections yet.
+func (r *Repo) NextConnectionPriority(provider string) (int, error) {
+	var maxPriority sql.NullInt64
+	if err := r.db.QueryRow(
+		`SELECT MAX(priority) FROM providerConnections WHERE provider = ?`, provider,
+	).Scan(&maxPriority); err != nil {
+		return 0, fmt.Errorf("next connection priority for %s: %w", provider, err)
+	}
+	if !maxPriority.Valid {
+		return 1, nil
+	}
+	return int(maxPriority.Int64) + 1, nil
+}
+
 func (r *Repo) GetProviderConnectionByID(id string) (*models.ProviderConnection, error) {
 	var conn models.ProviderConnection
 	err := r.db.QueryRow(

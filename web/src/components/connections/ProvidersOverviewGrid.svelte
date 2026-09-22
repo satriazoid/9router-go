@@ -40,7 +40,7 @@
   // 2. OAuth Providers
   let oauthProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && p.category === 'oauth' && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id, ['oauth']), statusFilter))
+      .filter((p) => isChatProvider(p) && !p.hidden && p.category === 'oauth' && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id, ['oauth']), statusFilter))
       .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['oauth']) }))
       .sort((a, b) => (b.stats.connected > 0 ? 1 : 0) - (a.stats.connected > 0 ? 1 : 0) || a.name.localeCompare(b.name))
   )
@@ -48,7 +48,7 @@
   // 3. Free Tier Providers
   let freeTierProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && (p.category === 'free' || p.category === 'freeTier') && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id), statusFilter, p.noAuth))
+      .filter((p) => isChatProvider(p) && !p.hidden && (p.category === 'free' || p.category === 'freeTier') && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id), statusFilter, p.noAuth))
       .map((p) => ({ ...p, stats: getProviderStats(connections, p.id) }))
       .sort((a, b) => (b.stats.connected > 0 || b.noAuth ? 1 : 0) - (a.stats.connected > 0 || a.noAuth ? 1 : 0) || a.name.localeCompare(b.name))
   )
@@ -56,7 +56,7 @@
   // 4. API Key Providers
   let apikeyProviders = $derived(
     PROVIDER_CATALOG
-      .filter((p) => isChatProvider(p) && (p.category === 'apikey' || p.category === 'webCookie') && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id, ['apikey', 'api_key']), statusFilter))
+      .filter((p) => isChatProvider(p) && !p.hidden && (p.category === 'apikey' || p.category === 'webCookie') && matchesSearch(p.name, searchQuery) && matchesFilter(getProviderStats(connections, p.id, ['apikey', 'api_key']), statusFilter))
       .map((p) => ({ ...p, stats: getProviderStats(connections, p.id, ['apikey', 'api_key']) }))
       .sort((a, b) => (b.stats.connected > 0 ? 1 : 0) - (a.stats.connected > 0 ? 1 : 0) || a.name.localeCompare(b.name))
   )
