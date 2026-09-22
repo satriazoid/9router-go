@@ -146,7 +146,8 @@ func (h *ChatHandler) makePanelCall(body []byte, entry string) func() *fusionRes
 		var connData *ConnectionData
 		if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
 			connData = &ConnectionData{
-				APIKey: cfg.DefaultAPIKey,
+				APIKey:      cfg.DefaultAPIKey,
+				ProxyPoolID: h.ResolveProviderProxyPoolID(modelInfo.Provider),
 			}
 		} else {
 			conn, cData, err := h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, nil, modelInfo.Model)

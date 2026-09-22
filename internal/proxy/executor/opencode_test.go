@@ -87,6 +87,47 @@ func TestForwardOpencode(t *testing.T) {
 	}
 }
 
+func TestForwardOpencode_MuseSpark_EdgeRelay(t *testing.T) {
+	var gotTarget, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTarget = r.Header.Get("x-relay-target")
+		gotPath = r.Header.Get("x-relay-path")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"resp_123","output":[{"type":"message","content":[{"type":"text","text":"relay ok"}]}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{
+		BaseURL: srv.URL, // relay host
+		StaticHeaders: map[string]string{
+			"x-relay-target": "https://opencode.ai",
+			"x-relay-path":   "/zen/v1/chat/completions",
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client:        srv.Client(),
+		Config:        cfg,
+		APIKey:        "public",
+		Body:          []byte(`{"model":"muse-spark-1.3-contributor-free","input":"test"}`),
+		IsStream:      false,
+		TranslateResp: false,
+	}
+
+	err := ForwardOpencode(rec, req)
+	if err != nil {
+		t.Fatalf("ForwardOpencode failed: %v", err)
+	}
+	if gotTarget != "https://opencode.ai" {
+		t.Errorf("expected x-relay-target 'https://opencode.ai', got %q", gotTarget)
+	}
+	if gotPath != "/zen/v1/responses" {
+		t.Errorf("expected x-relay-path '/zen/v1/responses', got %q", gotPath)
+	}
+}
+
 func TestForwardOpencodeGo_OpenAIRouting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret-go-key" {

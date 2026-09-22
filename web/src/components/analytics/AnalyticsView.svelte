@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type ProviderConnection, type ProviderNode } from '../../api/client'
+  import { api, getAuthHeaders, type ProviderConnection, type ProviderNode } from '../../api/client'
   import { PROVIDER_CATALOG } from '../../lib/providers'
   import Card from '../../lib/ui/Card.svelte'
   import {
@@ -28,9 +28,19 @@
   let isFetching = $state(false)
   let stats = $state<StatsData>({})
   let activeRequests = $state<ActiveRequestItem[]>([])
+  let pulseProvider = $state<string>('')
   let lastProvider = $state<string>('')
   let errorProvider = $state<string>('')
+  let pulseTimer: ReturnType<typeof setTimeout> | null = null
 
+  function triggerPulse(provider: string) {
+    if (!provider) return
+    pulseProvider = provider
+    if (pulseTimer) clearTimeout(pulseTimer)
+    pulseTimer = setTimeout(() => {
+      pulseProvider = ''
+    }, 3000)
+  }
   // Request details tab state
   let details = $state<RequestDetailItem[]>([])
   let detailsTotal = $state(0)
@@ -40,7 +50,12 @@
     isFetching = true
     try {
       const res = await api.getUsageStats(targetPeriod)
-      if (res) stats = res
+      if (res) {
+        stats = res
+        if (!lastProvider && Array.isArray(res.recentRequests) && res.recentRequests.length > 0) {
+          lastProvider = res.recentRequests[0].provider || ''
+        }
+      }
     } catch (err) {
       console.error('Failed to load usage stats:', err)
     } finally {
@@ -78,28 +93,90 @@
 
   // SSE real-time updates for activeRequests, recentRequests and error notifications
   $effect(() => {
-    const es = new EventSource('/api/usage/stream')
+    let isCancelled = false
+    let controller: AbortController | null = null
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
-    es.onmessage = (e) => {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('9router_key') || '' : ''
+    let streamInitialized = false
+
+    const connectStream = async () => {
+      if (isCancelled) return
+      controller = new AbortController()
+
       try {
-        const data = JSON.parse(e.data)
-        if (Array.isArray(data.recentRequests)) {
-          stats = { ...stats, recentRequests: data.recentRequests }
+        const streamUrl = token ? `/api/usage/stream?key=${encodeURIComponent(token)}` : '/api/usage/stream'
+        const res = await fetch(streamUrl, {
+          headers: getAuthHeaders(),
+          signal: controller.signal,
+        })
+
+        if (!res.ok) {
+          throw new Error(`usage stream failed: ${res.status}`)
         }
-        if (Array.isArray(data.activeRequests)) {
-          activeRequests = data.activeRequests
-          stats = { ...stats, activeRequests: data.activeRequests }
-          if (data.activeRequests.length > 0 && data.activeRequests[0].provider) {
-            lastProvider = data.activeRequests[0].provider
+
+        const reader = res.body?.getReader()
+        const decoder = new TextDecoder()
+        if (!reader) return
+
+        let buffer = ''
+        while (!isCancelled) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed || trimmed.startsWith(':')) continue
+            if (!trimmed.startsWith('data: ')) continue
+
+            try {
+              const data = JSON.parse(trimmed.slice(6))
+              if (Array.isArray(data.recentRequests) && data.recentRequests.length > 0) {
+                const prevTop = stats.recentRequests?.[0]
+                const newTop = data.recentRequests[0]
+                // Only pulse animation when a GENUINE new model request arrives AFTER stream initialization
+                if (streamInitialized && prevTop) {
+                  const isNewRequest =
+                    newTop.timestamp !== prevTop.timestamp ||
+                    newTop.model !== prevTop.model ||
+                    newTop.tokens !== prevTop.tokens
+                  if (isNewRequest && newTop.provider) {
+                    lastProvider = newTop.provider
+                    triggerPulse(newTop.provider)
+                  }
+                } else if (!lastProvider && newTop.provider) {
+                  lastProvider = newTop.provider
+                }
+                streamInitialized = true
+                stats = { ...stats, recentRequests: data.recentRequests }
+              }
+              if (Array.isArray(data.activeRequests)) {
+                activeRequests = data.activeRequests
+                stats = { ...stats, activeRequests: data.activeRequests }
+                if (data.activeRequests.length > 0 && data.activeRequests[0].provider) {
+                  lastProvider = data.activeRequests[0].provider
+                }
+              }
+              if (data.errorProvider) {
+                errorProvider = data.errorProvider
+              }
+            } catch (err) {
+              console.error('Failed to parse SSE usage stream:', err)
+            }
           }
         }
-        if (data.errorProvider) {
-          errorProvider = data.errorProvider
-        }
       } catch (err) {
-        console.error('Failed to parse SSE usage stream:', err)
+        if (!isCancelled) {
+          reconnectTimeout = setTimeout(connectStream, 3000)
+        }
       }
     }
+
+    connectStream()
 
     // Auto-poll stats every 5s so KPI counters smoothly increment in real time
     const pollTimer = setInterval(() => {
@@ -109,7 +186,10 @@
     }, 5000)
 
     return () => {
-      es.close()
+      isCancelled = true
+      if (controller) controller.abort()
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
+      if (pulseTimer) clearTimeout(pulseTimer)
       clearInterval(pollTimer)
     }
   })
@@ -144,6 +224,26 @@
         }
       }
     }
+    // Always include key free/noAuth providers if not yet listed
+    const FREE_DEFAULTS = [
+      { id: 'antigravity', name: 'Antigravity', color: '#F59E0B' },
+      { id: 'opencode', name: 'OpenCode Free', color: '#3B82F6' },
+      { id: 'nvidia', name: 'NVIDIA NIM', color: '#76B900' },
+      { id: 'openrouter', name: 'OpenRouter', color: '#6366F1' },
+      { id: 'clinepass', name: 'ClinePass', color: '#8B5CF6' }
+    ]
+    for (const f of FREE_DEFAULTS) {
+      if (!seen.has(f.id)) {
+        seen.add(f.id)
+        list.push({
+          id: f.id,
+          name: f.name,
+          color: f.color,
+          type: 'default'
+        })
+      }
+    }
+
     return list.slice(0, 14)
   })
 </script>
@@ -204,6 +304,7 @@
       <ProviderTopologyCard
         providers={topologyProviders}
         {activeRequests}
+        {pulseProvider}
         {lastProvider}
         {errorProvider}
         onRefresh={() => loadStats(period)}

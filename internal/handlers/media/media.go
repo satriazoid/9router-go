@@ -19,6 +19,7 @@ import (
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy/executor"
+	"9router/proxy/internal/usagetracker"
 )
 
 // MediaHandler handles embeddings, responses, audio, video, image, and web tool endpoints.
@@ -583,7 +584,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 				apiKey = "public"
 			}
 			connData = &chat.ConnectionData{
-				APIKey: apiKey,
+				APIKey:      apiKey,
+				ProxyPoolID: h.ChatH.ResolveProviderProxyPoolID(modelInfo.Provider),
 			}
 		} else {
 			log.Warn("media", "no connection", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "error", err)
@@ -617,26 +619,31 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 	finalBody := handlerutil.UpdateModelInBody(body, modelInfo.Model)
 	client := h.ChatH.GetClientForConnection(connData)
 
+	connID := ""
+	if conn != nil {
+		connID = conn.ID
+	}
+	var fwdErr error
+	usagetracker.GetTracker().TrackPending(modelInfo.Model, modelInfo.Provider, connID, true, false)
+	defer func() {
+		hasErr := fwdErr != nil
+		usagetracker.GetTracker().TrackPending(modelInfo.Model, modelInfo.Provider, connID, false, hasErr)
+	}()
+
 	if (endpoint == "/responses" || endpoint == "/v1/responses") && (modelInfo.Provider == "opencode" || modelInfo.Provider == "opencode-go" || modelInfo.Provider == "antigravity" || modelInfo.Provider == "antigravity-go") {
 		exec := executor.Get(modelInfo.Provider)
 		if (modelInfo.Provider == "antigravity" || modelInfo.Provider == "antigravity-go") && strings.Contains(modelInfo.Model, "muse-spark") {
 			exec = executor.Get("opencode")
 		}
 		if exec != nil {
-		var isStream bool
-		var checkStream struct {
-			Stream bool `json:"stream"`
-		}
-		if err := json.Unmarshal(body, &checkStream); err == nil {
-			isStream = checkStream.Stream
-		}
-
-		connID := ""
-		if conn != nil {
-			connID = conn.ID
-		}
-
-		fwdErr := exec(w, &executor.Request{
+			var isStream bool
+			var checkStream struct {
+				Stream bool `json:"stream"`
+			}
+			if err := json.Unmarshal(body, &checkStream); err == nil {
+				isStream = checkStream.Stream
+			}
+		fwdErr = exec(w, &executor.Request{
 			Ctx:           r.Context(),
 			Client:        client,
 			Config:        providerCfg,
@@ -657,7 +664,13 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		if conn != nil {
 			h.Repo.UpdateConnectionLastUsed(conn.ID)
 		}
-			return
+		usagetracker.GetTracker().PushRecent(usagetracker.RecentRequest{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Model:     modelInfo.Model,
+			Provider:  modelInfo.Provider,
+			Status:    "ok",
+		}, h.Repo)
+		return
 		}
 	}
 

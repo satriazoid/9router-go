@@ -97,6 +97,13 @@ func TestRequireApiKeyMiddleware(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
+			name: "Key in query parameter is accepted for stream endpoints",
+			setupRequest: func() *http.Request {
+				return httptest.NewRequest("GET", "http://example.com/api/usage/stream?key=valid-token", nil)
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
 			name: "Inactive key in Authorization header",
 			setupRequest: func() *http.Request {
 				req := httptest.NewRequest("GET", "http://example.com/v1/chat/completions", nil)

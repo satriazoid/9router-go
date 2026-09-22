@@ -407,7 +407,8 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 				if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
 					isKnownNoAuth = true
 					connData = &ConnectionData{
-						APIKey: cfg.DefaultAPIKey,
+						APIKey:      cfg.DefaultAPIKey,
+						ProxyPoolID: h.ResolveProviderProxyPoolID(modelInfo.Provider),
 					}
 				} else {
 					conn, cData, err := h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)
@@ -605,7 +606,8 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 				if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
 					isKnownNoAuth = true
 					connData = &ConnectionData{
-						APIKey: cfg.DefaultAPIKey,
+						APIKey:      cfg.DefaultAPIKey,
+						ProxyPoolID: h.ResolveProviderProxyPoolID(modelInfo.Provider),
 					}
 				} else {
 					conn, cData, err := h.getBestConnection(modelInfo.Provider, modelInfo.ConnectionID, excludeIDs, modelInfo.Model)

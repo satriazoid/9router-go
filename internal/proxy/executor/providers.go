@@ -500,7 +500,16 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		w = NewToolNameRestoringWriter(w, toolNameMap)
 
 		cfg := *req.Config
-		if !strings.HasSuffix(cfg.BaseURL, "/responses") {
+		isRelay := cfg.StaticHeaders != nil && cfg.StaticHeaders["x-relay-target"] != ""
+		if isRelay {
+			// Relay mode: BaseURL is the relay host (e.g. vercel-relay.vercel.app).
+			// Target endpoint must be set in x-relay-path, NOT by appending /responses to BaseURL.
+			cfg.StaticHeaders = make(map[string]string, len(req.Config.StaticHeaders))
+			for k, v := range req.Config.StaticHeaders {
+				cfg.StaticHeaders[k] = v
+			}
+			cfg.StaticHeaders["x-relay-path"] = "/zen/v1/responses"
+		} else if !strings.HasSuffix(cfg.BaseURL, "/responses") {
 			baseURL := strings.TrimRight(cfg.BaseURL, "/")
 			if strings.HasSuffix(baseURL, "/chat/completions") {
 				baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
@@ -508,7 +517,6 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			cfg.BaseURL = baseURL + "/responses"
 		}
 		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, req.IsStream)
-
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
@@ -534,14 +542,27 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if cleanModel == "union-alpha" {
 		// Route through Messages API format: https://opencode.ai/zen/v1/messages (PR #4099)
 		messagesURL := "https://opencode.ai/zen/v1/messages"
-		if req.Config != nil && req.Config.BaseURL != "" && !strings.Contains(req.Config.BaseURL, "opencode.ai") {
+		staticH := map[string]string(nil)
+		if req.Config != nil {
+			staticH = req.Config.StaticHeaders
+		}
+		isRelay := staticH != nil && staticH["x-relay-target"] != ""
+		if isRelay {
+			messagesURL = req.Config.BaseURL
+			headersCopy := make(map[string]string, len(staticH))
+			for k, v := range staticH {
+				headersCopy[k] = v
+			}
+			headersCopy["x-relay-path"] = "/zen/v1/messages"
+			staticH = headersCopy
+		} else if req.Config != nil && req.Config.BaseURL != "" && !strings.Contains(req.Config.BaseURL, "opencode.ai") {
 			base := strings.TrimRight(req.Config.BaseURL, "/")
 			if strings.HasSuffix(base, "/chat/completions") {
 				base = strings.TrimSuffix(base, "/chat/completions")
 			}
 			messagesURL = base + "/messages"
 		}
-		headers := proxy.BuildOpenCodeHeaders(nil, req.SessionID, true)
+		headers := proxy.BuildOpenCodeHeaders(staticH, req.SessionID, true)
 		headers["anthropic-version"] = "2023-06-01"
 		ctx := req.Ctx
 		if ctx == nil {
@@ -1103,7 +1124,15 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		}
 
 		cfg := *req.Config
-		if !strings.HasSuffix(cfg.BaseURL, "/responses") {
+		isRelay := cfg.StaticHeaders != nil && cfg.StaticHeaders["x-relay-target"] != ""
+		if isRelay {
+			headersCopy := make(map[string]string, len(cfg.StaticHeaders))
+			for k, v := range cfg.StaticHeaders {
+				headersCopy[k] = v
+			}
+			headersCopy["x-relay-path"] = "/zen/go/v1/responses"
+			cfg.StaticHeaders = headersCopy
+		} else if !strings.HasSuffix(cfg.BaseURL, "/responses") {
 			baseURL := strings.TrimRight(cfg.BaseURL, "/")
 			if strings.HasSuffix(baseURL, "/chat/completions") {
 				baseURL = strings.TrimSuffix(baseURL, "/chat/completions")

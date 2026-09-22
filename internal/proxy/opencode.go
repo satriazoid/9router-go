@@ -146,6 +146,11 @@ func BuildOpenCodeHeaders(rawHeaders map[string]string, sessionID string, isStre
 	} else {
 		res["Accept"] = "*/*"
 	}
+	for _, h := range []string{"x-relay-target", "x-relay-path"} {
+		if v, ok := rawHeaders[h]; ok {
+			res[h] = v
+		}
+	}
 	for k, v := range rawHeaders {
 		lk := strings.ToLower(k)
 		if lk == "user-agent" && HasValidOpenCodeVersion(v) {
