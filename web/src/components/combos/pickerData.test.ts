@@ -8,7 +8,7 @@ import {
 } from './pickerData'
 
 describe('pickerData', () => {
-  it('includes active connections and no-auth providers, excludes inactive connections', () => {
+  it('includes connected providers and no-auth providers regardless of isActive', () => {
     const connections: ProviderConnection[] = [
       {
         id: 'conn-1',
@@ -44,7 +44,7 @@ describe('pickerData', () => {
     assert.strictEqual(agGroup.models[0].value.startsWith('ag/'), true)
 
     const ccGroup = groups.find((g) => g.id === 'claude')
-    assert.strictEqual(ccGroup, undefined)
+    assert.ok(ccGroup)
 
     const ocGroup = groups.find((g) => g.id === 'opencode')
     assert.ok(ocGroup)
@@ -92,23 +92,82 @@ describe('pickerData', () => {
     assert.strictEqual(oaiGroup.models.some((m) => m.id === 'text-embedding-3-small'), false)
   })
 
-  it('includes compatible nodes from providerNodes', () => {
+  it('includes connected compatible nodes with prefix values from aliases', () => {
+    const connections: ProviderConnection[] = [
+      {
+        id: 'conn-node-1',
+        provider: 'openai-compatible-chat-abc',
+        authType: 'apikey',
+        name: 'My Node',
+        email: null,
+        priority: 1,
+        isActive: 1,
+        data: '{}',
+        createdAt: '',
+        updatedAt: '',
+        providerSpecificData: { prefix: 'Id' },
+      },
+    ]
     const nodes = [
       {
-        id: 'custom-node-1',
+        id: 'openai-compatible-chat-abc',
         name: 'Custom OpenAI Node',
         type: 'openai-compatible',
-        models: ['gpt-4o', 'gpt-4o-mini'],
+        prefix: 'Id',
       } as unknown as ProviderNode,
     ]
 
-    const groups = resolveModelPickerGroups([], nodes)
-    const customGroup = groups.find((g) => g.id === 'custom-node-1')
+    const groups = resolveModelPickerGroups(connections, nodes, {
+      modelAliases: { 'my-alias': 'openai-compatible-chat-abc/gpt-4o' },
+      customModels: [
+        { providerAlias: 'openai-compatible-chat-abc', id: 'gpt-4o-mini', name: 'gpt-4o-mini', type: 'llm' },
+      ],
+    })
+    const customGroup = groups.find((g) => g.id === 'openai-compatible-chat-abc')
     assert.ok(customGroup)
     assert.strictEqual(customGroup.name, 'Custom OpenAI Node')
     assert.strictEqual(customGroup.models.length, 2)
-    assert.strictEqual(customGroup.models[0].value, 'custom-node-1/gpt-4o')
+    assert.strictEqual(customGroup.models[0].value, 'Id/gpt-4o')
     assert.strictEqual(customGroup.models[0].caps.vision, true)
+  })
+
+  it('hides unconnected compatible nodes and filters webSearch combos', () => {
+    const nodes = [
+      {
+        id: 'openai-compatible-chat-xyz',
+        name: 'Orphan Node',
+        type: 'openai-compatible',
+        prefix: 'Or',
+      } as unknown as ProviderNode,
+    ]
+    const groups = resolveModelPickerGroups([], nodes, {
+      modelAliases: { 'x-alias': 'openai-compatible-chat-xyz/gpt-4o' },
+    })
+    assert.strictEqual(groups.find((g) => g.id === 'openai-compatible-chat-xyz'), undefined)
+
+    const combos: Combo[] = [
+      {
+        id: 'c-web',
+        name: 'search-combo',
+        kind: 'webSearch',
+        models: '[]',
+        strategy: 'fallback',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'c-llm',
+        name: 'combo-wombo',
+        kind: null,
+        models: '[]',
+        strategy: 'fallback',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]
+    const filtered = resolveFilteredCombos(combos, undefined, '', 'combo')
+    assert.strictEqual(filtered.length, 1)
+    assert.strictEqual(filtered[0].name, 'combo-wombo')
   })
 
   it('filters combos correctly', () => {

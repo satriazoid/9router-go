@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Info, Search, X } from 'lucide-svelte'
-  import type { Combo, ProviderConnection, ProviderNode } from '../../api/client'
+  import { api, type Combo, type ProviderConnection, type ProviderNode } from '../../api/client'
   import ModelPill from './ModelPill.svelte'
   import { getIconPath } from '../connections/types'
   import {
@@ -15,6 +15,9 @@
     connections?: ProviderConnection[]
     combos?: Combo[]
     providerNodes?: ProviderNode[]
+    modelAliases?: Record<string, string>
+    customModels?: Array<{ providerAlias?: string; id: string; name?: string; type?: string }>
+    disabledModels?: Record<string, string[]>
     currentComboName?: string
     addedModelValues?: string[]
     onSelect: (modelValue: string) => void
@@ -28,6 +31,9 @@
     connections = [],
     combos = [],
     providerNodes = [],
+    modelAliases,
+    customModels,
+    disabledModels,
     currentComboName,
     addedModelValues = [],
     onSelect,
@@ -36,14 +42,70 @@
   }: Props = $props()
 
   let searchQuery = $state('')
+  let fetchedAliases = $state<Record<string, string>>({})
+  let fetchedCustoms = $state<Array<{ providerAlias?: string; id: string; name?: string; type?: string }>>([])
+  let fetchedDisabled = $state<Record<string, string[]>>({})
 
   $effect(() => {
     if (isOpen) {
       searchQuery = ''
+      // Upstream parity (ComboFormModal fetchModalData): aliases drive
+      // passthrough + custom-node rows; customs/disabled complete the merge.
+      api.getModelAliases().then((r) => (fetchedAliases = r?.aliases || {})).catch(() => {})
+      api.getCustomModels().then(normalizeCustoms).catch(() => {})
+      api.getDisabledModels().then(normalizeDisabled).catch(() => {})
     }
   })
 
-  let groups = $derived(resolveModelPickerGroups(connections, providerNodes))
+  function normalizeCustoms(res: unknown) {
+    const list: Array<{ providerAlias?: string; id: string; name?: string; type?: string }> = []
+    if (Array.isArray(res)) {
+      for (const m of res) {
+        if (m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string') {
+          list.push(m as { providerAlias?: string; id: string; name?: string; type?: string })
+        }
+      }
+    } else if (res && typeof res === 'object') {
+      for (const [k, v] of Object.entries(res as Record<string, unknown>)) {
+        if (v && typeof v === 'object') {
+          const obj = v as { providerAlias?: string; id?: unknown; name?: unknown; type?: unknown }
+          list.push({
+            providerAlias: obj.providerAlias,
+            id: typeof obj.id === 'string' ? obj.id : k,
+            name: typeof obj.name === 'string' ? obj.name : undefined,
+            type: typeof obj.type === 'string' ? obj.type : undefined,
+          })
+        }
+      }
+    }
+    fetchedCustoms = list
+  }
+
+  function normalizeDisabled(res: unknown) {
+    if (res && typeof res === 'object' && !Array.isArray(res)) {
+      const out: Record<string, string[]> = {}
+      for (const [k, v] of Object.entries(res as Record<string, unknown>)) {
+        const inner = (v as { disabled?: unknown; ids?: unknown }) || {}
+        const arr = Array.isArray(v) ? v : Array.isArray(inner.disabled) ? inner.disabled : Array.isArray(inner.ids) ? inner.ids : []
+        out[k] = (arr as unknown[]).filter((x): x is string => typeof x === 'string')
+      }
+      const disabled = (res as { disabled?: unknown }).disabled
+      if (disabled && typeof disabled === 'object' && !Array.isArray(disabled)) {
+        for (const [k, v] of Object.entries(disabled as Record<string, unknown>)) {
+          if (Array.isArray(v)) out[k] = (v as unknown[]).filter((x): x is string => typeof x === 'string')
+        }
+      }
+      fetchedDisabled = out
+    }
+  }
+
+  let groups = $derived(
+    resolveModelPickerGroups(connections, providerNodes, {
+      modelAliases: modelAliases ?? fetchedAliases,
+      customModels: customModels ?? fetchedCustoms,
+      disabledModels: disabledModels ?? fetchedDisabled,
+    })
+  )
   let filteredCombos = $derived(
     resolveFilteredCombos(combos, currentComboName, searchQuery, target)
   )

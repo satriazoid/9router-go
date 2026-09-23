@@ -34,6 +34,15 @@
     isCreatingOpen = $bindable(false),
   }: Props = $props()
 
+  // Upstream parity (combos page.js fetchData): webSearch/webFetch combos
+  // (notably search-combo) live under media-providers/web, not here.
+  function isLlmCombo(c: Combo): boolean {
+    if (c.kind && c.kind !== 'llm') return false
+    if (c.name === 'search-combo' || c.name.startsWith('search-combo-')) return false
+    return true
+  }
+  let llmCombos = $derived(combos.filter(isLlmCombo))
+
   let comboStrategies = $state<Record<string, ComboStrategyInfo>>({})
   let capacityAdapter = $state<CapacityAdapterState>({
     vision: { enabled: true, roundRobin: false, models: ['ag/gemini-3.7-flash-high'] },
@@ -225,7 +234,7 @@
   <CombosHeader onCreateClick={openCreateModal} />
 
   <!-- Combos List -->
-  {#if combos.length === 0}
+  {#if llmCombos.length === 0}
     <Card>
       <div class="text-center py-12">
         <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-brand-500/10 text-brand-500 mb-4">
@@ -240,7 +249,7 @@
     </Card>
   {:else}
     <div class="flex flex-col gap-4">
-      {#each combos as combo (combo.id)}
+      {#each llmCombos as combo (combo.id)}
         <ComboCard
           {combo}
           strategyInfo={comboStrategies[combo.name]}
@@ -283,7 +292,7 @@
   isOpen={showModelPicker}
   target={modelPickerTarget}
   {connections}
-  {combos}
+  combos={llmCombos}
   {providerNodes}
   currentComboName={editingCombo?.name}
   {addedModelValues}
