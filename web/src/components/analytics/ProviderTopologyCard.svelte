@@ -493,7 +493,7 @@
           {/if}
         </div>
         <span
-          class="text-base font-medium truncate max-w-[140px]"
+          class="text-base font-medium truncate max-w-[200px]"
           style="color: {node.isActive ? node.color : 'var(--color-text)'}"
           title={node.name}
         >

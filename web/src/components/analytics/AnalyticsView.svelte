@@ -21,7 +21,7 @@
     providerNodes?: ProviderNode[]
   }
 
-  let { connections = [] }: Props = $props()
+  let { connections = [], providerNodes = [] }: Props = $props()
 
   let activeTab = $state<MainTab>('overview')
   let period = $state<Period>('today')
@@ -193,6 +193,28 @@
       clearInterval(pollTimer)
     }
   })
+  let nodeNameById = $derived.by(() => {
+    const m = new Map<string, string>()
+    for (const n of providerNodes || []) {
+      if (n?.id && n?.name) m.set(n.id, n.name)
+    }
+    return m
+  })
+
+  function topologyName(providerId: string, fallbackName?: string): string {
+    const nodeName = nodeNameById.get(providerId)
+    if (nodeName) return nodeName
+    const cat = PROVIDER_CATALOG.find((p) => p.id === providerId || p.alias === providerId)
+    if (cat?.name) return cat.name
+    if (fallbackName && fallbackName !== providerId) {
+      // Numeric key names (e.g. "12") are connection labels, not provider names —
+      // fall back to the raw provider id so custom nodes never render as "12".
+      if (!/^\d+$/.test(fallbackName.trim())) return fallbackName
+      return providerId
+    }
+    return providerId
+  }
+
   let topologyProviders = $derived.by(() => {
     const seen = new Set<string>()
     const list: { id: string; name: string; color?: string; type: string }[] = []
@@ -203,7 +225,7 @@
         const cat = PROVIDER_CATALOG.find((p) => p.id === c.provider || p.alias === c.provider)
         list.push({
           id: c.provider,
-          name: cat?.name || c.name || c.provider,
+          name: topologyName(c.provider, c.name || undefined),
           color: cat?.color || '#3B82F6',
           type: 'connection'
         })
@@ -217,7 +239,7 @@
           const cat = PROVIDER_CATALOG.find((p) => p.id === prov || p.alias === prov)
           list.push({
             id: prov,
-            name: cat?.name || prov,
+            name: topologyName(prov),
             color: cat?.color || '#10B981',
             type: 'active'
           })
