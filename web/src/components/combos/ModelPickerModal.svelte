@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { Info, Layers, Search, X } from 'lucide-svelte'
+  import { Info, Search, X } from 'lucide-svelte'
   import type { Combo, ProviderConnection, ProviderNode } from '../../api/client'
   import ModelPill from './ModelPill.svelte'
+  import { getIconPath } from '../connections/types'
   import {
     resolveFilteredCombos,
     resolveFilteredGroups,
@@ -35,12 +36,10 @@
   }: Props = $props()
 
   let searchQuery = $state('')
-  let customModelInput = $state('')
 
   $effect(() => {
     if (isOpen) {
       searchQuery = ''
-      customModelInput = ''
     }
   })
 
@@ -49,7 +48,7 @@
     resolveFilteredCombos(combos, currentComboName, searchQuery, target)
   )
   let filteredGroups = $derived(
-    resolveFilteredGroups(groups, searchQuery, target)
+    resolveFilteredGroups(groups, searchQuery, target, addedModelValues)
   )
 
   function handleToggle(val: string) {
@@ -63,95 +62,79 @@
       onSelect(val)
     }
   }
-
-  function handleCustomAdd() {
-    const val = customModelInput.trim()
-    if (val) {
-      handleToggle(val)
-      customModelInput = ''
-    }
-  }
 </script>
 
 {#if isOpen}
-  <div class="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-    <div class="fixed inset-0" onclick={onClose} aria-hidden="true"></div>
+  <div class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <!-- Overlay -->
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in" onclick={onClose} aria-hidden="true"></div>
+
     <div
-      class="relative bg-surface border border-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[85vh] z-10"
+      class="relative w-full max-w-md bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in overflow-hidden flex flex-col max-h-[85vh] z-10 p-4!"
       role="dialog"
       aria-modal="true"
     >
-      <!-- Header -->
-      <div class="px-5 py-4 border-b border-border flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-text-main">
-          {target === 'vision'
-            ? 'Add Vision Model'
-            : target === 'audio'
-              ? 'Add Audio Model'
-              : target === 'judge'
-                ? 'Select Judge Model'
-                : 'Add Model to Combo'}
-        </h2>
+      <!-- Header (traffic lights + title) -->
+      <div class="flex items-center justify-between p-2 border-b border-border-subtle -m-4 mb-4">
+        <div class="flex items-center">
+          <div class="hidden md:flex items-center gap-2 mr-4 ml-2">
+            <button
+              type="button"
+              onclick={onClose}
+              aria-label="Close"
+              title="Close"
+              class="w-4 h-4 rounded-full bg-[#FF5F56] hover:brightness-90 transition-all cursor-pointer flex items-center justify-center"
+            >
+              <span class="text-[9px] font-bold text-white leading-none">✕</span>
+            </button>
+            <div class="w-4 h-4 rounded-full bg-[#3a3a3a]/20 dark:bg-white/15 cursor-not-allowed"></div>
+            <div class="w-4 h-4 rounded-full bg-[#3a3a3a]/20 dark:bg-white/15 cursor-not-allowed"></div>
+          </div>
+          <h2 class="text-lg font-semibold text-text-main">
+            {target === 'vision'
+              ? 'Add Vision Model'
+              : target === 'audio'
+                ? 'Add Audio Model'
+                : target === 'judge'
+                  ? 'Select Judge Model'
+                  : 'Add Model to Combo'}
+          </h2>
+        </div>
         <button
           type="button"
           onclick={onClose}
           aria-label="Close"
-          class="text-text-muted hover:text-text-main cursor-pointer"
+          class="md:hidden p-1.5 rounded-[10px] text-text-muted hover:bg-surface-2 hover:text-text-main transition-colors"
         >
           <X class="w-4 h-4" />
         </button>
       </div>
 
-      <!-- Search & Custom Model Area -->
-      <div class="p-4 border-b border-border">
-        <!-- Info bar -->
-        <div class="flex items-center gap-2 mb-3 px-2.5 py-2 bg-brand-500/10 border border-brand-500/20 rounded-lg text-xs text-text-muted">
-          <Info class="w-3.5 h-3.5 text-brand-500 shrink-0" />
-          <span>Click to add, click again to remove. Changes are saved automatically.</span>
-        </div>
+      <!-- Info bar -->
+      <div class="flex items-center gap-2 mb-3 px-2.5 py-2 bg-brand-500/10 border border-brand-500/20 rounded-lg text-xs text-text-muted">
+        <Info class="w-3.5 h-3.5 text-brand-500 shrink-0" />
+        <span>Click to add, click again to remove. Changes are saved automatically.</span>
+      </div>
 
-        <!-- Search -->
-        <div class="mb-2.5">
-          <div class="relative">
-            <Search class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Search..."
-              bind:value={searchQuery}
-              class="w-full bg-surface-2 border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-text-main placeholder:text-text-muted focus:outline-none focus:border-brand-500"
-            />
-          </div>
-        </div>
-
-        <!-- Custom model input -->
-        <div class="flex items-center gap-1.5">
+      <!-- Search -->
+      <div class="mb-3">
+        <div class="relative">
+          <Search class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
           <input
             type="text"
-            bind:value={customModelInput}
-            placeholder="Or type custom model ID..."
-            class="flex-1 bg-surface-2 border border-border rounded-lg px-2.5 py-1 text-xs text-text-main placeholder:text-text-muted font-mono focus:outline-none focus:border-brand-500"
-            onkeydown={(e) => {
-              if (e.key === 'Enter') handleCustomAdd()
-            }}
+            placeholder="Search..."
+            bind:value={searchQuery}
+            class="w-full bg-surface border border-border rounded pl-8 pr-3 py-1.5 text-xs text-text-main placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-brand-500/50"
           />
-          <button
-            type="button"
-            disabled={!customModelInput.trim()}
-            onclick={handleCustomAdd}
-            class="px-2.5 py-1 bg-brand-500 hover:bg-brand-600 text-white text-xs font-medium rounded-lg disabled:opacity-40 cursor-pointer shrink-0"
-          >
-            Add
-          </button>
         </div>
       </div>
 
       <!-- Categories & Models List -->
-      <div class="p-4 overflow-y-auto flex-1 max-h-[400px] space-y-3">
+      <div class="max-h-[400px] overflow-y-auto space-y-3 custom-scrollbar">
         <!-- Combos section - always first -->
         {#if filteredCombos.length > 0}
           <div>
             <div class="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5 z-10">
-              <Layers class="w-3.5 h-3.5 text-brand-500 shrink-0" />
               <span class="text-xs font-medium text-brand-500">Combos</span>
               <span class="text-[10px] text-text-muted">({filteredCombos.length})</span>
             </div>
@@ -172,6 +155,15 @@
         {#each filteredGroups as group (group.id)}
           <div>
             <div class="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5 z-10">
+              <img
+                src={getIconPath(group.id)}
+                alt={group.name}
+                class="w-3.5 h-3.5 object-contain rounded-sm"
+                loading="lazy"
+                onerror={(e) => {
+                  ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                }}
+              />
               <span class="text-xs font-medium text-brand-500">
                 {group.name}
               </span>
@@ -194,21 +186,11 @@
         {/each}
 
         {#if filteredCombos.length === 0 && filteredGroups.length === 0}
-          <div class="text-center py-6 text-xs text-text-muted">
-            No models found. You can type a custom model above.
+          <div class="text-center py-4 text-text-muted">
+            <Search class="w-6 h-6 mx-auto mb-1 opacity-50" />
+            <p class="text-xs">No models found</p>
           </div>
         {/if}
-      </div>
-
-      <!-- Footer -->
-      <div class="px-5 py-3 border-t border-border flex items-center justify-end bg-surface-2/50">
-        <button
-          type="button"
-          onclick={onClose}
-          class="px-4 py-1.5 text-xs bg-brand-500 hover:bg-brand-600 text-white font-medium rounded-lg shadow-sm transition cursor-pointer"
-        >
-          Done
-        </button>
       </div>
     </div>
   </div>

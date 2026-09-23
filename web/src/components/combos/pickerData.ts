@@ -170,7 +170,8 @@ export function resolveFilteredCombos(
 export function resolveFilteredGroups(
   groups: PickerGroup[] = [],
   searchQuery: string,
-  target: string
+  target: string,
+  addedModelValues: string[] = []
 ): PickerGroup[] {
   const query = searchQuery.trim().toLowerCase()
 
@@ -197,9 +198,18 @@ export function resolveFilteredGroups(
 
       if (models.length === 0) return null
 
+      // Upstream sortModels: alphabetical, added models floated to top.
+      const added = new Set(addedModelValues)
+      const sorted = [...models].sort((a, b) => {
+        const ai = added.has(a.value) ? 0 : 1
+        const bi = added.has(b.value) ? 0 : 1
+        if (ai !== bi) return ai - bi
+        return a.name.localeCompare(b.name)
+      })
+
       return {
         ...group,
-        models,
+        models: sorted,
       }
     })
     .filter((g): g is PickerGroup => g !== null)

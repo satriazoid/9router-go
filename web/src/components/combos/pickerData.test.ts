@@ -166,7 +166,7 @@ describe('pickerData', () => {
       []
     )
 
-    const flashGroups = resolveFilteredGroups(groups, 'flash', 'combo')
+    const flashGroups = resolveFilteredGroups(groups, 'flash', 'combo', [])
     assert.ok(flashGroups.length > 0)
     assert.strictEqual(
       flashGroups.every((g) =>
@@ -175,7 +175,7 @@ describe('pickerData', () => {
       true
     )
 
-    const visionGroups = resolveFilteredGroups(groups, '', 'vision')
+    const visionGroups = resolveFilteredGroups(groups, '', 'vision', [])
     assert.strictEqual(
       visionGroups.every((g) => g.models.every((m) => m.caps.vision === true)),
       true

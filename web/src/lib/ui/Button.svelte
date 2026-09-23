@@ -9,6 +9,8 @@
     variant = 'primary',
     size = 'md',
     type = 'button',
+    icon = '',
+    iconRight = '',
     disabled = false,
     loading = false,
     fullWidth = false,
@@ -19,6 +21,8 @@
     variant?: Variant
     size?: Size
     type?: 'button' | 'submit' | 'reset'
+    icon?: string
+    iconRight?: string
     disabled?: boolean
     loading?: boolean
     fullWidth?: boolean
@@ -26,7 +30,6 @@
     onclick?: (e: MouseEvent) => void
     children?: Snippet
   } = $props()
-
   const variants: Record<Variant, string> = {
     primary:
       'bg-brand-500 hover:bg-brand-600 text-white shadow-sm disabled:bg-surface-3 disabled:text-text-muted',
@@ -54,6 +57,11 @@
 >
   {#if loading}
     <span class="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+  {:else if icon}
+    <span class="material-symbols-outlined text-[18px]">{icon}</span>
   {/if}
   {@render children?.()}
+  {#if iconRight && !loading}
+    <span class="material-symbols-outlined text-[18px]">{iconRight}</span>
+  {/if}
 </button>

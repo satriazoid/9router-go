@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { ArrowDown, ArrowUp, Eye, Headphones, Plus, X } from 'lucide-svelte'
+  import { ArrowDown, ArrowUp, Brain, Eye, Headphones, X } from 'lucide-svelte'
+  import Button from '../../lib/ui/Button.svelte'
+  import Card from '../../lib/ui/Card.svelte'
   import Toggle from '../../lib/ui/Toggle.svelte'
   import type { CapacityAdapterState } from './types'
+  import { getModelCaps } from '../../lib/models'
 
   interface Props {
     capacityAdapter: CapacityAdapterState
@@ -51,25 +54,22 @@
   }
 </script>
 
-<div class="flex flex-col gap-3 pt-2">
-  <div class="flex flex-col gap-1">
-    <h3 class="text-sm font-medium text-text-main">Vision Adapter</h3>
-    <p class="text-xs text-text-muted">
-      Your model can't read image/audio? Auto-switches to a model in the pool below.
-    </p>
-    <ul class="text-[11px] text-text-muted flex flex-col gap-0.5 mt-0.5">
-      <li><span class="font-medium text-text-main">Vision</span> — images (png, jpg, webp, …)</li>
-      <li><span class="font-medium text-text-main">Audio</span> — audio input</li>
-    </ul>
+<div class="flex flex-col gap-3">
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div class="min-w-0">
+      <p class="text-sm font-medium text-text-main">Vision Adapter</p>
+      <p class="text-xs text-text-muted mt-0.5">
+        Your model can't read image/audio? Auto-switches to a model in the pool below.
+      </p>
+      <ul class="mt-1.5 text-[11px] text-text-muted flex flex-col gap-0.5">
+        <li><span class="font-medium text-text-main">Vision</span> — images (png, jpg, webp, …)</li>
+        <li><span class="font-medium text-text-main">Audio</span> — audio input</li>
+      </ul>
+    </div>
   </div>
-
-  <div class="flex flex-col gap-3">
+  <div class="flex flex-col gap-4">
     <!-- Vision Adapter Card -->
-    <div
-      class="group rounded-xl border border-border bg-surface p-3.5 transition-all shadow-xs {!capacityAdapter.vision.enabled
-        ? 'opacity-50'
-        : ''}"
-    >
+    <Card padding="sm" class={`group ${!capacityAdapter.vision.enabled ? 'opacity-50' : ''}`}>
       <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
           <Toggle
@@ -90,12 +90,18 @@
               {#if capacityAdapter.vision.models.length === 0}
                 <span class="text-xs text-text-muted italic">No models</span>
               {:else}
-                {#each capacityAdapter.vision.models.slice(0, 4) as model, idx}
+                {#each capacityAdapter.vision.models.slice(0, 3) as model, idx}
+                  {@const vcaps = getModelCaps(model)}
                   <code
                     class="group/chip inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 font-mono text-xs text-text-muted"
                   >
                     <span>{model}</span>
-                    <Eye class="w-3 h-3 text-blue-500 shrink-0" title="Vision — Supports image input" />
+                    {#if vcaps.vision}
+                      <Eye class="w-3 h-3 text-blue-500 shrink-0" title="Vision — Supports image input" />
+                    {/if}
+                    {#if vcaps.reasoning}
+                      <Brain class="w-3 h-3 text-amber-500 shrink-0" title="Reasoning — Supports reasoning / thinking" />
+                    {/if}
                     <button
                       type="button"
                       onclick={() => moveAdapterModel('vision', idx, -1)}
@@ -129,8 +135,8 @@
                     </button>
                   </code>
                 {/each}
-                {#if capacityAdapter.vision.models.length > 4}
-                  <span class="text-[10px] text-text-muted">+{capacityAdapter.vision.models.length - 4} more</span>
+                {#if capacityAdapter.vision.models.length > 3}
+                  <span class="text-[10px] text-text-muted">+{capacityAdapter.vision.models.length - 3} more</span>
                 {/if}
               {/if}
             </div>
@@ -146,25 +152,22 @@
             />
             <span>Round</span>
           </label>
-          <button
-            type="button"
+          <Button
+            icon="add"
+            variant="ghost"
+            size="sm"
             onclick={() => onOpenModelPicker('vision')}
             disabled={!capacityAdapter.vision.enabled}
-            class="inline-flex items-center justify-center gap-1 px-2.5 py-1 text-xs font-medium text-brand-500 hover:bg-brand-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+            title="Add Vision model"
           >
-            <Plus class="w-3.5 h-3.5" />
-            <span>Add Model</span>
-          </button>
+            Add Model
+          </Button>
         </div>
       </div>
-    </div>
+    </Card>
 
     <!-- Audio Adapter Card -->
-    <div
-      class="group rounded-xl border border-border bg-surface p-3.5 transition-all shadow-xs {!capacityAdapter.audioInput.enabled
-        ? 'opacity-50'
-        : ''}"
-    >
+    <Card padding="sm" class={`group ${!capacityAdapter.audioInput.enabled ? 'opacity-50' : ''}`}>
       <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
           <Toggle
@@ -185,7 +188,7 @@
               {#if capacityAdapter.audioInput.models.length === 0}
                 <span class="text-xs text-text-muted italic">No models</span>
               {:else}
-                {#each capacityAdapter.audioInput.models.slice(0, 4) as model, idx}
+                {#each capacityAdapter.audioInput.models.slice(0, 3) as model, idx}
                   <code
                     class="group/chip inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 font-mono text-xs text-text-muted"
                   >
@@ -223,8 +226,8 @@
                     </button>
                   </code>
                 {/each}
-                {#if capacityAdapter.audioInput.models.length > 4}
-                  <span class="text-[10px] text-text-muted">+{capacityAdapter.audioInput.models.length - 4} more</span>
+                {#if capacityAdapter.audioInput.models.length > 3}
+                  <span class="text-[10px] text-text-muted">+{capacityAdapter.audioInput.models.length - 3} more</span>
                 {/if}
               {/if}
             </div>
@@ -240,17 +243,18 @@
             />
             <span>Round</span>
           </label>
-          <button
-            type="button"
+          <Button
+            icon="add"
+            variant="ghost"
+            size="sm"
             onclick={() => onOpenModelPicker('audio')}
             disabled={!capacityAdapter.audioInput.enabled}
-            class="inline-flex items-center justify-center gap-1 px-2.5 py-1 text-xs font-medium text-brand-500 hover:bg-brand-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+            title="Add Audio model"
           >
-            <Plus class="w-3.5 h-3.5" />
-            <span>Add Model</span>
-          </button>
+            Add Model
+          </Button>
         </div>
       </div>
-    </div>
+    </Card>
   </div>
 </div>

@@ -11,6 +11,7 @@
     X
   } from 'lucide-svelte'
   import type { Combo } from '../../api/client'
+  import Card from '../../lib/ui/Card.svelte'
   import {
     getComboModels,
     hasReasoning,
@@ -48,7 +49,7 @@
   let isFusion = $derived(currentStrategy === 'fusion')
 </script>
 
-<div class="group rounded-xl border border-border bg-surface hover:border-brand-500/30 p-3.5 transition-all shadow-xs">
+<Card padding="sm" class="group">
   <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     <!-- Left: Icon, Name, Model Badges & Fusion Judge -->
     <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
@@ -109,7 +110,7 @@
     <!-- Actions: Strategy selector + Copy/Edit/Delete -->
     <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3 sm:shrink-0">
       <!-- Strategy dropdown -->
-      <div class="w-full sm:w-[190px]">
+      <div class="w-full sm:w-[200px]">
         <select
           value={currentStrategy}
           onchange={(e) => onSetStrategy(combo, e.currentTarget.value)}
@@ -160,4 +161,4 @@
       </div>
     </div>
   </div>
-</div>
+</Card>

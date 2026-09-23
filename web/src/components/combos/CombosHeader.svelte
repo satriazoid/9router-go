@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus } from 'lucide-svelte'
+  import Button from '../../lib/ui/Button.svelte'
 
   interface Props {
     onCreateClick: () => void
@@ -8,7 +8,7 @@
   let { onCreateClick }: Props = $props()
 </script>
 
-<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
   <div class="min-w-0">
     <p class="text-sm text-text-muted mt-1">
       Group models under one name, then pick a strategy per combo:
@@ -27,12 +27,9 @@
       </li>
     </ul>
   </div>
-  <button
-    type="button"
-    onclick={onCreateClick}
-    class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-xs font-medium shadow-sm transition-colors cursor-pointer w-full sm:w-auto shrink-0"
-  >
-    <Plus class="w-4 h-4" />
-    <span>Create Combo</span>
-  </button>
+  <div class="flex w-full flex-col gap-2 sm:w-auto sm:items-stretch">
+    <Button icon="add" onclick={onCreateClick} class="w-full sm:w-auto whitespace-nowrap">
+      Create Combo
+    </Button>
+  </div>
 </div>
