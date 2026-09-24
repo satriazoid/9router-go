@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -102,6 +103,14 @@ func setupTestRouter(repo *db.Repo) chi.Router {
 	return r
 }
 
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestConnectionsEndpoints(t *testing.T) {
 	repo, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -140,6 +149,48 @@ func TestConnectionsEndpoints(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create connection expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3b. GET /api/connections must never leak secret blobs (credential-dump
+	// hardening): data.apiKey/accessToken must be absent from the payload.
+	req = httptest.NewRequest(http.MethodGet, "/api/connections", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %s", rec.Body.String())
+	}
+	var rawConns []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawConns); err != nil {
+		t.Fatalf("failed to unmarshal connections: %v", err)
+	}
+	if len(rawConns) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(rawConns))
+	}
+	if _, ok := rawConns[0]["data"]; ok {
+		t.Errorf("GET /api/connections must not expose raw data blob, got keys %v", keysOf(rawConns[0]))
+	}
+	body3 := rec.Body.String()
+	for _, leak := range []string{"sk-test-123", "accessToken", "refreshToken", "authToken"} {
+		if strings.Contains(body3, leak) {
+			t.Errorf("GET /api/connections leaks %q", leak)
+		}
+	}
+
+	// 3c. GET /api/keys must mask secrets (full value shown once at creation).
+	req = httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %s", rec.Body.String())
+	}
+	var rawKeys []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawKeys); err != nil {
+		t.Fatalf("failed to unmarshal keys: %v", err)
+	}
+	for _, k := range rawKeys {
+		if kv, ok := k["key"].(string); ok && len(kv) > 16 && !strings.Contains(kv, "…") {
+			t.Errorf("GET /api/keys exposes full secret %q", kv)
+		}
 	}
 
 	// 3. GET /api/connections (now with 1 connection)

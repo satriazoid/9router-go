@@ -18,17 +18,24 @@ import (
 )
 
 // HandleGetConnections handles GET /api/connections.
-// Returns a JSON list of all connections.
+// Returns a JSON list of all connections with secrets stripped: connection
+// `data` blobs carry apiKey/accessToken/refreshToken/authToken, and this
+// endpoint is reachable with a low-privilege client API key — full rows must
+// never leave the server (same sanitizer as the paged providers endpoint).
 func (h *DashboardHandler) HandleGetConnections(w http.ResponseWriter, r *http.Request) {
 	conns, err := h.Repo.GetProviderConnections("", false)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if conns == nil {
-		conns = []*models.ProviderConnection{}
+	sanitized := make([]map[string]any, 0, len(conns))
+	for _, c := range conns {
+		if c == nil {
+			continue
+		}
+		sanitized = append(sanitized, sanitizeProviderConnection(c))
 	}
-	handlerutil.WriteJSON(w, http.StatusOK, conns)
+	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
 }
 
 // HandleGetProvidersClient handles GET /api/providers and GET /api/providers/client.

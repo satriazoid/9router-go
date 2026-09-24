@@ -9,21 +9,38 @@ import (
 	"github.com/google/uuid"
 
 	"9router/proxy/internal/handlerutil"
-	"9router/proxy/internal/models"
 )
 
 // HandleGetApiKeys handles GET /api/keys.
-// Returns a list of all client API keys.
+// Returns key metadata with secrets masked: full key values are shown once at
+// creation time only. This endpoint is reachable with a low-privilege client
+// API key, so listing full secrets here lets one leaked key dump them all.
 func (h *DashboardHandler) HandleGetApiKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := h.Repo.GetApiKeys()
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if keys == nil {
-		keys = []*models.APIKey{}
+	sanitized := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		if k == nil {
+			continue
+		}
+		sanitized = append(sanitized, map[string]any{
+			"id": k.ID, "key": maskClientKey(k.Key), "name": k.Name,
+			"machineId": k.MachineID, "isActive": k.IsActive, "createdAt": k.CreatedAt,
+		})
 	}
-	handlerutil.WriteJSON(w, http.StatusOK, keys)
+	handlerutil.WriteJSON(w, http.StatusOK, sanitized)
+}
+
+// maskClientKey shows the first/last few chars of a client key (dashboard
+// display only); the full value is returned once at creation.
+func maskClientKey(key string) string {
+	if len(key) <= 12 {
+		return "***"
+	}
+	return key[:6] + "…" + key[len(key)-4:]
 }
 
 // HandleCreateApiKey handles POST /api/keys.

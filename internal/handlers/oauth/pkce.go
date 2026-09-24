@@ -268,7 +268,7 @@ func (h *OAuthHandler) HandlePKCEExchange(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if tokenResp.StatusCode != http.StatusOK {
-		log.Warn("oauth", "pkce token exchange non-200", "provider", body.Provider, "status", tokenResp.StatusCode, "body", string(respBody))
+		log.Warn("oauth", "pkce token exchange non-200", "provider", body.Provider, "status", tokenResp.StatusCode, "bytes", len(respBody))
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, fmt.Sprintf("token exchange returned status %d: %s", tokenResp.StatusCode, string(respBody)))
 		return
 	}

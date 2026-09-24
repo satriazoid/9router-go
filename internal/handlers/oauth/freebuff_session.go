@@ -188,7 +188,7 @@ func (h *OAuthHandler) HandleFreebuffSessionStatus(w http.ResponseWriter, r *htt
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Warn("oauth", "freebuff session non-200 response", "status", resp.StatusCode, "body", string(body))
+		log.Warn("oauth", "freebuff session non-200 response", "status", resp.StatusCode, "bytes", len(body))
 		handlerutil.WriteJSON(w, http.StatusOK, freebuffSessionResponse(conn, map[string]any{
 			"status": "none",
 		}))

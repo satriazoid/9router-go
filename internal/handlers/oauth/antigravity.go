@@ -193,7 +193,8 @@ func (h *OAuthHandler) HandleAntigravityCallback(w http.ResponseWriter, r *http.
 	}
 
 	if tokenResp.StatusCode != http.StatusOK {
-		log.Warn("oauth", "antigravity token exchange non-200", "status", tokenResp.StatusCode, "body", string(respBody))
+		// Never log the raw body: token responses carry access/refresh tokens.
+		log.Warn("oauth", "antigravity token exchange non-200", "status", tokenResp.StatusCode, "bytes", len(respBody))
 		h.respondAntigravityError(w, r, http.StatusBadGateway, fmt.Sprintf("token exchange returned status %d: %s", tokenResp.StatusCode, string(respBody)), state)
 		return
 	}

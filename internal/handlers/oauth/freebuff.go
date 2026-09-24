@@ -254,7 +254,8 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 		Error          string `json:"error"`
 	}
 	if err := json.Unmarshal(respBody, &upstream); err != nil {
-		log.Error("oauth", "freebuff poll unmarshal failed", "error", err, "status", resp.StatusCode, "body", string(respBody))
+		// Never log the raw body: success payloads carry authToken/accessToken.
+		log.Error("oauth", "freebuff poll unmarshal failed", "error", err, "status", resp.StatusCode, "bytes", len(respBody))
 		if resp.StatusCode != http.StatusOK {
 			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 				"status": "pending",
