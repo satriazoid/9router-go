@@ -74,7 +74,7 @@ func TestResolveProviderProxyPoolID_CrossAlias(t *testing.T) {
 		t.Fatalf("create settings table: %v", err)
 	}
 
-	// User sets proxyPoolId under "antigravity", but request asks for "opencode"
+	// User sets proxyPoolId under "antigravity", request asks for "ag"
 	settingsJSON := `{
 		"providerStrategies": {
 			"antigravity": {
@@ -94,12 +94,12 @@ func TestResolveProviderProxyPoolID_CrossAlias(t *testing.T) {
 		t.Errorf("expected pool-antigravity-123 for antigravity, got %q", got)
 	}
 
-	// 2. Cross-alias match on opencode (should find antigravity proxy pool)
-	if got := h.ResolveProviderProxyPoolID("opencode"); got != "pool-antigravity-123" {
-		t.Errorf("expected opencode to inherit pool-antigravity-123 from antigravity strategy, got %q", got)
+	// 2. Alias match on ag (should find antigravity proxy pool)
+	if got := h.ResolveProviderProxyPoolID("ag"); got != "pool-antigravity-123" {
+		t.Errorf("expected ag to inherit pool-antigravity-123 from antigravity strategy, got %q", got)
 	}
 
-	// 3. Reverse cross-alias: set under "opencode", check "antigravity"
+	// 3. Set under "opencode", check "oc"
 	settingsJSON2 := `{
 		"providerStrategies": {
 			"opencode": {
@@ -110,8 +110,8 @@ func TestResolveProviderProxyPoolID_CrossAlias(t *testing.T) {
 	if _, err := database.Exec(`UPDATE settings SET data = ? WHERE id = 1`, settingsJSON2); err != nil {
 		t.Fatalf("update settings: %v", err)
 	}
-	if got := h.ResolveProviderProxyPoolID("antigravity"); got != "pool-opencode-456" {
-		t.Errorf("expected antigravity to inherit pool-opencode-456 from opencode strategy, got %q", got)
+	if got := h.ResolveProviderProxyPoolID("oc"); got != "pool-opencode-456" {
+		t.Errorf("expected oc to inherit pool-opencode-456 from opencode strategy, got %q", got)
 	}
 
 	// 4. Cline <-> clinepass alias
@@ -130,7 +130,7 @@ func TestResolveProviderProxyPoolID_CrossAlias(t *testing.T) {
 	}
 }
 
-func TestGetBestConnection_Opencode_InheritsProxyFromAntigravity(t *testing.T) {
+func TestGetBestConnection_Opencode_InheritsProxyFromStrategy(t *testing.T) {
 	database, cleanup := setupChatTestDB(t)
 	defer cleanup()
 
@@ -140,7 +140,7 @@ func TestGetBestConnection_Opencode_InheritsProxyFromAntigravity(t *testing.T) {
 
 	settingsJSON := `{
 		"providerStrategies": {
-			"antigravity": {
+			"opencode": {
 				"proxyPoolId": "pool-vercel-relay-xyz"
 			}
 		}

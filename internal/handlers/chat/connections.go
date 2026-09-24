@@ -36,9 +36,9 @@ func (h *ChatHandler) ResolveProviderProxyPoolID(provider string) string {
 	checkList := []string{provider}
 	switch provider {
 	case "antigravity", "ag":
-		checkList = append(checkList, "opencode", "oc", "antigravity")
+		checkList = append(checkList, "ag", "antigravity")
 	case "opencode", "oc":
-		checkList = append(checkList, "antigravity", "ag", "opencode")
+		checkList = append(checkList, "oc", "opencode")
 	case "cline":
 		checkList = append(checkList, "clinepass")
 	case "clinepass":

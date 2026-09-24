@@ -79,7 +79,7 @@
   )
   let providerNoticeText = $derived(selectedCatalogItem?.notice?.text || '')
   let providerNoticeApiKeyUrl = $derived(selectedCatalogItem?.notice?.apiKeyUrl || '')
-  let isOAuth = $derived(selectedCatalogItem?.category === 'oauth' || providerId === 'antigravity')
+  let isOAuth = $derived(selectedCatalogItem?.category === 'oauth')
   let isClineOAuth = $derived(providerId === 'cline' || providerId === 'clinepass')
   let isPKCEOAuth = $derived(providerId === 'claude' || providerId === 'codex' || providerId === 'xai' || providerId === 'gitlab')
   let isAuthCodeOAuth = $derived(providerId === 'gemini-cli' || providerId === 'iflow')
@@ -109,8 +109,8 @@
     providerId === 'github' || providerId === 'kiro' || providerId === 'kimi' ||
     providerId === 'kimi-coding' || providerId === 'codebuddy-cn' || providerId === 'codebuddy-intl'
   )
-  let isNoAuth = $derived((selectedCatalogItem?.noAuth === true || providerId === 'opencode') && providerId !== 'antigravity')
-  let hasRiskNotice = $derived(!isNoAuth && (isOAuth || providerId === 'antigravity'))
+  let isNoAuth = $derived(selectedCatalogItem?.noAuth === true || selectedCatalogItem?.category === 'free')
+  let hasRiskNotice = $derived(providerId === 'antigravity' || Boolean(selectedCatalogItem?.notice?.text?.includes('RISK_NOTICE')))
 
   // Free provider proxy & rotation state
   let freeProxyPoolId = $state('none')
@@ -3028,7 +3028,7 @@
         Add Model
       </button>
 
-      {#if (providerId === 'antigravity' || providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
+      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
         <button
           type="button"
           onclick={handleImportLiveCatalogModels}
