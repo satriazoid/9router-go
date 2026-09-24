@@ -10,6 +10,9 @@ All-in-one AI gateway in Go: high-throughput LLM proxy **plus built-in dashboard
 - **Dashboard** (`/`): providers, OAuth logins, combos, proxy pools, usage, settings — Svelte 5 SPA embedded in the binary (`web/dist`).
 - **Proxy** (`/v1/*`): OpenAI / Claude / Gemini formats, SSE streaming, combos, token savers.
 
+![Endpoint & API keys](docs/screenshots/endpoint.png)
+![Providers & OAuth connections](docs/screenshots/providers.png)
+
 ### Features
 
 - **Built-in dashboard**: providers & OAuth, combos & routing, proxy pools, live usage, settings — zero Node.js
