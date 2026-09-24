@@ -14,15 +14,15 @@ import (
 )
 
 var (
-	windsurfClientID      = "3GUryQ7ldAeKEuD2obYnppsnmj58eP5u"
-	windsurfSignInBase    = "https://www.windsurf.com"
-	windsurfSignInPath    = "/windsurf/signin"
-	windsurfRegisterBase  = "https://register.windsurf.com"
-	windsurfRegisterPath  = "/exa.seat_management_pb.SeatManagementService/RegisterUser"
-	windsurfOneTimePath   = "/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken"
-	windsurfCurrentUserPath = "/exa.seat_management_pb.SeatManagementService/GetCurrentUser"
+	windsurfClientID         = "3GUryQ7ldAeKEuD2obYnppsnmj58eP5u"
+	windsurfSignInBase       = "https://www.windsurf.com"
+	windsurfSignInPath       = "/windsurf/signin"
+	windsurfRegisterBase     = "https://register.windsurf.com"
+	windsurfRegisterPath     = "/exa.seat_management_pb.SeatManagementService/RegisterUser"
+	windsurfOneTimePath      = "/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken"
+	windsurfCurrentUserPath  = "/exa.seat_management_pb.SeatManagementService/GetCurrentUser"
 	windsurfDefaultAPIServer = "https://server.codeium.com"
-	windsurfUserAgent     = "antigravity-cockpit-tools"
+	windsurfUserAgent        = "antigravity-cockpit-tools"
 )
 
 func windsurfSeatPost(baseURL, path string, body any) (map[string]any, error) {
@@ -183,14 +183,9 @@ func (h *OAuthHandler) HandleWindsurfExchange(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	connName := body.Name
-	if connName == "" {
+	connName := connectionDisplayName("windsurf", body.Name, email, name)
+	if connName == name && name == "" {
 		connName = "Windsurf"
-		if name != "" {
-			connName += " (" + name + ")"
-		} else if email != "" {
-			connName += " (" + email + ")"
-		}
 	}
 	connID := "windsurf-" + shortHash(apiKey)
 	now := currentTimestamp()

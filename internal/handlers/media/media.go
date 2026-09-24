@@ -817,11 +817,8 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		usagetracker.GetTracker().TrackPending(modelInfo.Model, modelInfo.Provider, connID, false, hasErr)
 	}()
 
-	if (endpoint == "/responses" || endpoint == "/v1/responses") && (modelInfo.Provider == "opencode" || modelInfo.Provider == "opencode-go" || modelInfo.Provider == "antigravity" || modelInfo.Provider == "antigravity-go") {
+	if (endpoint == "/responses" || endpoint == "/v1/responses") && (modelInfo.Provider == "opencode" || modelInfo.Provider == "opencode-go" || modelInfo.Provider == "codex" || modelInfo.Provider == "grok-cli") {
 		exec := executor.Get(modelInfo.Provider)
-		if (modelInfo.Provider == "antigravity" || modelInfo.Provider == "antigravity-go") && strings.Contains(modelInfo.Model, "muse-spark") {
-			exec = executor.Get("opencode")
-		}
 		if exec != nil {
 			var isStream bool
 			var checkStream struct {

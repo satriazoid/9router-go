@@ -122,3 +122,34 @@ func TestHandleClineExchange_base64Code(t *testing.T) {
 		t.Errorf("expected authorized, got %s", rec.Body.String())
 	}
 }
+func TestHandleClineExchange_base64Code_NamesByEmail(t *testing.T) {
+	// Connections must be named by account email, not the generic
+	// "ClinePass" label, so multi-account setups stay distinguishable.
+	bundle := base64.URLEncoding.EncodeToString([]byte(`{"accessToken":"email-acc","refreshToken":"email-ref","email":"steam@example.com","firstName":"steam","lastName":"bang"}`))
+	bundle = strings.TrimRight(bundle, "=")
+	handler := NewOAuthHandler(nil)
+	req := httptest.NewRequest("POST", "/api/oauth/cline/exchange",
+		strings.NewReader(`{"provider":"clinepass","code":"`+bundle+`"}`))
+	rec := httptest.NewRecorder()
+	handler.HandleClineExchange(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"steam@example.com"`) {
+		t.Errorf("expected connection named by email, got %s", rec.Body.String())
+	}
+}
+
+func TestDecodeClineCode_base64urlWithTrailingSegment(t *testing.T) {
+	// Browser callback shape: base64url JSON bundle with padding stripped,
+	// followed by a trailing signature segment after the JSON '}'.
+	bundle := base64.URLEncoding.EncodeToString([]byte(`{"accessToken":"url-acc","refreshToken":"url-ref"}`))
+	bundle = strings.TrimRight(bundle, "=") + "R71IQYtsIYJaRkUAVrWUN25dbMgk72h0UhqV6aR-6LQ="
+	acc, ref, ok := decodeClineCode(bundle)
+	if !ok {
+		t.Fatalf("expected base64url bundle to decode")
+	}
+	if acc != "url-acc" || ref != "url-ref" {
+		t.Errorf("unexpected decode result acc=%q ref=%q", acc, ref)
+	}
+}

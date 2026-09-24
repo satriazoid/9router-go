@@ -269,8 +269,8 @@ func TestHandleFreebuffPoll_Authorized_CreatesConnection(t *testing.T) {
 	if authType != "oauth" {
 		t.Errorf("expected authType 'oauth', got %s", authType)
 	}
-	if name != "Freebuff Master" {
-		t.Errorf("expected name 'Freebuff Master', got %s", name)
+	if name != "user@freebuff.com" {
+		t.Errorf("expected name user@freebuff.com (email-first), got %s", name)
 	}
 	if isActive != 1 {
 		t.Errorf("expected isActive 1, got %d", isActive)
@@ -350,8 +350,8 @@ func TestHandleFreebuffPoll_Authorized_UpdatesExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read updated row: %v", err)
 	}
-	if name != "Updated Freebuff Name" {
-		t.Errorf("expected name 'Updated Freebuff Name', got %s", name)
+	if name != "updated@freebuff.com" {
+		t.Errorf("expected name updated@freebuff.com (email-first), got %s", name)
 	}
 	var dataMap map[string]any
 	_ = json.Unmarshal([]byte(data), &dataMap)
@@ -424,8 +424,8 @@ func TestHandleFreebuffPoll_Authorized_NestedUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query providerConnections: %v", err)
 	}
-	if name != "Nested Freebuff User" {
-		t.Errorf("expected name 'Nested Freebuff User', got %s", name)
+	if name != "nested@freebuff.com" {
+		t.Errorf("expected name nested@freebuff.com (email-first), got %s", name)
 	}
 
 	var dataMap map[string]any

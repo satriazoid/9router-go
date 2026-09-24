@@ -2,8 +2,8 @@ package oauth
 
 import (
 	"bytes"
-	"errors"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,9 +202,9 @@ func qoderStart() (map[string]any, error) {
 	}
 	return map[string]any{
 		"device_code": nonce, "user_code": strings.ToUpper(firstN(nonce, 8)),
-		"verification_uri": "https://qoder.com/device/selectAccounts",
+		"verification_uri":          "https://qoder.com/device/selectAccounts",
 		"verification_uri_complete": "https://qoder.com/device/selectAccounts?" + p.Encode(),
-		"expires_in": 300, "interval": 2,
+		"expires_in":                300, "interval": 2,
 		"session": map[string]any{"nonce": nonce, "verifier": verifier, "machineId": machineID},
 	}, nil
 }
@@ -233,8 +233,8 @@ func kilocodeStart() (map[string]any, error) {
 		"device_code": strVal(data, "code"), "user_code": strVal(data, "code"),
 		"verification_uri":          strVal(data, "verificationUrl"),
 		"verification_uri_complete": strVal(data, "verificationUrl"),
-		"expires_in": 300, "interval": 3,
-		"session":    map[string]any{},
+		"expires_in":                300, "interval": 3,
+		"session": map[string]any{},
 	}, nil
 }
 
@@ -467,20 +467,11 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 	if email == "" {
 		email = extractEmailFromJWT(t.access)
 	}
-	name := t.name
-	if name == "" {
-		name = map[string]string{
-			"qoder": "Qoder", "kilocode": "KiloCode", "grok-cli": "Grok CLI",
-			"github": "GitHub", "kiro": "Kiro", "kimi": "Kimi",
-			"codebuddy-cn": "CodeBuddy", "codebuddy-intl": "CodeBuddy",
-		}[provider]
-		if name == "" {
-			name = provider
-		}
-		if email != "" {
-			name += " (" + email + ")"
-		}
-	}
+	name := connectionDisplayName(provider, t.name, email, map[string]string{
+		"qoder": "Qoder", "kilocode": "KiloCode", "grok-cli": "Grok CLI",
+		"github": "GitHub", "kiro": "Kiro", "kimi": "Kimi",
+		"codebuddy-cn": "CodeBuddy", "codebuddy-intl": "CodeBuddy",
+	}[provider])
 	id := provider + "-" + shortHash(t.access)
 	dataMap := map[string]any{"apiKey": t.access, "accessToken": t.access}
 	if t.refresh != "" {
@@ -612,7 +603,7 @@ func kilocodePoll(code string) (deviceTokens, error) {
 func grokcliPoll(code string) (deviceTokens, error) {
 	var t deviceTokens
 	form := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"},
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {code}, "client_id": {"b1a00492-073a-47ea-816f-4c329264a828"},
 	}
 	data, _, err := postForm("https://auth.x.ai/oauth2/token", form, map[string]string{"User-Agent": grokcliUA})
@@ -669,9 +660,9 @@ func githubPoll(code string) (deviceTokens, error) {
 	t.email = strVal(user, "email")
 	t.name = strVal(user, "name", "login")
 	t.extra = map[string]any{
-		"copilotToken": strVal(copilot, "token"),
+		"copilotToken":          strVal(copilot, "token"),
 		"copilotTokenExpiresAt": strVal(copilot, "expires_at"),
-		"githubUserId": user["id"], "githubLogin": strVal(user, "login"),
+		"githubUserId":          user["id"], "githubLogin": strVal(user, "login"),
 		"githubName": strVal(user, "name"), "githubEmail": strVal(user, "email"),
 	}
 	return t, nil
@@ -748,8 +739,8 @@ func kimiPoll(session map[string]any, code string) (deviceTokens, error) {
 	var t deviceTokens
 	deviceID, _ := session["deviceId"].(string)
 	form := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"},
-		"client_id":  {"17e5f671-d194-4dfb-9706-5516cb48c098"},
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+		"client_id":   {"17e5f671-d194-4dfb-9706-5516cb48c098"},
 		"device_code": {code},
 	}
 	data, _, err := postForm("https://auth.kimi.com/api/oauth/token", form, kimiHeaders(deviceID))

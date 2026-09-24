@@ -17,19 +17,19 @@ import (
 // authcodeConfig describes a plain OAuth2 authorization_code provider
 // (no PKCE). Mirrors upstream 9router provider modules.
 type authcodeConfig struct {
-	providers   []string
-	clientID    string
-	clientEnv   string
-	secret      string
-	secretEnv   string
+	providers    []string
+	clientID     string
+	clientEnv    string
+	secret       string
+	secretEnv    string
 	authorizeURL string
-	tokenURL    string
-	scopes      []string
-	extraAuth   map[string]string
-	useBasic    bool // iFlow: Basic(clientId:secret) on exchange
-	userInfoURL string // iFlow: apiKey lives in userinfo, not tokens
-	connPrefix  string
-	display     string
+	tokenURL     string
+	scopes       []string
+	extraAuth    map[string]string
+	useBasic     bool   // iFlow: Basic(clientId:secret) on exchange
+	userInfoURL  string // iFlow: apiKey lives in userinfo, not tokens
+	connPrefix   string
+	display      string
 }
 
 var authcodeProviders = map[string]*authcodeConfig{
@@ -256,14 +256,9 @@ func (h *OAuthHandler) HandleAuthCodeExchange(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	connName := body.Name
-	if connName == "" {
+	connName := connectionDisplayName(body.Provider, body.Name, email, displayName)
+	if connName == displayName && displayName == "" {
 		connName = cfg.display
-		if displayName != "" {
-			connName += " (" + displayName + ")"
-		} else if email != "" {
-			connName += " (" + email + ")"
-		}
 	}
 	connID := cfg.connPrefix + shortHash(credential)
 	now := currentTimestamp()

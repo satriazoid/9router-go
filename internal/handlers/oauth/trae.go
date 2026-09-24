@@ -278,14 +278,9 @@ func (h *OAuthHandler) HandleTraeExchange(w http.ResponseWriter, r *http.Request
 		scope = "marscode-cn"
 	}
 
-	connName := body.Name
-	if connName == "" {
+	connName := connectionDisplayName("trae", body.Name, email, name)
+	if connName == name && name == "" {
 		connName = "Trae"
-		if name != "" {
-			connName += " (" + name + ")"
-		} else if email != "" {
-			connName += " (" + email + ")"
-		}
 	}
 	connID := "trae-" + shortHash(accessToken)
 	now := currentTimestamp()
@@ -298,10 +293,10 @@ func (h *OAuthHandler) HandleTraeExchange(w http.ResponseWriter, r *http.Request
 	}
 	dataMap["providerSpecificData"] = map[string]any{
 		"authMethod": "oauth", "aiRegion": aiRegion,
-		"region":     firstNonEmpty(region, aiRegion), "tenant": tenant, "userId": userID,
+		"region": firstNonEmpty(region, aiRegion), "tenant": tenant, "userId": userID,
 		"scope": scope, "webId": "", "bizUserId": "", "userUniqueId": "",
 		"appLanguage": "en", "appVersion": "3.5.54",
-		"userRegion": map[bool]string{true: "SG", false: "US"}[scope == "marscode-sg"],
+		"userRegion":   map[bool]string{true: "SG", false: "US"}[scope == "marscode-sg"],
 		"userIdentity": "Free",
 	}
 	dataBytes, err := json.Marshal(dataMap)

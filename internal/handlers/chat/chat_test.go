@@ -651,10 +651,10 @@ func TestNormalizeProviderToken(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "Cline OAuth token gets workos prefix",
+			name:     "Cline WorkOS JWT gets workos prefix",
 			provider: "cline",
-			token:    "token_12345",
-			expected: "workos:token_12345",
+			token:    "eyJhbGciOiJSUzI1NiIsImtpZCI6InNzb19vaWRj.e30.sig",
+			expected: "workos:eyJhbGciOiJSUzI1NiIsImtpZCI6InNzb19vaWRj.e30.sig",
 		},
 		{
 			name:     "Cline OAuth token already prefixed remains unchanged",
@@ -669,10 +669,22 @@ func TestNormalizeProviderToken(t *testing.T) {
 			expected: "sk_live_12345",
 		},
 		{
-			name:     "Clinepass OAuth token gets workos prefix",
+			name:     "Clinepass non-JWT token rides plain (upstream parity)",
 			provider: "clinepass",
 			token:    "token_pass_123",
-			expected: "workos:token_pass_123",
+			expected: "token_pass_123",
+		},
+		{
+			name:     "Clinepass WorkOS JWT gets workos prefix",
+			provider: "clinepass",
+			token:    "eyJhbGciOiJSUzI1NiIsImtpZCI6InNzb19vaWRj.e30.sig",
+			expected: "workos:eyJhbGciOiJSUzI1NiIsImtpZCI6InNzb19vaWRj.e30.sig",
+		},
+		{
+			name:     "Cline non-JWT token rides plain (upstream parity)",
+			provider: "cline",
+			token:    "token_12345",
+			expected: "token_12345",
 		},
 		{
 			name:     "Other provider token unchanged",
@@ -691,7 +703,6 @@ func TestNormalizeProviderToken(t *testing.T) {
 		})
 	}
 }
-
 
 func TestResolveProviderAlias(t *testing.T) {
 	tests := []struct {

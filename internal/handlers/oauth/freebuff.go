@@ -347,12 +347,7 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 	if (status == "authorized" || authToken != "") && authToken != "" {
 		freebuffPendingSessions.Delete(fpID)
 		connID := "fb-" + shortHash(authToken)
-		connName := name
-		if connName == "" && email != "" {
-			connName = "Freebuff (" + email + ")"
-		} else if connName == "" {
-			connName = "Freebuff (" + connID + ")"
-		}
+		connName := connectionDisplayName("freebuff", name, email, connID)
 
 		dataMap := map[string]any{
 			"authToken":   authToken,

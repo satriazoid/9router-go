@@ -171,13 +171,13 @@ var oauthProbeConfigs = map[string]oauthProbeConfig{
 		},
 		method: http.MethodGet, noAuth: true,
 	},
-	"kiro":         {checkExpiry: true, refreshable: true},
-	"qoder":        {url: "https://openapi.qoder.sh/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
-	"qoder-cn":     {url: "https://openapi.qoder.com.cn/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
-	"kimi":         {checkExpiry: true, refreshable: true},
-	"kimi-coding":  {checkExpiry: true, refreshable: true},
-	"cursor":       {tokenExists: true},
-	"kilocode":     {url: kilocodeProbeURL, method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
+	"kiro":           {checkExpiry: true, refreshable: true},
+	"qoder":          {url: "https://openapi.qoder.sh/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
+	"qoder-cn":       {url: "https://openapi.qoder.com.cn/api/v1/userinfo", method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
+	"kimi":           {checkExpiry: true, refreshable: true},
+	"kimi-coding":    {checkExpiry: true, refreshable: true},
+	"cursor":         {tokenExists: true},
+	"kilocode":       {url: kilocodeProbeURL, method: http.MethodGet, authHeader: "Authorization", authPrefix: "Bearer "},
 	"cline":          {refreshable: true},
 	"clinepass":      {refreshable: true},
 	"freebuff":       {},
@@ -591,8 +591,10 @@ func (h *DashboardHandler) probeOAuthEndpoint(ctx context.Context, provider stri
 // probeCline ports the cline branch: probe users/me, refresh on 401, retry.
 func (h *DashboardHandler) probeCline(ctx context.Context, data connectionProbeData, client *http.Client, accessToken string, refreshed bool, tokens *oauth.TokenResult) probeOutcome {
 	try := func(token string) probeOutcome {
-		authVal := token
-		if strings.HasPrefix(authVal, "eyJ") && !strings.HasPrefix(authVal, "workos:") {
+		// JWT-only workos: prefix (parity with upstream
+		// open-sse/shared/clineAuth.js): ClinePass API keys ride plain.
+		authVal := strings.TrimSpace(token)
+		if !strings.HasPrefix(authVal, "workos:") && isClineWorkOSJWT(authVal) {
 			authVal = "workos:" + authVal
 		}
 		status, _, err := connectionProbeDo(ctx, client, http.MethodGet, clineProbeURL, map[string]string{
@@ -626,6 +628,26 @@ func (h *DashboardHandler) probeCline(ctx context.Context, data connectionProbeD
 	out.refreshed = true
 	out.tokens = retryTokens
 	return out
+}
+
+// isClineWorkOSJWT reports whether token looks like a Cline OAuth WorkOS JWT
+// (base64url "eyJ…" header + dot). Non-JWT ClinePass API keys ride plain
+// Bearer (upstream parity: open-sse/shared/clineAuth.js getClineAccessToken).
+func isClineWorkOSJWT(token string) bool {
+	if strings.HasPrefix(token, "workos:") || !strings.HasPrefix(token, "eyJ") {
+		return false
+	}
+	dot := strings.IndexByte(token, '.')
+	if dot <= 3 {
+		return false
+	}
+	for i := 0; i < dot; i++ {
+		c := token[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *DashboardHandler) probeFreebuff(ctx context.Context, conn *models.ProviderConnection, data connectionProbeData, client *http.Client) probeOutcome {

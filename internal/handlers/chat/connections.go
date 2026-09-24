@@ -54,6 +54,7 @@ func (h *ChatHandler) ResolveProviderProxyPoolID(provider string) string {
 	}
 	return ""
 }
+
 // GetBestConnection retrieves the highest-priority active connection for a provider.
 // When connectionID is non-empty, it fetches that specific connection directly.
 func (h *ChatHandler) GetBestConnection(provider string, connectionID string, excludeIDs []string, model string) (*models.ProviderConnection, *ConnectionData, error) {
@@ -283,17 +284,40 @@ func extractAPIKey(connData *ConnectionData) string {
 	return connData.AccessToken
 }
 
-// NormalizeProviderToken normalizes credentials for providers with specific token requirements
-// (e.g. Cline OAuth tokens require workos: prefix, whereas API keys ride plain Bearer).
+// NormalizeProviderToken normalizes credentials for providers with specific token requirements.
+// Only Cline OAuth tokens — WorkOS JWTs (base64url "eyJ…" with a dot) — take
+// the "workos:" prefix; ClinePass API keys (e.g. "clp_…") ride plain Bearer
+// (upstream parity: open-sse/shared/clineAuth.js getClineAccessToken).
 func NormalizeProviderToken(provider, token string) string {
 	if (provider == "cline" || provider == "clinepass") && token != "" {
 		t := strings.TrimSpace(token)
-		if !strings.HasPrefix(t, "workos:") && !strings.HasPrefix(t, "sk_") {
+		if isClineWorkOSJWT(t) {
 			return "workos:" + t
 		}
 		return t
 	}
 	return token
+}
+
+// isClineWorkOSJWT reports whether token looks like a Cline OAuth WorkOS JWT:
+// base64url "eyJ…" header followed by a dot (upstream parity:
+// open-sse/shared/clineAuth.js getClineAccessToken). Non-JWT ClinePass API
+// keys (e.g. "clp_…") fail this check and ride plain Bearer.
+func isClineWorkOSJWT(token string) bool {
+	if strings.HasPrefix(token, "workos:") || !strings.HasPrefix(token, "eyJ") {
+		return false
+	}
+	dot := strings.IndexByte(token, '.')
+	if dot <= 3 {
+		return false
+	}
+	for i := 0; i < dot; i++ {
+		c := token[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func extractAssignedModel(dataStr string) string {

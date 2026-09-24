@@ -307,13 +307,7 @@ func (h *OAuthHandler) HandlePKCEExchange(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	connName := body.Name
-	if connName == "" {
-		connName = cfg.display
-		if email != "" {
-			connName += " (" + email + ")"
-		}
-	}
+	connName := connectionDisplayName(body.Provider, body.Name, email, cfg.display)
 	connID := cfg.connPrefix + shortHash(tokens.AccessToken)
 	now := currentTimestamp()
 	dataMap := map[string]any{"apiKey": tokens.AccessToken, "accessToken": tokens.AccessToken}

@@ -6,8 +6,8 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
 	json "encoding/json/v2"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -188,14 +188,9 @@ func (h *OAuthHandler) HandleZedExchange(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	connName := body.Name
-	if connName == "" {
+	connName := connectionDisplayName("zed", body.Name, email, name)
+	if connName == name && name == "" {
 		connName = "Zed"
-		if name != "" {
-			connName += " (" + name + ")"
-		} else if email != "" {
-			connName += " (" + email + ")"
-		}
 	}
 	connID := "zed-" + shortHash(accessToken)
 	now := currentTimestamp()

@@ -121,10 +121,15 @@ func (h *OAuthHandler) HandleClineExchange(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	connName := body.Name
-	if connName == "" {
-		connName = map[string]string{"cline": "Cline", "clinepass": "ClinePass"}[provider]
-	}
+	// Name new connections by account email (the user asked for email, not a
+	// generic "ClinePass" label that collides across accounts). The
+	// base64url bundle carries email/firstName/lastName/expiresAt; the
+	// /auth/token path returns only tokens, so name-by-email applies to the
+	// bundle path and stays a stable default otherwise.
+	email, firstName, lastName := decodeClineIdentity(body.Code)
+	connName := connectionDisplayName(provider, body.Name, email,
+		strings.TrimSpace(strings.TrimSpace(firstName)+" "+strings.TrimSpace(lastName)))
+
 	connID := provider + "-" + shortHash(accessToken)
 
 	now := currentTimestamp()
@@ -134,6 +139,14 @@ func (h *OAuthHandler) HandleClineExchange(w http.ResponseWriter, r *http.Reques
 	}
 	if refreshToken != "" {
 		dataMap["refreshToken"] = refreshToken
+	}
+	if email != "" {
+		dataMap["email"] = email
+	}
+	dataMap["providerSpecificData"] = map[string]any{
+		"authMethod": "authorization_code",
+		"firstName":  firstName,
+		"lastName":   lastName,
 	}
 	dataBytes, err := json.Marshal(dataMap)
 	if err != nil {
@@ -181,15 +194,25 @@ func (h *OAuthHandler) HandleClineExchange(w http.ResponseWriter, r *http.Reques
 }
 
 // decodeClineCode mirrors upstream: Cline embeds the token bundle as base64
-// JSON in the code param ({accessToken, refreshToken, ...}).
+// JSON in the code param ({accessToken, refreshToken, ...}). The browser
+// callback URL-encodes the bundle, so '-'/'_' (base64url) arrive instead of
+// '+//' — normalize both alphabets before decoding.
 func decodeClineCode(code string) (access, refresh string, ok bool) {
-	padded := code
-	if m := len(padded) % 4; m != 0 {
-		padded += strings.Repeat("=", 4-m)
+	trimmed := strings.TrimSpace(code)
+	// Strip the trailing signature segment the extension appends after the
+	// JSON payload (base64url of the signature bytes, not padding).
+	if i := strings.Index(trimmed, "}"); i >= 0 {
+		if raw, err := base64.StdEncoding.DecodeString(padBase64(trimmed[:i+1])); err == nil {
+			trimmed = string(raw)
+		}
 	}
-	raw, err := base64.StdEncoding.DecodeString(padded)
+	padded := padBase64(trimmed)
+	raw, err := base64.URLEncoding.DecodeString(padded)
 	if err != nil {
-		return "", "", false
+		raw, err = base64.StdEncoding.DecodeString(padded)
+		if err != nil {
+			return "", "", false
+		}
 	}
 	s := string(raw)
 	if i := strings.LastIndex(s, "}"); i >= 0 {
@@ -205,6 +228,44 @@ func decodeClineCode(code string) (access, refresh string, ok bool) {
 		return "", "", false
 	}
 	return bundle.AccessToken, bundle.RefreshToken, true
+}
+
+// decodeClineIdentity extracts the account identity fields embedded in the
+// base64url token bundle (email, firstName, lastName). Returns empties when
+// the code is not a decodable bundle (e.g. the /auth/token path).
+func decodeClineIdentity(code string) (email, firstName, lastName string) {
+	trimmed := strings.TrimSpace(code)
+	padded := padBase64(trimmed)
+	raw, err := base64.URLEncoding.DecodeString(padded)
+	if err != nil {
+		raw, err = base64.StdEncoding.DecodeString(padded)
+		if err != nil {
+			return "", "", ""
+		}
+	}
+	s := string(raw)
+	if i := strings.LastIndex(s, "}"); i >= 0 {
+		s = s[:i+1]
+	} else {
+		return "", "", ""
+	}
+	var bundle struct {
+		Email     string `json:"email"`
+		FirstName string `json:"firstName"`
+		LastName  string `json:"lastName"`
+	}
+	if err := json.Unmarshal([]byte(s), &bundle); err != nil {
+		return "", "", ""
+	}
+	return bundle.Email, bundle.FirstName, bundle.LastName
+}
+
+// padBase64 restores the '=' padding stripped from URL-safe payloads.
+func padBase64(s string) string {
+	if m := len(s) % 4; m != 0 {
+		s += strings.Repeat("=", 4-m)
+	}
+	return s
 }
 
 // exchangeClineCode POSTs the authorization code to Cline's token endpoint

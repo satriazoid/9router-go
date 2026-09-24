@@ -363,7 +363,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			log.Info("fallback", "reactive 401 token refresh success, retrying request", "conn", connectionID)
 			apiKey = NormalizeProviderToken(provider, refreshedKey)
 			if exec := executor.Get(provider); exec != nil {
-				fwdErr = exec(w, &executor.Request{
+				retryReq := &executor.Request{
 					Ctx:            ctx,
 					Client:         httpClient,
 					Config:         providerCfg,
@@ -378,7 +378,14 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					ResponseBuf:    &metrics.ResponseBuf,
 					StartTime:      start,
 					TTFT:           &metrics.TTFT,
-				})
+				}
+				// Same client_id cloaking as the first attempt: a refreshed
+				// retry without ConnData would fall back to a random id and
+				// re-brand the request mid-conversation.
+				if connData != nil && len(connData.ProviderSpecificData) > 0 {
+					retryReq.ConnData = connData.ProviderSpecificData
+				}
+				fwdErr = exec(w, retryReq)
 			} else if providerCfg.IsGeminiNative() {
 				fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics)
 			} else {

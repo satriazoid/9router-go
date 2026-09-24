@@ -146,9 +146,9 @@ func readCursorStateDB() (token, machineID string, err error) {
 // ---------- kimchi: browser-token flow ----------
 
 var (
-	kimchiAppBase   = "https://app.kimchi.dev"
-	kimchiValidate  = "https://api.cast.ai/v1/llm/openai/supported-providers"
-	kimchiUserInfo  = "https://app.kimchi.dev/api/v1/me"
+	kimchiAppBase  = "https://app.kimchi.dev"
+	kimchiValidate = "https://api.cast.ai/v1/llm/openai/supported-providers"
+	kimchiUserInfo = "https://app.kimchi.dev/api/v1/me"
 )
 
 // HandleKimchiAuthorize returns the kimchi.dev cli-auth URL.
@@ -344,7 +344,7 @@ func (h *OAuthHandler) HandleIflowCookie(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var getResult struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Data    struct {
 			Name string `json:"name"`
@@ -379,7 +379,7 @@ func (h *OAuthHandler) HandleIflowCookie(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var postResult struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Data    struct {
 			APIKey     string `json:"apiKey"`

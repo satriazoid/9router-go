@@ -230,10 +230,7 @@ func (h *OAuthHandler) HandleAntigravityCallback(w http.ResponseWriter, r *http.
 		connID = "ag-" + randomString(12)
 	}
 
-	connName := "Antigravity"
-	if email != "" {
-		connName = "Antigravity (" + email + ")"
-	}
+	connName := connectionDisplayName("antigravity", "", email, "Antigravity")
 
 	now := currentTimestamp()
 	dataMap := map[string]any{
