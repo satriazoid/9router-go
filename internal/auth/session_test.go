@@ -163,3 +163,33 @@ func TestCLITokenRoundTrip(t *testing.T) {
 		t.Error("CLI token must be stable across calls")
 	}
 }
+
+func TestLoginLimiter_BoundedUnderScan(t *testing.T) {
+	ResetLoginLimiter()
+	// Simulate a distributed scan: 3x the cap in unique IPs, few fails each.
+	for i := 0; i < 3*maxLoginBuckets; i++ {
+		ip := "10.9.0." + string(rune('0'+i%10)) + "." + string(rune('0'+(i/10)%10)) + "." + string(rune('0'+(i/100)%10)) + "." + itoa(i)
+		RecordLoginFail(ip)
+	}
+	loginMu.Lock()
+	n := len(loginAttempts)
+	loginMu.Unlock()
+	if n > maxLoginBuckets {
+		t.Fatalf("limiter map grew unbounded: %d > cap %d", n, maxLoginBuckets)
+	}
+	ResetLoginLimiter()
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	p := len(b)
+	for i > 0 {
+		p--
+		b[p] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[p:])
+}

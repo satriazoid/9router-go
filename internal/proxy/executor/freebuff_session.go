@@ -118,8 +118,18 @@ func getFreebuffSessionWithStore(store LeaseStore, token, model string) (*freebu
 	freebuffSessionMu.RLock()
 	sess, ok := freebuffSessionCache[key]
 	freebuffSessionMu.RUnlock()
-	if ok && time.Now().Before(sess.ExpiresAt) {
-		return sess, true
+	if ok {
+		if time.Now().Before(sess.ExpiresAt) {
+			return sess, true
+		}
+		// Lazy eviction: expired rows must not accumulate forever across
+		// tokens/models (no sweeper exists; deletion only happened on
+		// explicit release before this).
+		freebuffSessionMu.Lock()
+		if cur, ok := freebuffSessionCache[key]; ok && cur == sess {
+			delete(freebuffSessionCache, key)
+		}
+		freebuffSessionMu.Unlock()
 	}
 	if store == nil {
 		return nil, false

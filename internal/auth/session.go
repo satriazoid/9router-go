@@ -73,6 +73,7 @@ type SessionClaims struct {
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
 // Sign creates a signed HS256 JWT carrying the `authenticated` claim.
 func Sign(secret string, now time.Time) (string, error) {
 	return SignWith(secret, now, SessionClaims{Authenticated: true})
@@ -263,6 +264,11 @@ func LoginLocked(ip string) (bool, int) {
 	return true, int(math.Ceil(remaining.Seconds()))
 }
 
+// maxLoginBuckets caps scanner-driven growth: one-off probes from thousands
+// of unique IPs must not grow the map forever (pruning is otherwise only
+// opportunistic per-IP on repeat visits).
+const maxLoginBuckets = 5000
+
 // RecordLoginFail bumps the failure bucket, locking it once the threshold is
 // hit, and returns attempts left before the next lockout.
 func RecordLoginFail(ip string) int {
@@ -270,6 +276,14 @@ func RecordLoginFail(ip string) int {
 	defer loginMu.Unlock()
 	e := loginEntryLocked(ip)
 	if e == nil {
+		if len(loginAttempts) >= maxLoginBuckets {
+			// Evict buckets silent for a full window; if still full (active
+			// distributed scan), drop the oldest lastFail to stay bounded.
+			sweepLoginBucketsLocked()
+			if len(loginAttempts) >= maxLoginBuckets {
+				evictOldestLoginBucketLocked()
+			}
+		}
 		e = &loginAttempt{}
 		loginAttempts[ip] = e
 	}
@@ -296,6 +310,34 @@ func ResetLoginLimiter() {
 	loginMu.Lock()
 	defer loginMu.Unlock()
 	loginAttempts = map[string]*loginAttempt{}
+}
+
+// sweepLoginBucketsLocked drops every bucket silent for a full window.
+// Caller must hold loginMu.
+func sweepLoginBucketsLocked() {
+	now := time.Now()
+	for ip, e := range loginAttempts {
+		if !e.lastFail.IsZero() && now.Sub(e.lastFail) > loginFailWindow &&
+			(now.After(e.lockUntil) || e.lockUntil.IsZero()) {
+			delete(loginAttempts, ip)
+		}
+	}
+}
+
+// evictOldestLoginBucketLocked drops the stalest bucket to stay under cap.
+// Caller must hold loginMu.
+func evictOldestLoginBucketLocked() {
+	var oldestIP string
+	var oldest time.Time
+	first := true
+	for ip, e := range loginAttempts {
+		if first || e.lastFail.Before(oldest) {
+			oldestIP, oldest, first = ip, e.lastFail, false
+		}
+	}
+	if !first {
+		delete(loginAttempts, oldestIP)
+	}
 }
 
 // loginEntryLocked returns the live bucket, pruning entries silent for a full

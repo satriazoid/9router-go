@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"9router/proxy/internal/constants"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/oauth"
@@ -121,7 +122,7 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 	// Handle response — antigravity wraps non-streaming response in {"response": {...}}
 	// For streaming (SSE), the events are NOT wrapped — pipe directly.
 	if projectID != "" && !isStream {
-		raw, err := io.ReadAll(resp.Body)
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, constants.MaxUpstreamBodyBytes))
 		if err != nil {
 			log.Error("gemini", "read response body failed", "error", err)
 			return fmt.Errorf("read gemini response body: %w", err)
@@ -457,7 +458,7 @@ func (h *ChatHandler) handleGeminiStream(ctx context.Context, w http.ResponseWri
 // handleGeminiNonStream translates a Gemini non-stream response to OpenAI format,
 // and then to Claude format if translateResponse is true.
 func (h *ChatHandler) handleGeminiNonStream(ctx context.Context, w http.ResponseWriter, upstream io.Reader, translateResp bool, metrics *streamMetrics) error {
-	body, err := io.ReadAll(upstream)
+	body, err := io.ReadAll(io.LimitReader(upstream, constants.MaxUpstreamBodyBytes))
 	if err != nil {
 		return fmt.Errorf("read gemini response body: %w", err)
 	}

@@ -9,6 +9,11 @@ import (
 	"9router/proxy/internal/log"
 )
 
+// maxProxyClients caps rotating-proxy growth: each entry pins a Transport
+// plus idle sockets, so unbounded distinct URLs (residential rotation)
+// would leak descriptors without eviction.
+const maxProxyClients = 128
+
 var (
 	proxyClientsMu sync.RWMutex
 	proxyClients   = make(map[string]*http.Client)
@@ -104,6 +109,15 @@ func (h *ChatHandler) getClientForConnection(connData *ConnectionData) *http.Cli
 		defer proxyClientsMu.Unlock()
 		if client, ok = proxyClients[proxyURLStr]; ok {
 			return client
+		}
+		// Evict idle sockets of a random victim when over cap (amortized O(1);
+		// exact LRU is overkill — URLs are hot or dead, never warm).
+		if len(proxyClients) >= maxProxyClients {
+			for victimURL, victim := range proxyClients {
+				victim.CloseIdleConnections()
+				delete(proxyClients, victimURL)
+				break
+			}
 		}
 
 		var baseTransport *http.Transport

@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"9router/proxy/internal/log"
+	"9router/proxy/internal/translator"
 	"bytes"
 	"context"
 	json "encoding/json/v2"
@@ -11,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"9router/proxy/internal/log"
-	"9router/proxy/internal/translator"
 )
 
 // AntigravityModelQuota represents live quota information for a single model on an Antigravity connection.
@@ -609,8 +609,18 @@ func FetchAntigravityWeeklyQuota(ctx context.Context, client *http.Client, acces
 	cached, ok := agWeeklyCache[cacheKey]
 	cachedAt := agWeeklyAt[cacheKey]
 	agWeeklyMu.RUnlock()
-	if ok && now.Sub(cachedAt) < agWeeklyTTL {
-		return cached, nil
+	if ok {
+		if now.Sub(cachedAt) < agWeeklyTTL {
+			return cached, nil
+		}
+		// Lazy eviction: token-rotated keys must not accumulate forever
+		// (OAuth tokens refresh hourly, minting a fresh key each time).
+		agWeeklyMu.Lock()
+		if at, ok := agWeeklyAt[cacheKey]; ok && at.Equal(cachedAt) {
+			delete(agWeeklyCache, cacheKey)
+			delete(agWeeklyAt, cacheKey)
+		}
+		agWeeklyMu.Unlock()
 	}
 
 	url := antigravityQuotaBaseURL + "/v1internal:retrieveUserQuotaSummary"
@@ -654,8 +664,16 @@ func FetchAntigravityWeeklyQuota(ctx context.Context, client *http.Client, acces
 		agWeeklyMu.Lock()
 		agWeeklyCache[cacheKey] = res
 		agWeeklyAt[cacheKey] = now
+		// Opportunistic sweep: drop entries older than 2x TTL so dead
+		// token keys drain without a dedicated goroutine.
+		cutoff := now.Add(-2 * agWeeklyTTL)
+		for k, at := range agWeeklyAt {
+			if at.Before(cutoff) {
+				delete(agWeeklyCache, k)
+				delete(agWeeklyAt, k)
+			}
+		}
 		agWeeklyMu.Unlock()
 	}
 	return res, nil
 }
-

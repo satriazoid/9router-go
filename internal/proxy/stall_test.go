@@ -18,6 +18,8 @@ func TestStallReaderAbortsOnShutdown(t *testing.T) {
 	r := NewStallReader(pr, time.Minute, "test")
 	defer r.Close()
 
+	shutdown.TestReset()
+	defer shutdown.TestReset()
 	shutdown.Cancel()
 	_, err := r.Read(make([]byte, 1))
 	if err == nil {

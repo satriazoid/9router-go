@@ -594,15 +594,26 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 		return err
 	}
 
-	// Non-streaming (req.IsStream == false)
+	// Non-streaming (req.IsStream == false). sseBuf is capped: a slow,
+	// huge, or endless upstream stream must not expand the heap without
+	// bound (same 10MB discipline as proxy.openai non-stream reads).
+	const maxCodexSSEBytes = 10 << 20
 	var sseBuf bytes.Buffer
+	var sseTruncated bool
 	_ = proxy.ScanStream(upstream, func(payload []byte) {
+		if sseTruncated {
+			return
+		}
 		data := string(payload)
 		if data == "[DONE]" {
 			return
 		}
 		out := ProcessCodexEvent(data, state, responseID, created)
 		for _, chunk := range out {
+			if sseBuf.Len()+len(chunk) > maxCodexSSEBytes {
+				sseTruncated = true
+				return
+			}
 			sseBuf.WriteString(chunk)
 		}
 	})

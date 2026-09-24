@@ -62,11 +62,11 @@ func ProvideServer(p ServerParams) *http.Server {
 					autoUpdate = settings.AutoUpdate
 				}
 			}
-			updater.StartBackgroundCheck(context.Background(), autoUpdate)
+			updater.StartBackgroundCheck(shutdown.Context(), autoUpdate)
 			log.Printf("[config] auto-update enabled=%v", autoUpdate)
 
 			catalogPath := filepath.Join(filepath.Dir(p.Config.DatabasePath), "model-catalog.json")
-			providers.StartBackgroundCatalogSync(context.Background(), nil, catalogPath)
+			providers.StartBackgroundCatalogSync(shutdown.Context(), nil, catalogPath)
 
 			log.Printf("9router-go Proxy (%s) starting on port %d", updater.CurrentVersion, p.Config.Port)
 

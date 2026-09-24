@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -346,13 +347,13 @@ func TestAppendUserTurn_noMessages(t *testing.T) {
 }
 
 func TestCollectPanel_allFast(t *testing.T) {
-	calls := []func() *fusionResult{
-		func() *fusionResult { return &fusionResult{ok: true, body: []byte("a")} },
-		func() *fusionResult { return &fusionResult{ok: true, body: []byte("b")} },
-		func() *fusionResult { return &fusionResult{ok: true, body: []byte("c")} },
+	calls := []func(context.Context) *fusionResult{
+		func(context.Context) *fusionResult { return &fusionResult{ok: true, body: []byte("a")} },
+		func(context.Context) *fusionResult { return &fusionResult{ok: true, body: []byte("b")} },
+		func(context.Context) *fusionResult { return &fusionResult{ok: true, body: []byte("c")} },
 	}
 	ft := FusionTuning{MinPanel: 2, StragglerGraceMs: 5000, PanelHardTimeoutMs: 30000}
-	results := collectPanel(calls, ft)
+	results := collectPanel(context.Background(), calls, ft)
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -364,15 +365,15 @@ func TestCollectPanel_allFast(t *testing.T) {
 }
 
 func TestCollectPanel_oneSlow(t *testing.T) {
-	calls := []func() *fusionResult{
-		func() *fusionResult { return &fusionResult{ok: true, body: []byte("fast")} },
-		func() *fusionResult {
+	calls := []func(context.Context) *fusionResult{
+		func(context.Context) *fusionResult { return &fusionResult{ok: true, body: []byte("fast")} },
+		func(context.Context) *fusionResult {
 			// Simulate slow call — slept in goroutine will still complete before grace
 			return &fusionResult{ok: true, body: []byte("slow")}
 		},
 	}
 	ft := FusionTuning{MinPanel: 1, StragglerGraceMs: 100, PanelHardTimeoutMs: 5000}
-	results := collectPanel(calls, ft)
+	results := collectPanel(context.Background(), calls, ft)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -380,18 +381,18 @@ func TestCollectPanel_oneSlow(t *testing.T) {
 
 func TestCollectPanel_empty(t *testing.T) {
 	ft := FusionTuning{MinPanel: 2, StragglerGraceMs: 100, PanelHardTimeoutMs: 100}
-	if got := collectPanel(nil, ft); got != nil {
+	if got := collectPanel(context.Background(), nil, ft); got != nil {
 		t.Errorf("expected nil for empty, got %v", got)
 	}
 }
 
 func TestCollectPanel_allFail(t *testing.T) {
-	calls := []func() *fusionResult{
-		func() *fusionResult { return &fusionResult{ok: false, err: fmt.Errorf("fail")} },
-		func() *fusionResult { return &fusionResult{ok: false, err: fmt.Errorf("fail")} },
+	calls := []func(context.Context) *fusionResult{
+		func(context.Context) *fusionResult { return &fusionResult{ok: false, err: fmt.Errorf("fail")} },
+		func(context.Context) *fusionResult { return &fusionResult{ok: false, err: fmt.Errorf("fail")} },
 	}
 	ft := FusionTuning{MinPanel: 2, StragglerGraceMs: 100, PanelHardTimeoutMs: 5000}
-	results := collectPanel(calls, ft)
+	results := collectPanel(context.Background(), calls, ft)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -687,4 +688,35 @@ func TestAugmentModelsWithCapacityAdapter(t *testing.T) {
 			t.Errorf("expected vision adapter model first, got %s", augmented[0])
 		}
 	})
+}
+
+func TestCollectPanel_CancelAbortsStragglers(t *testing.T) {
+	released := make(chan struct{}, 8)
+	block := func(ctx context.Context) *fusionResult {
+		select {
+		case <-ctx.Done():
+			released <- struct{}{}
+			return &fusionResult{err: ctx.Err()}
+		case <-time.After(5 * time.Second):
+			return &fusionResult{ok: true, body: []byte("slow")}
+		}
+	}
+	calls := []func(context.Context) *fusionResult{block, block, block}
+	ft := FusionTuning{MinPanel: 3, StragglerGraceMs: 100, PanelHardTimeoutMs: 300}
+	start := time.Now()
+	results := collectPanel(context.Background(), calls, ft)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("hard timeout must bound collection, took %v", elapsed)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 slots, got %d", len(results))
+	}
+	// All three stragglers must observe cancel promptly (no 5s hang).
+	for i := 0; i < 3; i++ {
+		select {
+		case <-released:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("straggler %d not aborted after timeout", i)
+		}
+	}
 }

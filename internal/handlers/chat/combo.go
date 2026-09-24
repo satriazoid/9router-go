@@ -944,14 +944,14 @@ func (h *ChatHandler) handleFusion(ctx context.Context, w http.ResponseWriter, b
 		return
 	}
 
-	// Fan-out panel calls
+	// Fan-out panel calls (ctx aborts stragglers the panel moves on without).
 	ft := fusionDefaults
-	calls := make([]func() *fusionResult, len(panel))
+	calls := make([]func(context.Context) *fusionResult, len(panel))
 	for i, entry := range panel {
 		calls[i] = h.makePanelCall(panelJSON, entry)
 	}
 
-	settled := collectPanel(calls, ft)
+	settled := collectPanel(ctx, calls, ft)
 
 	// Extract successful answers
 	var answers []fusionAnswer
