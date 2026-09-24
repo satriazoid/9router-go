@@ -88,7 +88,13 @@ func ProvideServer(p ServerParams) *http.Server {
 			// within its deadline instead of waiting out the full timeout.
 			shutdown.Cancel()
 
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			// Refuse NEW keep-alive reuse immediately: idle browser/dashboard
+			// connections otherwise hold Shutdown for the full deadline even
+			// when zero requests are in flight (the "shutdown takes forever"
+			// complaint). In-flight requests still drain gracefully below.
+			server.SetKeepAlivesEnabled(false)
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutdownCtx); err != nil {
 				log.Printf("Server shutdown did not complete in time: %v", err)
