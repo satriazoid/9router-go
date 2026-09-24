@@ -170,7 +170,7 @@ func TestConnectionsEndpoints(t *testing.T) {
 		t.Errorf("GET /api/connections must not expose raw data blob, got keys %v", keysOf(rawConns[0]))
 	}
 	body3 := rec.Body.String()
-	for _, leak := range []string{"sk-test-123", "accessToken", "refreshToken", "authToken"} {
+	for _, leak := range []string{"sk-test-123", `"accessToken"`, `"refreshToken"`, `"authToken"`, `"apiKey"`} {
 		if strings.Contains(body3, leak) {
 			t.Errorf("GET /api/connections leaks %q", leak)
 		}

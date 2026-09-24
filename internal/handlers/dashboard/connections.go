@@ -256,9 +256,19 @@ func sanitizeProviderConnection(c *models.ProviderConnection) map[string]any {
 		"displayName", "defaultModel", "testStatus", "lastError", "lastErrorAt",
 		"errorCode", "expiresAt", "lastUsedAt", "consecutiveUseCount",
 		"globalPriority", "plan", "message",
+		// Operational (non-secret) state the dashboard renders: cooldown
+		// badges (⏱), quota/rate-limit panels, model assignment. Secret
+		// keys (apiKey/accessToken/refreshToken/authToken/...) stay dropped.
+		"backoffLevel", "rateLimitedUntil", "rateLimit", "rateLimitsByModel",
+		"freebuffModel", "assignedModel", "freebucks",
 	} {
 		if v, ok := data[f]; ok && v != nil {
 			safe[f] = v
+		}
+	}
+	for k, v := range data {
+		if strings.HasPrefix(k, "modelLock_") && v != nil {
+			safe[k] = v
 		}
 	}
 	if psd, ok := data["providerSpecificData"].(map[string]any); ok {
