@@ -173,7 +173,9 @@ func (h *OAuthHandler) HandleAntigravityCallback(w http.ResponseWriter, r *http.
 		return
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	tokenReq.Header.Set("User-Agent", "9router/oauth")
+	// No custom UA: the handler runs server-side against Google token
+	// endpoints, and any router brand here is pure self-identification.
+	// Go's default UA ("Go-http-client/2.0") is unbranded and sufficient.
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	tokenResp, err := client.Do(tokenReq)
