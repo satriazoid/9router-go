@@ -343,25 +343,31 @@
           </div>
         {:else}
           <div class="flex-1 overflow-y-auto">
-            <table class="w-full min-w-[280px] border-collapse text-xs">
+            <table class="w-full table-fixed min-w-[280px] border-collapse text-xs">
+              <colgroup>
+                <col class="w-[20px]" />
+                <col />
+                <col class="w-[96px]" />
+                <col class="w-[56px]" />
+              </colgroup>
               <thead class="sticky top-0 bg-bg z-10">
                 <tr class="border-b border-border">
-                  <th class="py-1.5 pl-3 text-left font-semibold text-text-muted w-2"></th>
+                  <th class="py-1.5 pl-3 text-left font-semibold text-text-muted"></th>
                   <th class="py-1.5 text-left font-semibold text-text-muted">Model</th>
                   <th class="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
-                  <th class="py-1.5 pr-3 text-right font-semibold text-text-muted">When</th>
+                  <th class="py-1.5 pr-3 text-right font-semibold text-text-muted whitespace-nowrap">When</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-border/50 font-mono text-[11px]">
                 {#each stats.recentRequests as req}
                   <tr class="hover:bg-bg-subtle transition-colors">
-                    <td class="py-1.5 pl-3">
-                      <span class="block w-1.5 h-1.5 rounded-full {req.status === 'ok' || req.status === 'success' ? 'bg-success' : 'bg-error'}"></span>
+                    <td class="py-1.5 pl-3 align-middle">
+                      <span class="mx-auto block w-1.5 h-1.5 rounded-full {req.status === 'ok' || req.status === 'success' ? 'bg-success' : 'bg-error'}"></span>
                     </td>
-                    <td class="py-1.5 pr-2 font-mono truncate max-w-[130px]" title={req.model}>
-                      {req.model}
+                    <td class="py-1.5 pr-2 min-w-0">
+                      <span class="block truncate font-mono text-[11px]" title={req.model}>{req.model}</span>
                     </td>
-                    <td class="py-1.5 text-right whitespace-nowrap">
+                    <td class="py-1.5 pr-3 text-right whitespace-nowrap">
                       <span class="text-primary">{fmt(req.promptTokens)}↑</span>
                       <span class="text-success">{fmt(req.completionTokens)}↓</span>
                     </td>
