@@ -393,13 +393,9 @@ func validateOpenAICompatibleNode(w http.ResponseWriter, ctx context.Context, ba
 	base := strings.TrimSuffix(baseURL, "/")
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
 
-	status, _, err := validateProbeDo(ctx, http.MethodGet, base+"/models", headers, nil)
+	status, body, err := validateProbeDo(ctx, http.MethodGet, base+"/models", headers, nil)
 	if err != nil {
 		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
-		return
-	}
-	if status == http.StatusOK {
-		writeNodeValidation(w, map[string]any{"valid": true})
 		return
 	}
 	// Auth errors — no point trying the chat fallback.
@@ -408,9 +404,21 @@ func validateOpenAICompatibleNode(w http.ResponseWriter, ctx context.Context, ba
 		return
 	}
 
-	if modelID != "" {
+	// Verify via /chat/completions to avoid false-positive on public GET /models
+	effectiveModel := modelID
+	if effectiveModel == "" && len(body) > 0 {
+		var modelsRes struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &modelsRes) == nil && len(modelsRes.Data) > 0 && modelsRes.Data[0].ID != "" {
+			effectiveModel = modelsRes.Data[0].ID
+		}
+	}
+	if effectiveModel != "" {
 		payload, _ := json.Marshal(map[string]any{
-			"model":      modelID,
+			"model":      effectiveModel,
 			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
 			"max_tokens": 1,
 		})
@@ -418,16 +426,27 @@ func validateOpenAICompatibleNode(w http.ResponseWriter, ctx context.Context, ba
 			"Authorization": "Bearer " + apiKey,
 			"Content-Type":  "application/json",
 		}
-		chatStatus, _, err := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", chatHeaders, payload)
-		if err != nil {
-			writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(err)})
+		chatStatus, _, cErr := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", chatHeaders, payload)
+		if cErr == nil && (chatStatus == http.StatusUnauthorized || chatStatus == http.StatusForbidden) {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": "API key unauthorized"})
+			return
+		}
+		if cErr != nil && status != http.StatusOK {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeNetworkMessage(cErr)})
 			return
 		}
 		if chatStatus == http.StatusOK {
 			writeNodeValidation(w, map[string]any{"valid": true, "method": "chat"})
 			return
 		}
-		writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeChatStatusMessage(chatStatus), "method": "chat"})
+		if status != http.StatusOK {
+			writeNodeValidation(w, map[string]any{"valid": false, "error": validateNodeChatStatusMessage(chatStatus), "method": "chat"})
+			return
+		}
+	}
+
+	if status == http.StatusOK {
+		writeNodeValidation(w, map[string]any{"valid": true})
 		return
 	}
 

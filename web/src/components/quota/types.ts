@@ -1,5 +1,6 @@
 // Port of 9router Next.js ProviderLimits/utils.js for the native Go dashboard.
 // Pure helpers + localStorage quota cache + quota visibility filtering.
+import { getModelsByProviderId } from '../../lib/models'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const QUOTA_CACHE_KEY = 'quotaCacheData'
@@ -391,55 +392,407 @@ export function getHiddenQuotaRows(
   return quotas.filter((quota) => hidden.has(getQuotaVisibilityKey(quota)))
 }
 
-// ─── Provider-specific quota parsing (port of parseQuotaData) ────────────────
-// The Go backend /api/usage/{id} returns a normalized
-// { plan, quotas: { name: { used, total, remainingPercentage, resetAt, ... } } }
-// map for all providers, so the per-provider branches of the Next.js parser
-// collapse into one generic mapping. Key order is preserved by Object.entries.
+// ─── Provider-specific quota parsing (parity with upstream Next.js utils.js) ───
 export function parseQuotaData(provider: string, data: unknown): NormalizedQuota[] {
   if (!data || typeof data !== 'object') return []
   const d = data as { quotas?: Record<string, Record<string, unknown>>; message?: string }
-  const normalized: NormalizedQuota[] = []
-
-  if (d.message && !d.quotas) {
-    normalized.push({
-      name: 'error',
-      used: 0,
-      total: 0,
-      resetAt: null,
-      message: d.message,
-    })
-    return normalized
-  }
-
-  if (!d.quotas) return []
+  const normalizedQuotas: NormalizedQuota[] = []
 
   try {
-    Object.entries(d.quotas).forEach(([name, quota]) => {
-      const q = quota || {}
-      const used = Number(q.used) || 0
-      const total = Number(q.total) || 0
-      const row: NormalizedQuota = {
-        name,
-        used,
-        total,
-        resetAt: (q.resetAt as string) || null,
-      }
-      if (q.remaining !== undefined) row.remaining = Number(q.remaining)
-      if (q.remainingPercentage !== undefined) {
-        row.remainingPercentage = Number(q.remainingPercentage)
-      } else if (q.remaining === undefined) {
-        // Match Next.js claude branch: derive from used/total when neither is present
-        row.remainingPercentage = calculatePercentage(used, total)
-      }
-      if (q.unlimited !== undefined) row.unlimited = Boolean(q.unlimited)
-      if (q.recurring !== undefined) row.recurring = q.recurring !== false
-      if (q.isCreditBalance !== undefined) row.isCreditBalance = Boolean(q.isCreditBalance)
-      if (q.currency !== undefined) row.currency = String(q.currency)
-      if (q.displayName !== undefined) row.displayName = String(q.displayName)
-      if (q.quotaType !== undefined) row.quotaType = String(q.quotaType)
-      normalized.push(row)
-    })
+    const prov = (provider || '').toLowerCase()
+    switch (prov) {
+      case 'github':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'antigravity':
+        if (d.quotas) {
+          const entries = Object.entries(d.quotas)
+          const weeklyKeys = new Set(['gemini_weekly', 'claude_gpt_weekly'])
+          const sessionKeys = new Set(['gemini_session', 'claude_gpt_session'])
+          const summaryKeys = new Set([...weeklyKeys, ...sessionKeys])
+          const geminiModels = entries.filter(([k]) => k.startsWith('gemini-') && !k.includes('image'))
+          const claudeModels = entries.filter(([k]) => k.startsWith('claude-'))
+          const imageModels = entries.filter(([k]) => k.includes('image'))
+          const summaryModels = entries.filter(([k]) => summaryKeys.has(k))
+          const otherModels = entries.filter(
+            ([k]) =>
+              !k.startsWith('gemini-') &&
+              !k.startsWith('claude-') &&
+              !k.includes('image') &&
+              !summaryKeys.has(k),
+          )
+
+          const hasGeminiWeekly = Boolean(d.quotas.gemini_weekly)
+          const hasGeminiSession = Boolean(d.quotas.gemini_session)
+          const hasClaudeWeekly = Boolean(d.quotas.claude_gpt_weekly)
+          const hasClaudeSession = Boolean(d.quotas.claude_gpt_session)
+
+          // 1. Gemini Family
+          if (hasGeminiSession) {
+            summaryModels
+              .filter(([k]) => k === 'gemini_session')
+              .forEach(([modelKey, quota]) => {
+                normalizedQuotas.push({
+                  name: (quota.displayName as string) || modelKey,
+                  modelKey,
+                  used: Number(quota.used) || 0,
+                  total: Number(quota.total) || 0,
+                  resetAt: (quota.resetAt as string) || null,
+                  remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                })
+              })
+          } else if (geminiModels.length > 0) {
+            const rep = geminiModels.reduce((min, cur) =>
+              (cur[1].remainingPercentage as number ?? 100) < (min[1].remainingPercentage as number ?? 100) ? cur : min,
+            )[1]
+            const weeklyResetAt = d.quotas.gemini_weekly?.resetAt
+            const isDuplicateOfWeekly =
+              hasGeminiWeekly && rep.resetAt === weeklyResetAt && (rep.remainingPercentage ?? 0) === 0
+            if (!isDuplicateOfWeekly) {
+              normalizedQuotas.push({
+                name: 'Gemini (Flash / Pro)',
+                modelKey: 'gemini',
+                used: Number(rep.used) || 0,
+                total: Number(rep.total) || 0,
+                resetAt: (rep.resetAt as string) || null,
+                remainingPercentage: rep.remainingPercentage !== undefined ? Number(rep.remainingPercentage) : undefined,
+              })
+            }
+          }
+
+          // Gemini weekly row
+          if (hasGeminiWeekly) {
+            summaryModels
+              .filter(([k]) => k === 'gemini_weekly')
+              .forEach(([modelKey, quota]) => {
+                normalizedQuotas.push({
+                  name: (quota.displayName as string) || modelKey,
+                  modelKey,
+                  used: Number(quota.used) || 0,
+                  total: Number(quota.total) || 0,
+                  resetAt: (quota.resetAt as string) || null,
+                  remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                })
+              })
+          }
+
+          // 2. Claude & GPT Family
+          if (hasClaudeSession) {
+            summaryModels
+              .filter(([k]) => k === 'claude_gpt_session')
+              .forEach(([modelKey, quota]) => {
+                normalizedQuotas.push({
+                  name: (quota.displayName as string) || modelKey,
+                  modelKey,
+                  used: Number(quota.used) || 0,
+                  total: Number(quota.total) || 0,
+                  resetAt: (quota.resetAt as string) || null,
+                  remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                })
+              })
+          } else if (claudeModels.length > 0) {
+            const rep = claudeModels.reduce((min, cur) =>
+              (cur[1].remainingPercentage as number ?? 100) < (min[1].remainingPercentage as number ?? 100) ? cur : min,
+            )[1]
+            const weeklyResetAt = d.quotas.claude_gpt_weekly?.resetAt
+            const isDuplicateOfWeekly =
+              hasClaudeWeekly && rep.resetAt === weeklyResetAt && (rep.remainingPercentage ?? 0) === 0
+            if (!isDuplicateOfWeekly) {
+              normalizedQuotas.push({
+                name: 'Claude (Sonnet / Opus)',
+                modelKey: 'claude',
+                used: Number(rep.used) || 0,
+                total: Number(rep.total) || 0,
+                resetAt: (rep.resetAt as string) || null,
+                remainingPercentage: rep.remainingPercentage !== undefined ? Number(rep.remainingPercentage) : undefined,
+              })
+            }
+          }
+
+          // Claude weekly row
+          if (hasClaudeWeekly) {
+            summaryModels
+              .filter(([k]) => k === 'claude_gpt_weekly')
+              .forEach(([modelKey, quota]) => {
+                normalizedQuotas.push({
+                  name: (quota.displayName as string) || modelKey,
+                  modelKey,
+                  used: Number(quota.used) || 0,
+                  total: Number(quota.total) || 0,
+                  resetAt: (quota.resetAt as string) || null,
+                  remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+                })
+              })
+          }
+
+          // 3. Standalone Image Generation Models
+          imageModels.forEach(([modelKey, quota]) => {
+            normalizedQuotas.push({
+              name: (quota.displayName as string) || modelKey,
+              modelKey,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+            })
+          })
+
+          // 4. Other models (only if no summary exists for that pool)
+          if (!hasClaudeWeekly && !hasClaudeSession) {
+            otherModels.forEach(([modelKey, quota]) => {
+              normalizedQuotas.push({
+                name: (quota.displayName as string) || modelKey,
+                modelKey,
+                used: Number(quota.used) || 0,
+                total: Number(quota.total) || 0,
+                resetAt: (quota.resetAt as string) || null,
+                remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+              })
+            })
+          }
+        }
+        break
+
+      case 'codex':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([quotaType, quota]) => {
+            let displayName = quotaType
+            if (quotaType === 'spark_session') displayName = 'Spark (5h)'
+            else if (quotaType === 'spark_weekly') displayName = 'Spark (Weekly)'
+            else if (quotaType === 'session') displayName = '5h'
+            else if (quotaType === 'weekly') displayName = 'Weekly'
+            else if (quotaType === 'review_session') displayName = 'Review (5h)'
+            else if (quotaType === 'review_weekly') displayName = 'Review (Weekly)'
+
+            normalizedQuotas.push({
+              name: displayName,
+              quotaType,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              remaining: quota.remaining !== undefined ? Number(quota.remaining) : undefined,
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'kiro':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([quotaType, quota]) => {
+            normalizedQuotas.push({
+              name: quotaType,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'qoder':
+      case 'qoder-cn':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([quotaType, quota]) => {
+            if (quotaType === 'organization' && (!quota || (Number(quota.total) || 0) === 0)) {
+              return
+            }
+            normalizedQuotas.push({
+              name: quotaType === 'user' ? 'Personal' : quotaType === 'organization' ? 'Organization' : quotaType,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'claude':
+        if (d.message) {
+          normalizedQuotas.push({
+            name: 'error',
+            used: 0,
+            total: 0,
+            resetAt: null,
+            message: d.message,
+          })
+        } else if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            const used = Number(quota.used) || 0
+            const total = Number(quota.total) || 0
+            normalizedQuotas.push({
+              name,
+              used,
+              total,
+              remaining: quota.remaining !== undefined ? Number(quota.remaining) : Math.max(0, (total || 100) - used),
+              remainingPercentage:
+                quota.remainingPercentage !== undefined
+                  ? Number(quota.remainingPercentage)
+                  : calculatePercentage(used, total),
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'vercel-ai-gateway':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+            })
+          })
+        }
+        break
+
+      case 'codebuddy-cn':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              recurring: quota.recurring !== false,
+            })
+          })
+        }
+        break
+
+      case 'grok-cli':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+            })
+          })
+        }
+        break
+
+      case 'kimi':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+            })
+          })
+        }
+        break
+
+      case 'deepseek':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+              isCreditBalance: quota.isCreditBalance !== undefined ? Boolean(quota.isCreditBalance) : true,
+              currency:
+                (quota.currency as string) ||
+                (name.includes('(') ? name.slice(name.indexOf('(') + 1, name.indexOf(')')) : 'USD'),
+            })
+          })
+        }
+        break
+
+      case 'groq':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+            })
+          })
+        }
+        break
+
+      case 'ollama':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+            })
+          })
+        }
+        break
+
+      case 'zed':
+        if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: Number(quota.used) || 0,
+              total: Number(quota.total) || 0,
+              resetAt: (quota.resetAt as string) || null,
+              remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
+              unlimited: Boolean(quota.unlimited),
+            })
+          })
+        }
+        break
+
+      default:
+        if (d.message && !d.quotas) {
+          normalizedQuotas.push({
+            name: 'error',
+            used: 0,
+            total: 0,
+            resetAt: null,
+            message: d.message,
+          })
+        } else if (d.quotas) {
+          Object.entries(d.quotas).forEach(([name, quota]) => {
+            const used = Number(quota.used) || 0
+            const total = Number(quota.total) || 0
+            const row: NormalizedQuota = {
+              name,
+              used,
+              total,
+              resetAt: (quota.resetAt as string) || null,
+            }
+            if (quota.remaining !== undefined) row.remaining = Number(quota.remaining)
+            if (quota.remainingPercentage !== undefined) {
+              row.remainingPercentage = Number(quota.remainingPercentage)
+            }
+            if (quota.unlimited !== undefined) row.unlimited = Boolean(quota.unlimited)
+            if (quota.recurring !== undefined) row.recurring = quota.recurring !== false
+            if (quota.isCreditBalance !== undefined) row.isCreditBalance = Boolean(quota.isCreditBalance)
+            if (quota.currency !== undefined) row.currency = String(quota.currency)
+            if (quota.displayName !== undefined) row.displayName = String(quota.displayName)
+            if (quota.quotaType !== undefined) row.quotaType = String(quota.quotaType)
+            normalizedQuotas.push(row)
+          })
+        }
+    }
   } catch (error) {
     console.error(`Error parsing quota data for ${provider}:`, error)
     return []
@@ -453,10 +806,28 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
       'weekly opus (7d)': 3,
       'weekly sonnet (7d)': 4,
     }
-    normalized.sort(
+    normalizedQuotas.sort(
       (a, b) => (CLAUDE_QUOTA_ORDER[a.name] ?? 99) - (CLAUDE_QUOTA_ORDER[b.name] ?? 99),
     )
+    return normalizedQuotas
   }
 
-  return normalized
+  // Sort quotas according to PROVIDER_MODELS order
+  const modelOrder = getModelsByProviderId(provider)
+  if (modelOrder.length > 0) {
+    const orderMap = new Map(modelOrder.map((m, i) => [m.id, i]))
+    normalizedQuotas.sort((a, b) => {
+      let keyA = a.modelKey || a.name
+      let keyB = b.modelKey || b.name
+      if (keyA === 'gemini' || keyA === 'gemini_session') keyA = 'gemini-3.8-flash-high'
+      if (keyA === 'claude' || keyA === 'claude_gpt_session') keyA = 'claude-sonnet-4-6'
+      if (keyB === 'gemini' || keyB === 'gemini_session') keyB = 'gemini-3.8-flash-high'
+      if (keyB === 'claude' || keyB === 'claude_gpt_session') keyB = 'claude-sonnet-4-6'
+      const orderA = orderMap.get(keyA) ?? 999
+      const orderB = orderMap.get(keyB) ?? 999
+      return orderA - orderB
+    })
+  }
+
+  return normalizedQuotas
 }

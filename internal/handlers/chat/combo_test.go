@@ -637,3 +637,54 @@ func TestComboRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestAugmentModelsWithCapacityAdapter(t *testing.T) {
+	h := NewChatHandler(nil)
+
+	t.Run("No required capabilities returns original models", func(t *testing.T) {
+		models := []string{"deepseek/deepseek-chat"}
+		augmented, strat := h.AugmentModelsWithCapacityAdapter(models, nil)
+		if len(augmented) != 1 || augmented[0] != "deepseek/deepseek-chat" {
+			t.Errorf("expected original models, got %v", augmented)
+		}
+		if strat != "fallback" {
+			t.Errorf("expected fallback strategy, got %s", strat)
+		}
+	})
+
+	t.Run("Model already satisfying vision is not augmented", func(t *testing.T) {
+		models := []string{"ag/gemini-3.8-flash-high"}
+		req := map[string]bool{"vision": true}
+		augmented, _ := h.AugmentModelsWithCapacityAdapter(models, req)
+		if len(augmented) != 1 || augmented[0] != "ag/gemini-3.8-flash-high" {
+			t.Errorf("expected no augmentation, got %v", augmented)
+		}
+	})
+
+	t.Run("Model lacking vision is augmented with vision adapter pool", func(t *testing.T) {
+		models := []string{"deepseek/deepseek-chat"}
+		req := map[string]bool{"vision": true}
+		augmented, _ := h.AugmentModelsWithCapacityAdapter(models, req)
+		if len(augmented) != 2 {
+			t.Fatalf("expected 2 models after augmentation, got %v", augmented)
+		}
+		if augmented[0] != "ag/gemini-3.8-flash-high" {
+			t.Errorf("expected vision adapter model first, got %s", augmented[0])
+		}
+		if augmented[1] != "deepseek/deepseek-chat" {
+			t.Errorf("expected original model as fallback, got %s", augmented[1])
+		}
+	})
+
+	t.Run("Combo without vision is augmented with vision adapter pool", func(t *testing.T) {
+		models := []string{"deepseek/deepseek-chat", "openai/gpt-4"}
+		req := map[string]bool{"vision": true}
+		augmented, _ := h.AugmentModelsWithCapacityAdapter(models, req)
+		if len(augmented) != 3 {
+			t.Fatalf("expected 3 models after augmentation, got %v", augmented)
+		}
+		if augmented[0] != "ag/gemini-3.8-flash-high" {
+			t.Errorf("expected vision adapter model first, got %s", augmented[0])
+		}
+	})
+}

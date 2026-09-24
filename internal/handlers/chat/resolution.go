@@ -11,6 +11,7 @@ import (
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/proxy/oauth"
 )
@@ -28,8 +29,16 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 	// ResponseHeaderTimeout bounds how long we wait for the upstream to
 	// start responding — closing the "accept then go silent" gap without
 	// killing a stream that has already begun.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = 2 * time.Minute
+	var transport http.RoundTripper
+	if origTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		t := origTransport.Clone()
+		t.ResponseHeaderTimeout = 2 * time.Minute
+		transport = proxy.NewFallbackTransport(t)
+	} else if fb, ok := http.DefaultTransport.(*proxy.FallbackTransport); ok {
+		transport = fb
+	} else {
+		transport = proxy.NewFallbackTransport(http.DefaultTransport)
+	}
 	return &ChatHandler{
 		Repo: repo,
 		Client: &http.Client{
@@ -70,7 +79,10 @@ func (h *ChatHandler) resolveModelEntry(entry string) *ModelInfo {
 				first := h.resolveModelEntry(subModels[0])
 				if first != nil {
 					first.ComboModels = subModels
-					first.Strategy = combo.Strategy
+					strat, sticky, judge := h.resolveComboRouting(combo.Name, combo.Strategy)
+					first.Strategy = strat
+					first.StickyLimit = sticky
+					first.JudgeModel = judge
 					return first
 				}
 			}
@@ -273,7 +285,10 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 				}
 				if firstInfo != nil {
 					firstInfo.ComboModels = flattened
-					firstInfo.Strategy = combo.Strategy
+					strat, sticky, judge := h.resolveComboRouting(combo.Name, combo.Strategy)
+					firstInfo.Strategy = strat
+					firstInfo.StickyLimit = sticky
+					firstInfo.JudgeModel = judge
 					return firstInfo, nil
 				}
 			}
@@ -332,4 +347,43 @@ func (h *ChatHandler) resolvePrefixProvider(prefix string, model string) *ModelI
 		Model:        model,
 		ConnectionID: conn.ID,
 	}
+}
+
+// resolveComboRouting retrieves the routing strategy, sticky limit, and judge model
+// for a combo, prioritizing per-combo settings, then global combo settings, then combo.Strategy.
+func (h *ChatHandler) resolveComboRouting(comboName string, fallbackStrategy string) (strategy string, stickyLimit int, judgeModel string) {
+	strategy = fallbackStrategy
+	if strategy == "" {
+		strategy = "fallback"
+	}
+	stickyLimit = 1
+
+	if h.Repo == nil {
+		return strategy, stickyLimit, ""
+	}
+
+	settings, err := h.Repo.GetSettings()
+	if err != nil || settings == nil {
+		return strategy, stickyLimit, ""
+	}
+
+	if cs, ok := settings.ComboStrategies[comboName]; ok {
+		if cs.Strategy != "" {
+			strategy = cs.Strategy
+		}
+		if cs.StickyLimit > 0 {
+			stickyLimit = cs.StickyLimit
+		}
+		judgeModel = cs.JudgeModel
+		return strategy, stickyLimit, judgeModel
+	}
+
+	if settings.ComboStrategy != "" {
+		strategy = settings.ComboStrategy
+	}
+	if settings.ComboStickyRoundRobinLimit > 0 {
+		stickyLimit = settings.ComboStickyRoundRobinLimit
+	}
+
+	return strategy, stickyLimit, ""
 }

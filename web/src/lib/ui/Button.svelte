@@ -14,10 +14,12 @@
     disabled = false,
     loading = false,
     fullWidth = false,
+    title = '',
     class: klass = '',
     onclick,
     children
   }: {
+    title?: string
     variant?: Variant
     size?: Size
     type?: 'button' | 'submit' | 'reset'
@@ -51,6 +53,7 @@
 
 <button
   {type}
+  {title}
   class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 {variants[variant]} {sizes[size]} {fullWidth ? 'w-full' : ''} {klass}"
   disabled={disabled || loading}
   {onclick}

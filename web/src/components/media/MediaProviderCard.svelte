@@ -1,117 +1,145 @@
 <script lang="ts">
-  import { Layers, PauseCircle } from 'lucide-svelte'
+  import type { ProviderConnection } from '../../api/client'
   import type { ProviderCatalogItem } from '../../lib/providers'
   import Badge from '../../lib/ui/Badge.svelte'
   import Card from '../../lib/ui/Card.svelte'
   import Toggle from '../../lib/ui/Toggle.svelte'
   import { getIconPath } from '../connections/types'
-  import type { MediaProviderStats } from './mediaTypes'
 
   interface Props {
     provider: ProviderCatalogItem
-    stats: MediaProviderStats
-    modelCount: number
-    onSelect: () => void
-    onToggleAll?: (active: boolean) => void
+    kind: string
+    connections: ProviderConnection[]
+    isCustom?: boolean
+    onToggle?: (providerId: string, newActive: boolean) => void
+    onSelect?: () => void
   }
 
-  let { provider, stats, modelCount, onSelect, onToggleAll }: Props = $props()
+  let {
+    provider,
+    kind,
+    connections = [],
+    isCustom = false,
+    onToggle,
+    onSelect,
+  }: Props = $props()
+
+  function getEffectiveStatus(conn: ProviderConnection): string {
+    const isCooldown = Object.entries(conn).some(
+      ([k, v]) => k.startsWith('modelLock_') && v && new Date(v as string).getTime() > Date.now()
+    )
+    return conn.testStatus === 'unavailable' && !isCooldown ? 'active' : (conn.testStatus || 'active')
+  }
+
+  let isNoAuth = $derived(!!provider.noAuth)
+  let providerConns = $derived(connections.filter((c) => c.provider === provider.id))
+  let connected = $derived(
+    providerConns.filter((c) => {
+      const s = getEffectiveStatus(c)
+      return s === 'active' || s === 'success'
+    }).length
+  )
+  let error = $derived(
+    providerConns.filter((c) => {
+      const s = getEffectiveStatus(c)
+      return s === 'error' || s === 'expired' || s === 'unavailable'
+    }).length
+  )
+  let total = $derived(providerConns.length)
+  let allDisabled = $derived(total > 0 && providerConns.every((c) => c.isActive === 0 || c.isActive === false))
 
   let icon = $derived(getIconPath(provider.id))
-  let isAllDisabled = $derived(stats.status === 'disabled')
-</script>
+  let bgColor = $derived(
+    provider.color && provider.color.length > 7
+      ? provider.color
+      : (provider.color ?? '#888888') + '15'
+  )
 
-<div
-  onclick={onSelect}
-  onkeydown={(e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
+  function handleToggleClick(e: MouseEvent | KeyboardEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (onToggle) onToggle(provider.id, allDisabled)
+  }
+
+  function handleClick(e: MouseEvent) {
+    if (onSelect) {
       e.preventDefault()
       onSelect()
     }
-  }}
-  role="button"
-  tabindex="0"
-  class="group min-w-0 cursor-pointer text-left focus:outline-none"
+  }
+</script>
+
+<a
+  href={`/dashboard/media-providers/${kind}/${provider.id}`}
+  onclick={handleClick}
+  class="group block text-left focus:outline-none"
 >
   <Card
     padding="xs"
-    class="h-full hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-all p-3.5 rounded-xl border {isAllDisabled
-      ? 'border-border bg-surface opacity-60'
-      : stats.status === 'error'
-        ? 'border-red-500/40 bg-red-500/[0.02]'
-        : stats.status === 'connected' || stats.status === 'ready'
-          ? 'border-emerald-500/35 bg-emerald-500/[0.02]'
-          : 'border-border bg-surface hover:border-brand-500/30'}"
+    class="h-full hover:bg-black/[0.01] dark:hover:bg-white/[0.01] transition-colors cursor-pointer {allDisabled ? 'opacity-50' : ''}"
   >
     <div class="flex min-w-0 items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-3">
-        <div class="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center bg-black/5 dark:bg-white/5 border border-border overflow-hidden">
+        <div
+          class="size-8 rounded-lg flex items-center justify-center shrink-0"
+          style="background-color: {bgColor}"
+        >
           <img
             src={icon}
             alt={provider.name}
-            class="w-5 h-5 object-contain"
+            width="30"
+            height="30"
+            class="object-contain rounded-lg max-w-[30px] max-h-[30px]"
             onerror={(e) => {
-              const target = e.currentTarget as HTMLImageElement
+              const target = e.currentTarget as HTMLElement
               target.style.display = 'none'
             }}
           />
         </div>
         <div class="min-w-0">
-          <h3 class="truncate font-semibold text-sm text-text-main group-hover:text-brand-500 transition-colors">
-            {provider.name}
-          </h3>
-          <div class="flex min-w-0 items-center gap-1.5 text-xs flex-wrap mt-0.5">
-            {#if isAllDisabled}
-              <Badge variant="default" size="sm">
-                <span class="flex items-center gap-1">
-                  <PauseCircle class="w-3 h-3" />
-                  Disabled
-                </span>
-              </Badge>
-            {:else if stats.status === 'error'}
-              <Badge variant="error" size="sm" dot>
-                {stats.errorCount} Error
-              </Badge>
-            {:else if stats.status === 'connected'}
-              <Badge variant="success" size="sm" dot>
-                {stats.active} Connected
-              </Badge>
-            {:else if stats.status === 'ready'}
-              <Badge variant="success" size="sm" dot>Ready</Badge>
-            {:else}
-              <span class="text-text-muted">No connections</span>
+          <h3 class="font-semibold text-sm text-text-main truncate">{provider.name}</h3>
+          <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+            {#if isCustom}
+              <Badge variant="default" size="sm">Custom</Badge>
             {/if}
-
-            {#if modelCount > 0}
-              <span class="text-[11px] text-text-muted/80 flex items-center gap-0.5">
-                • {modelCount} models
-              </span>
+            {#if isNoAuth}
+              <Badge variant="success" size="sm">Ready</Badge>
+            {:else if allDisabled}
+              <Badge variant="default" size="sm">Disabled</Badge>
+            {:else if total === 0}
+              <span class="text-xs text-text-muted">No connections</span>
+            {:else}
+              {#if connected > 0}
+                <Badge variant="success" size="sm" dot>{connected} Connected</Badge>
+              {/if}
+              {#if error > 0}
+                <Badge variant="error" size="sm" dot>{error} Error</Badge>
+              {/if}
+              {#if connected === 0 && error === 0}
+                <Badge variant="default" size="sm">{total} Added</Badge>
+              {/if}
             {/if}
           </div>
         </div>
       </div>
-
-      <div class="flex shrink-0 items-center gap-2">
-        {#if stats.total > 0}
-          <div
-            class="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-            onclick={(e) => {
-              e.stopPropagation()
-              onToggleAll?.(isAllDisabled)
-            }}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.stopPropagation()
-                onToggleAll?.(isAllDisabled)
-              }
-            }}
-            role="button"
-            tabindex="0"
-          >
-            <Toggle size="sm" checked={!isAllDisabled} onChange={() => {}} />
-          </div>
-        {/if}
-      </div>
+      {#if total > 0}
+        <div
+          class="shrink-0 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+          onclick={handleToggleClick}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') handleToggleClick(e)
+          }}
+          role="button"
+          tabindex="0"
+          title={allDisabled ? 'Enable provider' : 'Disable provider'}
+        >
+          <Toggle
+            size="sm"
+            checked={!allDisabled}
+            onChange={() => {}}
+          />
+        </div>
+      {/if}
     </div>
   </Card>
-</div>
+</a>

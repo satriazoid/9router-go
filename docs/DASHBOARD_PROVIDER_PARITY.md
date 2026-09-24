@@ -377,3 +377,169 @@ gagalnya generik.
 provider-specific branch, alias, unsupported; create: priority/psd/testStatus/
 proxyPoolId + jalur legacy) dan `bun test web/src/lib/bulk-add.test.ts` (15).
 Tes live dengan key asli belum dilakukan — pakai tombol **Check** di dashboard.
+
+### Lanjutan 2026-09-23 — Test Connection one-by-one, Apply Proxy, Round Robin
+
+`POST /api/providers/{id}/test` sebelumnya **stub** (`{"valid": true}` untuk
+setiap connection yang ada) sehingga tombol *Test Connection One-by-One* selalu
+hijau. Sekarang diport dari `src/app/api/providers/[id]/test/testUtils.js`
+(`internal/handlers/dashboard/connection_probe.go`):
+- **api-key/cookie**: node `openai-compatible-*` → GET `<base>/models`;
+  `anthropic-compatible-*` → POST `<base>/…/messages` (400/529 dianggap key
+  diterima); provider registry lain didelegasikan ke matriks `validateProviderKey`
+  (lewat `withProbeClient`, jadi probe memakai client milik connection).
+- **OAuth**: port `OAUTH_TEST_CONFIG` (claude/kiro/kimi/kimi-coding checkExpiry,
+  codex accept-400, gemini-cli & antigravity `loadCodeAssist`, cline `users/me`,
+  github, iflow, qoder/qoder-cn, kilocode, gitlab, kimchi, grok-cli 402 soft-fail,
+  cursor & codebuddy-cn tokenExists) + `classifyOAuthProbeResult` + retry 401
+  setelah refresh.
+- **Proxy**: binding connection di-resolve seperti chat (pool dulu, lalu field
+  legacy) dan proxy di-pre-check (`testProxyUrl`); proxy mati → connection
+  ditandai error tanpa memprobe provider. Pool tipe relay (vercel/cloudflare/deno)
+  dilewati seperti resolver chat.
+- **Write-back**: `testStatus` (`active`/`error`), `lastError`/`lastErrorAt`
+  (soft-success grok-cli tetap `active` + pesan warning), dan token hasil refresh
+  (`accessToken`/`refreshToken`/`expiresAt`). Response `{valid, error, refreshed}`
+  sama seperti route upstream.
+- **Apply Proxy** (`ProviderDetailView.svelte`): target selalu **semua** connection
+  (checkbox selection diabaikan, sama seperti upstream), tombol hanya muncul jika
+  ada connection + pool, modal menampilkan semua pool (inactive di-disable +
+  label `(inactive)`) dan indikator `Applying...`; dropdown Proxy per-baris juga
+  menampilkan pool inactive + spinner saat update, dan disembunyikan kalau belum
+  ada pool. Warna tombol Proxy per-baris mengikuti `hasAnyProxy` (pool **atau**
+  proxy legacy) seperti upstream, bukan hanya pool.
+  Catatan: halaman upstream memuat pool dengan `?isActive=true` sehingga pool
+  inactive praktis tidak pernah tampil (cabang `(inactive)` di upstream jadi dead
+  code); port ini sengaja memuat **semua** pool lalu menandai yang inactive,
+  supaya binding lama ke pool nonaktif tetap terlihat (badge merah).
+- **`PUT /api/providers/{id}`** sekarang menerima `proxyPoolId` top-level (validasi
+  pool ada → 400 `Proxy pool not found`, `null`/`""`/`"__none__"` = unbind) dan
+  menulis binding ke **dua** tempat: `providerSpecificData.proxyPoolId` (parity
+  upstream) dan top-level `proxyPoolId` (yang dibaca resolver chat Go — sebelumnya
+  ubah pool lewat dashboard tidak pernah sampai ke jalur request). Resolver chat
+  juga menerima `providerSpecificData.proxyPoolId` sebagai fallback.
+- **Badge proxy per-baris** (`proxyBadge.ts`): badge `Proxy` hijau kalau pool binding aktif,
+  merah kalau pool hilang/nonaktif atau memakai proxy legacy, plus baris detail
+  `Pool: <name>` / `Pool: <id> (inactive/missing)` / `Legacy: <url>` + endpoint
+  ter-mask (`new URL()` → protocol+host+port saja, kredensial dibuang) + `no_proxy:`.
+- **Round Robin**: default `stickyRoundRobinLimit` saat nilai tidak valid jadi 3
+  (upstream `Number(sticky) || 3`); UI one-by-one menampilkan panel ringkasan
+  (Total/Completed/Passed/Failed/Stopped/Running), jeda 1000 ms antar-connection,
+  label `Stopping...`, dan badge baris `queued`/`testing`/`success`/`failed`.
+
+**Beda yang disengaja**:
+- Toggle Round Robin **merge** objek `providerStrategies[providerId]`, tidak
+  menggantinya seperti upstream — upstream menghapus `proxyPoolId`/`rotateStrategy`
+  yang disimpan `NoAuthProxyCard` setiap kali toggle RR diklik.
+- URL messages node `anthropic-compatible` dihitung dari base yang sudah berisi
+  `/v1` (`…/v1` + `/messages`); upstream selalu menempel `/v1/messages` sehingga
+  base default-nya sendiri (`https://api.anthropic.com/v1`) menjadi `/v1/v1/…`.
+- Refresh token memakai registry Go (`internal/proxy/oauth` + `KnownOAuthConfigs`):
+  provider yang config refresh-nya tidak kita bawa (kimi, kimi-coding, kiro) akan
+  melaporkan `Token expired`/`Token invalid or revoked` alih-alih refresh diam-diam;
+  window proaktif `maxRefreshAgeMs` codex belum diport.
+
+**Verifikasi**: `go test ./internal/handlers/dashboard/` — `connection_probe_test.go`
+(17 test: compatible openai/anthropic, base URL dari node, provider registry,
+unsupported, tokenExists, token expired, refresh + retry 401, soft-fail 402,
+pre-check proxy gagal, klasifikasi probe, window expiry) +
+`connections_proxypool_test.go` (bind/validasi/unbind) — dan
+`bun test src/components/connections/proxyBadge.test.ts` (8 test badge) +
+`tsc -p tsconfig.app.json --noEmit` + `oxlint` untuk frontend.
+
+---
+
+## Kelompok 7 — Dashboard login versi Go (DIPERBAIKI 2026-09-23)
+
+**Gejala**: halaman login Go ada (`LoginView.svelte` + `api.login`), tapi backend tidak
+punya `/api/auth/login` maupun `/api/auth/logout`; `GET /api/auth/status` dan
+`GET /api/settings/require-login` masih **stub hardcoded** `requireLogin:false` +
+`authenticated:true`. Akibatnya "login" lolos lewat fallback client-side di
+`client.ts` (password `Mantep210`/`123456` langsung di-set `9router_auth`), dan
+dashboard tidak pernah benar-benar dijaga. Upstream (`:20128`) memakai cookie
+sesi JWT `auth_token` + `dashboardGuard`.
+
+**Referensi upstream**: `src/lib/auth/dashboardSession.js` (HS256 JWT 24 jam,
+httpOnly, SameSite=Lax, secret dari `JWT_SECRET` atau file `DATA_DIR/jwt-secret`),
+`src/app/api/auth/{login,logout,status}/route.js`, `src/dashboardGuard.js`
+(deny-by-default `/api/*`; `/dashboard` redirect ke `/login` bila `requireLogin`
+bukan `false`; bypass `x-9r-cli-token`).
+
+**Yang dikerjakan**:
+- **`internal/auth/session.go` (baru)**: HS256 JWT (stdlib `crypto/hmac`) —
+  `Sign`/`Verify`/`SessionValid`, cookie `auth_token` (`SetCookie`/`ClearCookie`),
+  `RequireLogin(repo)` = `settings.requireLogin !== false` (unset = wajib login),
+  secret dari `config.LoadConfig().JWTSecret` (`~/.9router/jwt-secret` yang sudah
+  ada dipakai ulang). `Secure` cookie mengikuti `x-forwarded-proto: https` atau
+  env `AUTH_COOKIE_SECURE=true`.
+- **`internal/handlers/dashboard/auth.go` (baru)**: `HandleAuthLogin`
+  (verifikasi via `verifyDashboardPassword` — bcrypt hash menang, else
+  `INITIAL_PASSWORD`; gagal → 401 `{error:"Invalid password"}`; sukses → set
+  cookie + `{success:true,mustChangePassword:false}`), `HandleAuthLogout`
+  (`{success:true}` + cookie expired), `HandleAuthStatus`, `HandleRequireLogin`
+  (plus `authenticated` di response agar SPA percaya server, bukan flag localStorage).
+- **`internal/middleware/dashboard_auth.go` (baru)**: `RequireDashboardAuth`
+  (lolos bila `requireLogin` mati, cookie valid, header `x-9r-cli-token`, atau
+  API key aktif — bukan 401 `{error:"Unauthorized"}`) dan `RequireDashboardPage`
+  (302 ke `/login`).
+- **Routing (`internal/handlers/router.go`)**: endpoint login/logout/status/
+  require-login dipindah/didaftarkan **publik** (sebelumnya stub inline);
+  `/login` di-serve SPA; `/dashboard` + `/dashboard/*` dibungkus
+  `RequireDashboardPage`; blok dashboard REST diekstrak ke `SetupDashboardRoutes`
+  dan di-mount di grup `RequireDashboardAuth` (engine/LLM tetap di grup
+  `RequireApiKey`). Route manajemen yang pindah tetap menerima API key, jadi CLI
+  tidak berubah.
+- **Frontend**: `api.login` tidak lagi mem-fake sukses untuk `Mantep210`/`123456`
+  (fallback 404 dihapus) — kegagalan asli kini tampil sebagai error; `checkRequireLogin`
+  mengembalikan `authenticated`; `App.svelte` mengutamakan `authenticated` dari
+  server lalu flag `9router_auth`.
+
+**Beda yang disengaja**:
+- Rate-limit login upstream (`loginLimiter`, lockout per IP) belum diport.
+- `oidcConfigured`/`samlConfigured` masih `false` (SSO OIDC/SAML belum ada jalur
+  login-nya di Go); `authMode`/`ssoType` dibaca dari settings.
+- Bypass API key + `x-9r-cli-token` di gate dashboard dipertahankan (keputusan
+  sadar, paling dekat ke upstream yang menerima CLI token) — artinya remote tanpa
+  keduanya tetap 401, tapi pemegang API key lokal tidak dipaksa login.
+
+**Verifikasi**: `go test ./internal/auth/ ./internal/middleware/ ./internal/handlers/`
+— `session_test.go` (round-trip, tamper, expired, cookie),
+`dashboard_auth_test.go` (401 tanpa kredensial, API key, CLI token, cookie valid/
+tamper, `requireLogin=false`, redirect halaman), `auth_test.go` (login invalid/
+valid + cookie, status round-trip, require-login, logout) — plus
+`router_test.go` (SPA `/dashboard*` 302 ke `/login`, `/login` 200) dan
+`bun test` + `tsc -b` + `oxlint` untuk frontend.
+
+### Lanjutan 2026-09-23 — Media Providers parity (`/dashboard/media-providers/*`)
+
+Audit live upstream `:20128` (v0.5.86) vs Go `:20130` per kind + detail pages:
+- **Kind lists disamakan via `serviceKinds`** di `web/src/lib/providers.ts`
+  (sumber kebenaran upstream: registry chunk `1321-*.js`):
+  `openrouter` +embedding/tts/video, `github`/`fireworks` +embedding,
+  `tokenrouter` +embedding/image, `vercel-ai-gateway` +embedding/image,
+  `codex` +image (OpenAI Codex tampil di image page upstream),
+  `selfhosted-stt` diperbaiki menjadi stt (sebelumnya salah `llm`).
+  `vertex` tetap llm-only (tidak ada di video page upstream);
+  `vertex-partner` tetap `llm+video` agar tidak hilang dari video page.
+- **Embedding**: `Add Custom Embedding` — tombol + modal + daftar custom nodes
+  (`MediaKindView.svelte` + varian `custom-embedding` di
+  `AddCompatibleNodeModal.svelte`: Name/Prefix/Base URL + Check via
+  `POST /api/provider-nodes/validate` + badge `Valid + N dims`).
+  Backend `custom-embedding` sudah ada (`provider_nodes.go`).
+- **Backend voices**: `HandleAudioVoices` kini melayani `deepgram`
+  (GET `/v1/models`, auth `Token`, group by language), `inworld`
+  (GET `/tts/v1/voices`, auth `Basic`, group by language),
+  `minimax`/`minimax-cn` (POST `/v1/get_voice` `{voice_type}`, group
+  System/Cloned/Generated/Music) — masing-masing pakai key koneksi aktif
+  pertama bila `?apiKey=` kosong; `elevenlabs` juga fallback ke key koneksi
+  (sebelumnya wajib `?apiKey=`).
+- **Sengaja belum**: detail page per-provider (`[kind]/[id]` 80KB: connections
+  CRUD + proxy-pool + strategy + config + example runner per kind + TTS voice
+  browser) masih versi webSearch/webFetch-only di Go; combo pages
+  (`image-combo`/`tts-combo`) dan `combo/[id]` playable tester belum diport.
+
+**Verifikasi**: `bun run build` ok, `tsc` bersih,
+`go test ./internal/handlers/media/` (EdgeTTS + unsupported +
+deepgram/minimax-no-connection), live fresh binary `:20203`: embedding
+19 providers + tombol modal terbuka dengan 5 field + hint persis upstream;
+`/audio/voices` 401 tanpa kredensial (auth middleware).

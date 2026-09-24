@@ -19,17 +19,19 @@ func (h *DashboardHandler) HandleGetCustomModels(w http.ResponseWriter, r *http.
 		return
 	}
 
-	result := make(map[string]any, len(kv))
-	for k, v := range kv {
+	models := make([]any, 0, len(kv))
+	for _, v := range kv {
 		var item any
 		if err := json.Unmarshal([]byte(v), &item); err == nil {
-			result[k] = item
+			models = append(models, item)
 		} else {
-			result[k] = v
+			models = append(models, v)
 		}
 	}
 
-	handlerutil.WriteJSON(w, http.StatusOK, result)
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"models": models,
+	})
 }
 
 // HandleSaveCustomModel handles POST /api/models/custom.

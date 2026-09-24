@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"9router/proxy/internal/db"
 )
 
 func TestHandleDeviceStart_qoderLocal(t *testing.T) {
@@ -54,5 +56,33 @@ func TestKimiHeaders_deviceId(t *testing.T) {
 	h := kimiHeaders("dev-1")
 	if h["X-Msh-Device-Id"] != "dev-1" || h["X-Msh-Platform"] != "9router" {
 		t.Errorf("bad kimi headers: %v", h)
+	}
+}
+
+func TestHandleDevicePoll_PendingDoesNotInsert(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	repo := db.NewRepo(database)
+	handler := NewOAuthHandler(repo)
+
+	// Qoder poll with nonexistent/unauthorized device code returns pending
+	req := httptest.NewRequest("POST", "/api/oauth/device/poll", strings.NewReader(`{"provider":"qoder","device_code":"pending-code","session":{"verifier":"v"}}`))
+	rec := httptest.NewRecorder()
+	handler.HandleDevicePoll(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), `"status":"pending"`) && !strings.Contains(rec.Body.String(), `"status":"error"`) {
+		t.Errorf("expected pending or error status, got: %s", rec.Body.String())
+	}
+
+	var count int
+	err := repo.RawDB().QueryRow("SELECT COUNT(*) FROM providerConnections").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query providerConnections: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 connections inserted while pending, got %d", count)
 	}
 }

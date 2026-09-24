@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	json "encoding/json/v2"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -442,10 +443,38 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	_, hasData := rawBody["data"]
 	_, hasPSD := rawBody["providerSpecificData"]
 	_, hasAssignedModel := rawBody["assignedModel"]
+	_, hasProxyPool := rawBody["proxyPoolId"]
 	a, hasIsActive := rawBody["isActive"].(bool)
 
+	// Upstream normalizeProxyPoolUpdate: null/""/"__none__" unbinds, anything
+	// else must reference an existing pool.
+	proxyPoolID := ""
+	unbindProxyPool := false
+	if hasProxyPool {
+		switch v := rawBody["proxyPoolId"].(type) {
+		case nil:
+			unbindProxyPool = true
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" || trimmed == "__none__" {
+				unbindProxyPool = true
+			} else {
+				proxyPoolID = trimmed
+			}
+		default:
+			unbindProxyPool = true
+		}
+		if proxyPoolID != "" {
+			pool, perr := h.Repo.GetProxyPool(proxyPoolID)
+			if perr != nil || pool == nil {
+				handlerutil.WriteJSONError(w, http.StatusBadRequest, "Proxy pool not found")
+				return
+			}
+		}
+	}
+
 	// Fast path: if only updating active status
-	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel {
+	if hasIsActive && !hasName && !hasPriority && !hasData && !hasPSD && !hasAssignedModel && !hasProxyPool {
 		if err := h.Repo.SetConnectionStatus(id, a); err != nil {
 			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -472,7 +501,7 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 	}
 
 	dataStr := existing.Data
-	if hasData || hasPSD || hasAssignedModel {
+	if hasData || hasPSD || hasAssignedModel || hasProxyPool {
 		dataMap := make(map[string]any)
 		if existing.Data != "" {
 			_ = json.Unmarshal([]byte(existing.Data), &dataMap)
@@ -522,6 +551,21 @@ func (h *DashboardHandler) HandleUpdateConnection(w http.ResponseWriter, r *http
 			}
 		}
 
+		if hasProxyPool {
+			// Write both locations: upstream keeps the binding in
+			// providerSpecificData.proxyPoolId, while this backend's chat
+			// resolver reads the top-level proxyPoolId.
+			if unbindProxyPool {
+				delete(dataMap, "proxyPoolId")
+				if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok {
+					delete(psd, "proxyPoolId")
+				}
+			} else {
+				dataMap["proxyPoolId"] = proxyPoolID
+				mergeMapField(dataMap, "providerSpecificData", map[string]any{"proxyPoolId": proxyPoolID})
+			}
+		}
+
 		if b, err := json.Marshal(dataMap); err == nil {
 			dataStr = string(b)
 		}
@@ -563,21 +607,6 @@ func (h *DashboardHandler) HandleDeleteConnection(w http.ResponseWriter, r *http
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
 }
 
-// HandleTestConnection handles POST /api/providers/{id}/test and POST /api/connections/{id}/test.
-func (h *DashboardHandler) HandleTestConnection(w http.ResponseWriter, r *http.Request) {
-	id := getURLParam(r, "id")
-	if id == "" {
-		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing connection id")
-		return
-	}
-	conn, err := h.Repo.GetProviderConnectionByID(id)
-	if err != nil || conn == nil {
-		handlerutil.WriteJSON(w, http.StatusNotFound, map[string]any{"valid": false, "error": "Connection not found"})
-		return
-	}
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"valid": true})
-}
-
 // HandleGetConnectionModels handles GET /api/providers/{id}/models.
 // Mirrors upstream src/app/api/providers/[id]/models/route.js for
 // OpenAI/Anthropic-compatible connections: the id is a connection id whose
@@ -596,18 +625,211 @@ func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *h
 		handlerutil.WriteJSONError(w, http.StatusNotFound, "connection not found")
 		return
 	}
+	var connData struct {
+		APIKey               string         `json:"apiKey"`
+		AccessToken          string         `json:"accessToken"`
+		RefreshToken         string         `json:"refreshToken"`
+		ProviderSpecificData map[string]any `json:"providerSpecificData"`
+	}
+	if conn.Data != "" {
+		_ = json.Unmarshal([]byte(conn.Data), &connData)
+	}
+
+	type modelItem struct {
+		ID           string          `json:"id"`
+		Name         string          `json:"name"`
+		Capabilities map[string]bool `json:"capabilities,omitempty"`
+	}
+
+	if conn.Provider == "antigravity" {
+		token := connData.AccessToken
+		if token == "" {
+			token = connData.APIKey
+		}
+		if token == "" {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			return
+		}
+		projectID := "antigravity"
+		if connData.ProviderSpecificData != nil {
+			if p, ok := connData.ProviderSpecificData["projectId"].(string); ok && p != "" {
+				projectID = p
+			}
+		}
+		reqPayload, _ := json.Marshal(map[string]any{"project": projectID})
+		headers := map[string]string{
+			"Content-Type":  "application/json",
+			"Authorization": "Bearer " + token,
+			"User-Agent":    "antigravity/ide/2.11.0 darwin/arm64",
+		}
+		status, body, err := validateProbeDo(r.Context(), http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", headers, reqPayload)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch antigravity models: "+err.Error())
+			return
+		}
+		if status != http.StatusOK {
+			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			return
+		}
+		var agResp struct {
+			Models map[string]struct {
+				DisplayName      string `json:"displayName"`
+				SupportsImages   bool   `json:"supportsImages"`
+				SupportsThinking bool   `json:"supportsThinking"`
+				IsInternal       bool   `json:"isInternal"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(body, &agResp); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "invalid JSON from antigravity models")
+			return
+		}
+		var modelsList []modelItem
+		for k, m := range agResp.Models {
+			if m.IsInternal || strings.HasPrefix(k, "chat_") || strings.HasPrefix(k, "tab_") {
+				continue
+			}
+			displayName := m.DisplayName
+			if displayName == "" {
+				displayName = k
+			}
+			modelsList = append(modelsList, modelItem{
+				ID:   k,
+				Name: displayName,
+				Capabilities: map[string]bool{
+					"vision":    m.SupportsImages,
+					"reasoning": m.SupportsThinking,
+				},
+			})
+		}
+		sort.Slice(modelsList, func(i, j int) bool {
+			return modelsList[i].ID < modelsList[j].ID
+		})
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       modelsList,
+		})
+		return
+	}
+
+	if conn.Provider == "gemini-cli" {
+		token := connData.AccessToken
+		if token == "" {
+			token = connData.APIKey
+		}
+		if token == "" {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			return
+		}
+		projectID := ""
+		if connData.ProviderSpecificData != nil {
+			if p, ok := connData.ProviderSpecificData["projectId"].(string); ok && p != "" {
+				projectID = p
+			}
+		}
+		reqPayload, _ := json.Marshal(map[string]any{"project": projectID})
+		headers := map[string]string{
+			"Content-Type":  "application/json",
+			"Authorization": "Bearer " + token,
+		}
+		status, body, err := validateProbeDo(r.Context(), http.MethodPost, "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", headers, reqPayload)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch gemini-cli models: "+err.Error())
+			return
+		}
+		if status != http.StatusOK {
+			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			return
+		}
+		var resp struct {
+			Models map[string]struct {
+				DisplayName      string `json:"displayName"`
+				SupportsImages   bool   `json:"supportsImages"`
+				SupportsThinking bool   `json:"supportsThinking"`
+				IsInternal       bool   `json:"isInternal"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "invalid JSON from gemini-cli models")
+			return
+		}
+		var modelsList []modelItem
+		for k, m := range resp.Models {
+			if m.IsInternal || strings.HasPrefix(k, "chat_") || strings.HasPrefix(k, "tab_") {
+				continue
+			}
+			displayName := m.DisplayName
+			if displayName == "" {
+				displayName = k
+			}
+			modelsList = append(modelsList, modelItem{
+				ID:   k,
+				Name: displayName,
+				Capabilities: map[string]bool{
+					"vision":    m.SupportsImages,
+					"reasoning": m.SupportsThinking,
+				},
+			})
+		}
+		sort.Slice(modelsList, func(i, j int) bool {
+			return modelsList[i].ID < modelsList[j].ID
+		})
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       modelsList,
+		})
+		return
+	}
+
+	if conn.Provider == "cline" || conn.Provider == "clinepass" {
+		token := connData.AccessToken
+		if token == "" {
+			token = connData.APIKey
+		}
+		if token == "" {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no valid token found")
+			return
+		}
+		authHeaderVal := token
+		if strings.HasPrefix(token, "eyJ") {
+			authHeaderVal = "workos:" + token
+		}
+		headers := map[string]string{
+			"Authorization": "Bearer " + authHeaderVal,
+			"User-Agent":    "Cline/3.0.0",
+		}
+		status, body, err := validateProbeDo(r.Context(), http.MethodGet, "https://api.cline.bot/api/v1/models", headers, nil)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, "failed to fetch cline models: "+err.Error())
+			return
+		}
+		if status != http.StatusOK {
+			handlerutil.WriteJSONError(w, status, fmt.Sprintf("failed to fetch models: %d", status))
+			return
+		}
+		var clineResp struct {
+			Data   []any `json:"data"`
+			Models []any `json:"models"`
+		}
+		_ = json.Unmarshal(body, &clineResp)
+		models := clineResp.Data
+		if len(models) == 0 {
+			models = clineResp.Models
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"provider":     conn.Provider,
+			"connectionId": conn.ID,
+			"models":       models,
+		})
+		return
+	}
+
 	isOpenAI := strings.HasPrefix(conn.Provider, "openai-compatible-")
 	isAnthropic := strings.HasPrefix(conn.Provider, "anthropic-compatible-")
 	if !isOpenAI && !isAnthropic {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "provider "+conn.Provider+" does not support models listing")
 		return
-	}
-	var connData struct {
-		APIKey               string         `json:"apiKey"`
-		ProviderSpecificData map[string]any `json:"providerSpecificData"`
-	}
-	if conn.Data != "" {
-		_ = json.Unmarshal([]byte(conn.Data), &connData)
 	}
 	baseURL := ""
 	if connData.ProviderSpecificData != nil {

@@ -1,6 +1,6 @@
 import type { ProviderConnection } from '../../api/client'
 
-export type MediaKind = 'embedding' | 'image' | 'tts' | 'stt' | 'video' | 'webSearch' | 'webFetch'
+export type MediaKind = 'embedding' | 'image' | 'tts' | 'stt' | 'video' | 'systemone' | 'webSearch' | 'webFetch'
 
 export interface MediaKindInfo {
   kind: MediaKind
@@ -45,6 +45,13 @@ export const MEDIA_KIND_INFO: Record<MediaKind, MediaKindInfo> = {
     singular: 'Video',
     description: 'Text-to-video generation, video extension, and motion synthesis models.',
     emptyMessage: 'No video generation providers found.',
+  },
+  systemone: {
+    kind: 'systemone',
+    title: 'System One Models & Providers',
+    singular: 'System One',
+    description: 'Structured state evaluation models with yes/no question answering.',
+    emptyMessage: 'No System One providers found.',
   },
   webSearch: {
     kind: 'webSearch',

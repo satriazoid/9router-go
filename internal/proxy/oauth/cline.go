@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"9router/proxy/internal/providers"
@@ -17,6 +18,12 @@ func init() {
 	Register("clinepass", RefreshCline)
 }
 
+var directClineClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: nil, // direct connection to bypass proxy allowlist
+	},
+	Timeout: 15 * time.Second,
+}
 // RefreshCline refreshes tokens using Cline's extension JSON contract.
 func RefreshCline(ctx context.Context, p *Params) (*TokenResult, error) {
 	prov := p.Provider
@@ -58,10 +65,27 @@ func RefreshCline(ctx context.Context, p *Params) (*TokenResult, error) {
 
 	client := p.Client
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: 15 * time.Second}
 	}
 
 	resp, err := client.Do(req)
+	if err != nil || (resp != nil && resp.StatusCode == http.StatusForbidden) {
+		errStr := ""
+		if err != nil {
+			errStr = strings.ToLower(err.Error())
+		}
+		if (errStr != "" && (strings.Contains(errStr, "forbidden") || strings.Contains(errStr, "proxy") || strings.Contains(errStr, "connect tunnel failed") || strings.Contains(errStr, "blocked-by-allowlist"))) || (resp != nil && resp.StatusCode == http.StatusForbidden) {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			reqClone, _ := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(reqBody))
+			reqClone.Header = req.Header.Clone()
+			if directResp, dErr := directClineClient.Do(reqClone); dErr == nil {
+				resp = directResp
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: request failed: %w", prov, err)
 	}

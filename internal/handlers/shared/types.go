@@ -18,6 +18,7 @@ type ModelInfo struct {
 	ComboModels  []string // non-empty when resolved from a combo; each entry is "provider/model"
 	Strategy     string   // combo routing strategy: "fallback", "round-robin", "sticky", "fusion"
 	StickyLimit  int      // sticky round-robin: consecutive requests per model before rotating (default 1)
+	JudgeModel   string   // optional judge model for fusion strategy
 }
 
 // ConnectionData holds parsed fields from the providerConnections.data JSON blob.

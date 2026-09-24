@@ -37,6 +37,10 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 			isActive INTEGER DEFAULT 1,
 			createdAt TEXT NOT NULL
 		);`,
+		`CREATE TABLE settings (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			data TEXT NOT NULL
+		);`,
 	}
 
 	for _, query := range schema {

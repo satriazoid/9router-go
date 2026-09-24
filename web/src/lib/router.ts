@@ -12,6 +12,7 @@ export type ActiveTab =
   | 'media-tts'
   | 'media-stt'
   | 'media-video'
+  | 'media-systemone'
   | 'media-web'
   | 'proxy-pools'
   | 'skills'
@@ -34,6 +35,7 @@ export const TAB_ROUTES: Record<ActiveTab, string> = {
   'media-tts': '/dashboard/media-providers/tts',
   'media-stt': '/dashboard/media-providers/stt',
   'media-video': '/dashboard/media-providers/video',
+  'media-systemone': '/dashboard/media-providers/systemone',
   'media-web': '/dashboard/media-providers/web',
   'proxy-pools': '/dashboard/proxy-pools',
   skills: '/dashboard/skills',
@@ -103,7 +105,9 @@ const ROUTE_TO_TAB: Record<string, ActiveTab> = {
   '/dashboard/media-providers/video': 'media-video',
   '/media-providers/video': 'media-video',
   '/media/video': 'media-video',
-
+  '/dashboard/media-providers/systemone': 'media-systemone',
+  '/media-providers/systemone': 'media-systemone',
+  '/media/systemone': 'media-systemone',
   '/dashboard/media-providers/web': 'media-web',
   '/dashboard/media-providers': 'media-web',
   '/media-providers/web': 'media-web',
@@ -146,6 +150,7 @@ export function pathToTab(pathname: string): ActiveTab {
   if (normalized.includes('tts')) return 'media-tts'
   if (normalized.includes('stt')) return 'media-stt'
   if (normalized.includes('video')) return 'media-video'
+  if (normalized.includes('systemone')) return 'media-systemone'
   if (normalized.includes('media')) return 'media-web'
   if (normalized.includes('token-saver')) return 'token-saver'
   if (normalized.includes('cli-tools')) return 'cli-tools'

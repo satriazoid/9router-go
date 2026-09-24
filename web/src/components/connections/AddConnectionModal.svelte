@@ -194,6 +194,10 @@
       validation = res.valid ? 'success' : 'failed'
       validationNote = res.valid ? '' : res.error || 'Invalid API key'
       return res.valid
+    } catch (err) {
+      validation = 'failed'
+      validationNote = err instanceof Error ? err.message : String(err)
+      return false
     } finally {
       validating = false
     }
@@ -416,6 +420,22 @@
               </div>
             {/if}
 
+            {#if validation === 'success' || validation === 'failed'}
+              <div class="flex items-center gap-2 -mt-2">
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full font-semibold px-2.5 py-1 text-xs {validation === 'success'
+                    ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                    : 'bg-red-500/10 text-red-600 dark:text-red-400'}"
+                >
+                  {validation === 'success' ? 'Valid' : 'Invalid'}
+                </span>
+                {#if validationNote}
+                  <span class="text-xs {validation === 'success' ? 'text-text-muted' : 'text-red-500'} break-words">{validationNote}</span>
+                {/if}
+              </div>
+            {:else if validationNote}
+              <p class="text-xs text-text-muted break-words -mt-2">{validationNote}</p>
+            {/if}
             {#if isXaiApiKey}
               <p class="text-xs text-text-muted">
                 Use a direct xAI API key from console.x.ai. This is separate from Grok Build OAuth.
@@ -544,18 +564,6 @@
               </div>
             {/if}
 
-            {#if validation === 'success' || validation === 'failed'}
-              <span
-                class="self-start inline-flex items-center gap-1.5 rounded-full font-semibold px-2.5 py-1 text-xs {validation === 'success'
-                  ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                  : 'bg-red-500/10 text-red-600 dark:text-red-400'}"
-              >
-                {validation === 'success' ? 'Valid' : 'Invalid'}
-              </span>
-            {/if}
-            {#if validationNote}
-              <p class="text-xs text-text-muted break-words">{validationNote}</p>
-            {/if}
             {#if error}
               <p class="text-xs text-red-500 break-words">{error}</p>
             {/if}

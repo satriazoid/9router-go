@@ -139,7 +139,7 @@ func startFreebuffRun(ctx context.Context, client *http.Client, baseURL, token, 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", freebuffCLIUserAgent)
 
-	resp, err := client.Do(req)
+	resp, err := DoFreebuffHTTP(ctx, client, req)
 	if err != nil {
 		return "", fmt.Errorf("start freebuff run failed: %w", err)
 	}
@@ -188,7 +188,7 @@ func finishFreebuffRun(ctx context.Context, client *http.Client, baseURL, token,
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", freebuffCLIUserAgent)
 
-	resp, err := client.Do(req)
+	resp, err := DoFreebuffHTTP(finishCtx, client, req)
 	if err == nil {
 		resp.Body.Close()
 	}

@@ -10,13 +10,16 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/db"
 )
 
 // setupSettingsTestDB extends the shared dashboard schema with the tables the
 // backup export walks (providerNodes/proxyPools are created elsewhere in prod).
+// DATA_DIR is isolated per test so the CLI-token files never touch ~/.9router.
 func setupSettingsTestDB(t *testing.T) (*db.Repo, func()) {
 	t.Helper()
+	t.Setenv("DATA_DIR", t.TempDir())
 	repo, cleanup := setupTestDB(t)
 
 	stmts := []string{
@@ -137,10 +140,9 @@ func TestHandleExportDatabase_RequiresPassword(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Invalid password") {
 		t.Errorf("expected Next-style error body, got %s", rec.Body.String())
 	}
-
 	// Local CLI token skips password re-auth (Next parity).
 	req = httptest.NewRequest(http.MethodGet, "/api/settings/database", nil)
-	req.Header.Set(cliTokenHeader, "local")
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -174,7 +176,7 @@ func TestHandleExportImportDatabase_RoundTrip(t *testing.T) {
 
 	// Export with the CLI token.
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/database", nil)
-	req.Header.Set(cliTokenHeader, "local")
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -227,7 +229,7 @@ func TestHandleExportImportDatabase_RoundTrip(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/settings/database", bytes.NewReader(exported))
-	req.Header.Set(cliTokenHeader, "local")
+	req.Header.Set(cliTokenHeader, auth.CLIToken())
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

@@ -151,6 +151,9 @@ func TestHandleAccountFallback_RetryableLocksModel(t *testing.T) {
 
 	database, cleanup := setupChatTestDB(t)
 	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1', 'conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
 	seedConnDB(t, database, "deepseek", "conn-429", "sk-429", srv.URL)
 
 	repo := db.NewRepo(database)

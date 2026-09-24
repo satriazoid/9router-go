@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.8.18",
+  "latestVersion": "1.9.0",
   "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.8.18: Omit requestType=agent on Antigravity envelopes to fix false 429 RESOURCE_EXHAUSTED on OMP (Oh My Pi) harness payloads (upstream decolua/9router#3986 parity); upstream parity sync decolua/9router v0.5.75..v0.5.81."
+  "releaseNotes": "v1.9.0: Vision & Audio Adapter full parity and E2E auto-switching; Token Saver parity with Headroom proxy and setup modal; Quota Tracker offline material symbols and reachability testing; full upstream Next.js sync."
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/handlerutil"
+	"9router/proxy/internal/proxy"
 )
 
 // suggestedModel mirrors the shape returned by the Next.js
@@ -179,7 +180,10 @@ func HandleSuggestedModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: proxy.NewFallbackTransport(http.DefaultTransport),
+	}
 	resp, err := client.Get(feedURL)
 	if err != nil {
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"data": []suggestedModel{}})

@@ -108,10 +108,24 @@ export interface TunnelStatusResponse {
 }
 
 export interface HeadroomStatusResponse {
-  reachable?: boolean
+  installed?: boolean
   running?: boolean
-  version?: string
-  extras?: Record<string, boolean>
+  python?: string | null
+  localUrl?: boolean
+  canStart?: boolean
+  managedPid?: number | null
+  path?: string | null
+  version?: string | null
+  extras?: { code?: boolean; ml?: boolean }
+  url?: string
+  error?: string
+}
+
+export interface HeadroomExtrasResponse {
+  version?: string | null
+  extras?: { code?: boolean; ml?: boolean }
+  available?: string[]
+  log?: string
   error?: string
 }
 
@@ -168,6 +182,18 @@ export interface ProviderNode {
   updatedAt?: string
 }
 
+
+export interface SystemVersionInfo {
+  currentVersion: string
+  latestVersion?: string
+  hasUpdate?: boolean
+  downloadUrl?: string
+  releaseNotes?: string
+  goVersion?: string
+  os?: string
+  arch?: string
+  checkedAt?: string
+}
 export interface FreebuffInitiateResponse {
   loginUrl: string
   authCode: string
@@ -268,6 +294,9 @@ export interface LoginResponse {
   success: boolean
   mustChangePassword?: boolean
   error?: string
+  retryAfter?: number
+  resetHint?: string
+  remainingBeforeLock?: number
 }
 
 export function isAuthenticated(): boolean {
@@ -299,10 +328,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     let errText = ''
     try {
-      const errJson = await res.json()
-      errText = errJson.error?.message || errJson.error || errJson.message || JSON.stringify(errJson)
+      const text = await res.text()
+      try {
+        const errJson = JSON.parse(text)
+        errText = errJson.error?.message || errJson.error || errJson.message || JSON.stringify(errJson)
+      } catch {
+        errText = text
+      }
     } catch {
-      errText = await res.text()
+      errText = ''
     }
     throw new Error(errText || `Request failed with status ${res.status}`)
   }
@@ -622,7 +656,37 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ code, codeVerifier }),
     }),
-  getSystemVersion: () => request<{ currentVersion: string; latestVersion?: string }>('/api/version'),
+  getSystemVersion: () => request<SystemVersionInfo>('/api/version'),
+  checkUpdate: () => request<SystemVersionInfo>('/api/version/check'),
+  triggerUpdate: () =>
+    request<{ status: string; message?: string; version?: string }>('/api/version/update', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  shutdownServer: () =>
+    request<{ success?: boolean; status?: string; message?: string }>('/api/version/shutdown', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  getChangelog: async (): Promise<string> => {
+    try {
+      const res = await fetch('/api/changelog', { headers: getAuthHeaders() })
+      if (res.ok) {
+        const text = await res.text()
+        if (text && text.trim().length > 0) return text
+      }
+    } catch {}
+    try {
+      const res = await fetch('https://raw.githubusercontent.com/luqman-v1/9router-go/main/CHANGELOG.md')
+      if (res.ok) {
+        const text = await res.text()
+        if (text && text.trim().length > 0) return text
+      }
+    } catch {}
+    const res = await fetch('https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.text()
+  },
 
   // Usage & Telemetry
   getUsageStats: (period = 'today') => request<any>(`/api/usage/stats?period=${encodeURIComponent(period)}`),
@@ -695,10 +759,31 @@ export const api = {
 
   // Headroom
   getHeadroomStatus: () =>
-    request<HeadroomStatusResponse>('/api/headroom/status').catch(() => ({
-      reachable: false,
-      running: false,
-    })),
+    request<HeadroomStatusResponse>('/api/headroom/status'),
+  getHeadroomExtras: (log = false) =>
+    request<HeadroomExtrasResponse>(`/api/headroom/extras${log ? '?log=1' : ''}`),
+  startHeadroom: () =>
+    request<{ success?: boolean; pid?: number; error?: string }>('/api/headroom/start', {
+      method: 'POST',
+    }),
+  stopHeadroom: () =>
+    request<{ success?: boolean; error?: string }>('/api/headroom/stop', {
+      method: 'POST',
+    }),
+  restartHeadroom: () =>
+    request<{ success?: boolean; pid?: number; error?: string }>('/api/headroom/restart', {
+      method: 'POST',
+    }),
+  installHeadroomExtras: (extras: string[]) =>
+    request<HeadroomExtrasResponse>('/api/headroom/extras', {
+      method: 'POST',
+      body: JSON.stringify({ extras }),
+    }),
+  uninstallHeadroomExtras: (extras: string[]) =>
+    request<HeadroomExtrasResponse>('/api/headroom/extras', {
+      method: 'DELETE',
+      body: JSON.stringify({ extras }),
+    }),
   // Proxy Pools
   getProxyPools: (includeUsage = true) =>
     request<{ proxyPools: ProxyPool[] }>(`/api/proxy-pools${includeUsage ? '?includeUsage=true' : ''}`)
@@ -749,7 +834,14 @@ export const api = {
     try {
       const res = await fetch('/api/settings/require-login')
       if (res.ok) {
-        return await res.json()
+        const data = await res.json()
+        return {
+          requireLogin: !!data.requireLogin,
+          tunnelDashboardAccess: !!data.tunnelDashboardAccess,
+          tunnelUrl: data.tunnelUrl,
+          tailscaleUrl: data.tailscaleUrl,
+          authenticated: !!data.authenticated,
+        }
       }
     } catch {}
     try {
@@ -767,41 +859,40 @@ export const api = {
     return { requireLogin: false }
   },
   login: async (password: string): Promise<LoginResponse> => {
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        sessionStorage.setItem('9router_auth', 'true')
-        localStorage.setItem('9router_auth', 'true')
-        return { success: true, mustChangePassword: !!data.mustChangePassword }
-      }
-      if (res.status === 404) {
-        if (password === 'Mantep210' || password === '123456') {
-          sessionStorage.setItem('9router_auth', 'true')
-          localStorage.setItem('9router_auth', 'true')
-          return { success: true, mustChangePassword: false }
-        }
-        throw new Error('Invalid password')
-      }
-      let errText = 'Invalid password'
-      try {
-        const errJson = await res.json()
-        errText = errJson.error || errJson.message || errText
-      } catch {}
-      throw new Error(errText)
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e)
-      if (message !== 'Invalid password' && (password === 'Mantep210' || password === '123456')) {
-        sessionStorage.setItem('9router_auth', 'true')
-        localStorage.setItem('9router_auth', 'true')
-        return { success: true, mustChangePassword: false }
-      }
-      throw e
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      // The server sets the httpOnly auth_token cookie; this flag only drives
+      // the client-side gate (isAuthenticated) since JS cannot read it.
+      sessionStorage.setItem('9router_auth', 'true')
+      localStorage.setItem('9router_auth', 'true')
+      return { success: true, mustChangePassword: !!data.mustChangePassword }
     }
+    let errText = 'Invalid password'
+    let retryAfter: number | undefined
+    let resetHint: string | undefined
+    let remainingBeforeLock: number | undefined
+    let mustChangePassword = false
+    try {
+      const errJson = await res.json()
+      errText = errJson.error?.message || errJson.error || errJson.message || errText
+      if (typeof errJson.retryAfter === 'number') retryAfter = errJson.retryAfter
+      else if (typeof errJson.retryAfter === 'string') retryAfter = Number(errJson.retryAfter) || undefined
+      if (typeof errJson.resetHint === 'string') resetHint = errJson.resetHint
+      if (typeof errJson.remainingBeforeLock === 'number') remainingBeforeLock = errJson.remainingBeforeLock
+      if (errJson.mustChangePassword === true) mustChangePassword = true
+    } catch {}
+    const err = new Error(errText) as Error &
+      Pick<LoginResponse, 'retryAfter' | 'resetHint' | 'remainingBeforeLock' | 'mustChangePassword'>
+    err.retryAfter = retryAfter
+    err.resetHint = resetHint
+    err.remainingBeforeLock = remainingBeforeLock
+    err.mustChangePassword = mustChangePassword
+    throw err
   },
   logout: async () => {
     try {

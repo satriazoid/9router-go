@@ -23,7 +23,7 @@ export interface PickerModel {
   id: string
   name: string
   value: string
-  caps: { vision: boolean; reasoning: boolean }
+  caps: { vision: boolean; audioInput: boolean; reasoning: boolean }
 }
 
 export interface PickerGroup {
@@ -202,7 +202,7 @@ export function resolveModelPickerGroups(
               id: `__placeholder__${node.id}`,
               name: `${nodePrefix}/model-id`,
               value: `${nodePrefix}/model-id`,
-              caps: { vision: false, reasoning: false },
+              caps: { vision: false, audioInput: false, reasoning: false },
             },
           ]
 
@@ -254,11 +254,14 @@ export function resolveFilteredGroups(
     .map((group) => {
       let models = group.models
 
+      // Filter by input-modality capability (vision / audio) matching upstream ModelSelectModal capFilter
       if (target === 'vision') {
-        if (!query) {
-          models = models.filter((m) => m.caps.vision)
-        }
+        models = models.filter((m) => m.caps.vision)
+      } else if (target === 'audio') {
+        models = models.filter((m) => m.caps.audioInput)
       }
+
+      if (models.length === 0) return null
 
       if (query) {
         const groupMatches = group.name.toLowerCase().includes(query)

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"9router/proxy/internal/log"
 )
@@ -105,7 +106,18 @@ func (h *ChatHandler) getClientForConnection(connData *ConnectionData) *http.Cli
 			return client
 		}
 
-		baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+		var baseTransport *http.Transport
+		if origT, ok := http.DefaultTransport.(*http.Transport); ok {
+			baseTransport = origT.Clone()
+		} else {
+			baseTransport = &http.Transport{
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			}
+		}
 		baseTransport.Proxy = http.ProxyURL(parsedURL)
 		client = &http.Client{
 			Transport: baseTransport,

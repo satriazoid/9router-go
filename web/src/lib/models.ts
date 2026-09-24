@@ -74,6 +74,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "openai": "openai",
   "opencode-go": "opencode-go",
   "opencode": "oc",
+  "opencode-zen": "ocz",
   "openrouter": "openrouter",
   "perplexity-web": "perplexity-web",
   "perplexity": "perplexity",
@@ -230,6 +231,34 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "ag": [
+    {
+      "id": "gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash"
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash Lite"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro"
+    },
+    {
+      "id": "gemini-2.5-flash-thinking",
+      "name": "Gemini 2.5 Flash (Thinking)"
+    },
+    {
+      "id": "gemini-3.1-pro-high",
+      "name": "Gemini 3.1 Pro (High)"
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite"
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash Lite"
+    },
     {
       "id": "gemini-3.8-flash-high",
       "name": "Gemini 3.8 Flash (High)",
@@ -3290,6 +3319,23 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Muse Spark 1.3 Contributor Free",
       "supportedFormats": ["openai"],
       "capabilities": ["vision", "reasoning"]
+    },
+    {
+      "id": "jev-1.13-free",
+      "name": "Jev 1.13 Free",
+      "kind": "systemone"
+    }
+  ],
+  "ocz": [
+    {
+      "id": "jev-1.13",
+      "name": "Jev 1.13",
+      "kind": "systemone"
+    },
+    {
+      "id": "jev-1.13-free",
+      "name": "Jev 1.13 Free",
+      "kind": "systemone"
     }
   ],
   "openrouter": [
@@ -3412,6 +3458,11 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
         "resolution"
       ],
       "kind": "video"
+    },
+    {
+      "id": "typesafe/jev-1.13",
+      "name": "Jev 1.13",
+      "kind": "systemone"
     }
   ],
   "perplexity-web": [
@@ -5862,31 +5913,93 @@ export function getModelsByProviderId(providerId: string): ProviderModel[] {
   return PROVIDER_MODELS[alias] || [];
 }
 
-export function getModelKind(m: any, fallback = "llm"): string {
-  return m?.kind || m?.type || fallback;
+export function getModelKind(m: unknown, fallback = "llm"): string {
+  if (m && typeof m === "object") {
+    const obj = m as { kind?: unknown; type?: unknown };
+    if (typeof obj.kind === "string" && obj.kind) return obj.kind;
+    if (typeof obj.type === "string" && obj.type) return obj.type;
+  }
+  return fallback;
 }
 
-export function getModelCaps(modelId: string, modelObj?: any): { vision: boolean; reasoning: boolean } {
+export function getModelCaps(modelId: string, modelObj?: unknown): { vision: boolean; audioInput: boolean; reasoning: boolean } {
   const idLower = (modelId || "").toLowerCase();
-  const nameLower = (modelObj?.name || "").toLowerCase();
-  const caps = modelObj?.capabilities || [];
-  const upstreamLower = (modelObj?.upstreamModelId || "").toLowerCase();
+  const obj = modelObj && typeof modelObj === "object" ? (modelObj as Record<string, unknown>) : null;
+  const nameLower = typeof obj?.name === "string" ? obj.name.toLowerCase() : "";
+  const rawCaps = Array.isArray(obj?.capabilities) ? obj.capabilities : [];
+  const caps: string[] = rawCaps.filter((c): c is string => typeof c === "string");
+  const upstreamLower = typeof obj?.upstreamModelId === "string" ? obj.upstreamModelId.toLowerCase() : "";
+  const kind = typeof obj?.kind === "string" ? obj.kind : "";
+  const type = typeof obj?.type === "string" ? obj.type : "";
 
-  let vision =
-    caps.includes("vision") ||
-    caps.includes("image") ||
-    idLower.includes("vision") ||
-    idLower.includes("flash") ||
-    idLower.includes("gemini") ||
-    idLower.includes("4o") ||
-    idLower.includes("opus") ||
-    idLower.includes("sonnet") ||
-    idLower.includes("vl");
+  // Words that indicate non-vision/media generation or embedding (upstream visionPatterns.js)
+  const isNotVision =
+    idLower.includes("stable-image") ||
+    idLower.includes("nanobanana") ||
+    idLower.includes("flux") ||
+    idLower.includes("dall") ||
+    idLower.includes("sdxl") ||
+    idLower.includes("diffusion") ||
+    idLower.includes("embed") ||
+    idLower.includes("rerank") ||
+    idLower.includes("tts") ||
+    idLower.includes("stt") ||
+    idLower.includes("whisper") ||
+    kind === "image" ||
+    kind === "tts" ||
+    kind === "stt" ||
+    kind === "embedding";
+
+  // Vision detection mirroring upstream capabilities.js & visionPatterns.js
+  // (bare "flash" is speed-only, not a vision flag!)
+  let vision = false;
+  if (!isNotVision) {
+    vision =
+      caps.includes("vision") ||
+      caps.includes("image") ||
+      idLower.includes("vision") ||
+      idLower.includes("vl") ||
+      idLower.includes("vlm") ||
+      idLower.includes("multimodal") ||
+      idLower.includes("omni") ||
+      idLower.includes("visual") ||
+      idLower.includes("gemini") ||
+      idLower.includes("gemma") ||
+      idLower.includes("4o") ||
+      idLower.includes("gpt-4.1") ||
+      idLower.includes("gpt-5") ||
+      idLower.includes("gpt-6") ||
+      idLower.includes("opus") ||
+      idLower.includes("sonnet") ||
+      idLower.includes("haiku-4.5") ||
+      idLower.includes("fable") ||
+      idLower.includes("kimi-k2") ||
+      idLower.includes("kimi-k3") ||
+      idLower.includes("minimax-m2.7") ||
+      idLower.includes("minimax-m3") ||
+      idLower.includes("mimo-v2.5") ||
+      idLower.includes("mimo-v2.6") ||
+      idLower.includes("mimo-omni") ||
+      idLower.includes("qwen3.5") ||
+      idLower.includes("qwen3.7") ||
+      idLower.includes("qwen3.8") ||
+      idLower.includes("grok") ||
+      idLower.includes("llama-4") ||
+      idLower.includes("muse-spark");
+  }
+
+  let audioInput =
+    caps.includes("audio") ||
+    caps.includes("audioInput") ||
+    idLower.includes("audio-in") ||
+    idLower.includes("audioinput") ||
+    kind === "stt" ||
+    type === "stt";
 
   let reasoning =
     caps.includes("reasoning") ||
     caps.includes("thinking") ||
-    modelObj?.thinking === true ||
+    obj?.thinking === true ||
     idLower.includes("thinking") ||
     idLower.includes("reasoning") ||
     idLower.includes("r1") ||
@@ -5905,18 +6018,20 @@ export function getModelCaps(modelId: string, modelObj?: any): { vision: boolean
     upstreamLower.includes("medium") ||
     upstreamLower.includes("low");
 
-  if (modelObj?.thinking === false) {
+  if (obj?.thinking === false) {
     reasoning = false;
   }
 
   // Explicit capability flags saved from the Add Custom Model modal
   // (upstream `caps` object) override the id/name heuristics above.
-  const objCaps = (modelObj as any)?.caps;
-  if (objCaps && typeof objCaps === "object") {
+  const objCaps = obj?.caps && typeof obj.caps === "object" ? (obj.caps as Record<string, unknown>) : null;
+  if (objCaps) {
     if (objCaps.vision === true) vision = true;
     if (objCaps.vision === false) vision = false;
+    if (objCaps.audioInput === true) audioInput = true;
+    if (objCaps.audioInput === false) audioInput = false;
     if (objCaps.reasoning === true) reasoning = true;
     if (objCaps.reasoning === false) reasoning = false;
   }
-  return { vision, reasoning };
+  return { vision, audioInput, reasoning };
 }

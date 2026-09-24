@@ -7,11 +7,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/models"
+	"9router/proxy/internal/proxy/executor"
 )
 
 var freebuffAPIBaseURL = "https://www.codebuff.com"
@@ -142,8 +143,7 @@ func (h *OAuthHandler) HandleFreebuffSessionStatus(w http.ResponseWriter, r *htt
 	upReq.Header.Set("User-Agent", "codebuff-cli/0.0.138")
 	upReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(upReq)
+	resp, err := executor.DoFreebuffHTTP(r.Context(), nil, upReq)
 	if err != nil {
 		log.Error("oauth", "freebuff session request failed", "error", err)
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, fmt.Sprintf("freebuff session request failed: %v", err))
@@ -168,6 +168,7 @@ func (h *OAuthHandler) HandleFreebuffSessionStatus(w http.ResponseWriter, r *htt
 				refused = "country_blocked"
 			}
 		}
+		updateConnectionFreebuffModel(h.Repo, conn, "")
 		handlerutil.WriteJSON(w, http.StatusOK, freebuffSessionResponse(conn, map[string]any{
 			"status": refused,
 		}))
@@ -289,6 +290,56 @@ func (h *OAuthHandler) HandleFreebuffSessionStatus(w http.ResponseWriter, r *htt
 		}
 		respMap["rateLimit"] = rateLimit
 	}
+	if status == "active" && currentModel != "" {
+		updateConnectionFreebuffModel(h.Repo, conn, currentModel)
+	} else if status == "none" || status == "unauthorized" || status == "banned" {
+		updateConnectionFreebuffModel(h.Repo, conn, "")
+	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, freebuffSessionResponse(conn, respMap))
+}
+
+func updateConnectionFreebuffModel(repo *db.Repo, conn *models.ProviderConnection, model string) {
+	if repo == nil || conn == nil {
+		return
+	}
+	var dataMap map[string]any
+	if err := json.Unmarshal([]byte(conn.Data), &dataMap); err != nil {
+		dataMap = make(map[string]any)
+	}
+	oldModel, _ := dataMap["freebuffModel"].(string)
+	if oldModel == model && model != "" {
+		return
+	}
+	if model != "" {
+		dataMap["freebuffModel"] = model
+		dataMap["assignedModel"] = model
+	} else {
+		delete(dataMap, "freebuffModel")
+		delete(dataMap, "assignedModel")
+	}
+	if psd, ok := dataMap["providerSpecificData"].(map[string]any); ok {
+		if model != "" {
+			psd["freebuffModel"] = model
+			psd["assignedModel"] = model
+		} else {
+			delete(psd, "freebuffModel")
+			delete(psd, "assignedModel")
+		}
+		dataMap["providerSpecificData"] = psd
+	}
+	newData, err := json.Marshal(dataMap)
+	if err != nil {
+		return
+	}
+	conn.Data = string(newData)
+	name := ""
+	if conn.Name != nil {
+		name = *conn.Name
+	}
+	priority := 1
+	if conn.Priority != nil {
+		priority = *conn.Priority
+	}
+	_ = repo.UpdateProviderConnection(conn.ID, name, priority, conn.IsActive == 1, string(newData))
 }

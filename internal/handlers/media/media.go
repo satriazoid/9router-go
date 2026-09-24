@@ -6,11 +6,12 @@ import (
 	json "encoding/json/v2"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/chat"
@@ -18,6 +19,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/usagetracker"
 )
@@ -32,8 +34,16 @@ type MediaHandler struct {
 
 // NewMediaHandler creates a MediaHandler instance.
 func NewMediaHandler(repo *db.Repo, ts *shared.TokenSaverConfig, chatH *chat.ChatHandler) *MediaHandler {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = 2 * time.Minute
+	var transport http.RoundTripper
+	if origTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		t := origTransport.Clone()
+		t.ResponseHeaderTimeout = 2 * time.Minute
+		transport = proxy.NewFallbackTransport(t)
+	} else if fb, ok := http.DefaultTransport.(*proxy.FallbackTransport); ok {
+		transport = fb
+	} else {
+		transport = proxy.NewFallbackTransport(http.DefaultTransport)
+	}
 	return &MediaHandler{
 		Repo:       repo,
 		Client:     &http.Client{Transport: transport, Timeout: 0},
@@ -161,14 +171,134 @@ func (h *MediaHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer r.Body.Close()
-
 	// Xiaomi MiMo TTS uses a chat-completions contract, not the OpenAI
 	// /audio/speech shape (port of open-sse/handlers/ttsProviders/xiaomi-mimo.js).
 	if h.isMiMoSpeech(body) {
 		h.forwardMiMoSpeech(w, r, body)
 		return
 	}
-	h.forwardMediaRequest(w, r, body, "tts-1", "/v1/audio/speech")
+	h.forwardTTSRequest(w, r, body)
+}
+
+// HandleSystemone forwards /v1/systemone structured-evaluation requests.
+// Body: {"model":"<provider>/<model>","state":"...","questions":{...}}.
+// Target URL from ProviderConfig.SystemoneURL, else swap /chat/completions.
+func (h *MediaHandler) HandleSystemone(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+	var reqBody struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &reqBody); err != nil || reqBody.Model == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing model")
+		return
+	}
+	h.forwardSystemoneRequest(w, r, body, reqBody.Model)
+}
+
+// forwardSystemoneRequest resolves model, connection, config and forwards
+// the raw body to the provider systemone endpoint with auth + static headers.
+func (h *MediaHandler) forwardSystemoneRequest(w http.ResponseWriter, r *http.Request, body []byte, model string) {
+	modelInfo, err := h.ChatH.ResolveModel(model)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	conn, connData, err := h.ChatH.GetBestConnection(modelInfo.Provider, modelInfo.ConnectionID, nil, modelInfo.Model)
+	if err != nil || connData == nil {
+		if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
+			apiKey := cfg.DefaultAPIKey
+			if apiKey == "" {
+				apiKey = "public"
+			}
+			connData = &chat.ConnectionData{
+				APIKey:      apiKey,
+				ProxyPoolID: h.ChatH.ResolveProviderProxyPoolID(modelInfo.Provider),
+			}
+		} else {
+			handlerutil.WriteJSONError(w, http.StatusNotFound, fmt.Sprintf("no active connections for provider: %s", modelInfo.Provider))
+			return
+		}
+	}
+	providerCfg, err := h.ChatH.GetProviderConfig(modelInfo.Provider, connData)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	apiKey := chat.ExtractAPIKey(connData)
+	if apiKey == "" {
+		if providerCfg != nil && providerCfg.DefaultAPIKey != "" {
+			apiKey = providerCfg.DefaultAPIKey
+		} else {
+			handlerutil.WriteJSONError(w, http.StatusUnauthorized, "no API key found")
+			return
+		}
+	}
+	targetURL := providerCfg.SystemoneURL
+	if connData != nil && connData.BaseURL != "" {
+		baseURL := strings.TrimRight(connData.BaseURL, "/")
+		if strings.Contains(baseURL, "/chat/completions") {
+			targetURL = strings.Replace(baseURL, "/chat/completions", "/systemone", 1)
+		} else {
+			targetURL = baseURL + "/systemone"
+		}
+	} else if targetURL == "" {
+		baseURL := strings.TrimRight(providerCfg.BaseURL, "/")
+		if strings.Contains(baseURL, "/chat/completions") {
+			targetURL = strings.Replace(baseURL, "/chat/completions", "/systemone", 1)
+		} else {
+			targetURL = baseURL + "/systemone"
+		}
+	}
+	finalBody := handlerutil.UpdateModelInBody(body, modelInfo.Model)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(finalBody))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to create request")
+		return
+	}
+	req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	handlerutil.SetAuthHeader(req, apiKey, providerCfg.AuthHeader, providerCfg.AuthScheme)
+	for k, v := range providerCfg.StaticHeaders {
+		if req.Header.Get(k) == "" {
+			req.Header.Set(k, v)
+		}
+	}
+	if modelInfo.Provider == "opencode" || modelInfo.Provider == "opencode-zen" {
+		req.Header.Set("x-opencode-session", proxy.GenerateOpenCodeSessionID())
+	}
+	client := h.ChatH.GetClientForConnection(connData)
+	resp, err := client.Do(req)
+	if err != nil || (resp != nil && resp.StatusCode == http.StatusForbidden) {
+		directReq, err2 := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(finalBody))
+		if err2 == nil {
+			directReq.Header = req.Header.Clone()
+			resp2, err3 := directHTTPClient.Do(directReq)
+			if err3 == nil {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				resp = resp2
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadGateway, "upstream request failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+	if resp.StatusCode == http.StatusOK && conn != nil {
+		h.Repo.UpdateConnectionLastUsed(conn.ID)
+	}
 }
 
 // isMiMoSpeech reports whether body.model resolves to the xiaomi-mimo provider.
@@ -452,8 +582,25 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 	}
 	if err := json.Unmarshal(body, &reqBody); err == nil && reqBody.Model != "" {
 		model = reqBody.Model
+	} else if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err == nil && params["boundary"] != "" {
+			mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+			for {
+				p, err := mr.NextPart()
+				if err != nil {
+					break
+				}
+				if p.FormName() == "model" {
+					val, _ := io.ReadAll(p)
+					if len(val) > 0 {
+						model = strings.TrimSpace(string(val))
+					}
+					break
+				}
+			}
+		}
 	}
-
 	modelInfo, err := h.ChatH.ResolveModel(model)
 	if err != nil {
 		log.Warn("media", "resolve model failed", "endpoint", endpoint, "model", model, "error", err)
@@ -480,6 +627,22 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			}
 			if endpoint == "/v1/search" && (subInfo.Provider == "xquik" || subInfo.Provider == "xquik-search") {
 				if err := h.handleXquikSearch(w, r, body, subInfo); err == nil {
+					return
+				} else {
+					lastErr = err.Error()
+					continue
+				}
+			}
+			if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (subInfo.Provider == "antigravity" || subInfo.Provider == "ag") {
+				if err := h.handleAntigravityImage(w, r, body, subInfo); err == nil {
+					return
+				} else {
+					lastErr = err.Error()
+					continue
+				}
+			}
+			if (endpoint == "/v1/audio/transcriptions" || endpoint == "/audio/transcriptions") && (subInfo.Provider == "antigravity" || subInfo.Provider == "ag") {
+				if err := h.handleAntigravitySTT(w, r, body, subInfo); err == nil {
 					return
 				} else {
 					lastErr = err.Error()
@@ -575,8 +738,27 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
+	if (endpoint == "/v1/images/generations" || endpoint == "/images/generations") && (modelInfo.Provider == "antigravity" || modelInfo.Provider == "ag") {
+		if err := h.handleAntigravityImage(w, r, body, modelInfo); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
+		}
+		return
+	}
+	if (endpoint == "/v1/audio/transcriptions" || endpoint == "/audio/transcriptions") && (modelInfo.Provider == "antigravity" || modelInfo.Provider == "ag") {
+		if err := h.handleAntigravitySTT(w, r, body, modelInfo); err != nil {
+			handlerutil.WriteJSONError(w, http.StatusBadGateway, err.Error())
+		}
+		return
+	}
 
-	conn, connData, err := h.ChatH.GetBestConnection(modelInfo.Provider, modelInfo.ConnectionID, nil, modelInfo.Model)
+	preferredConnID := r.Header.Get("x-connection-id")
+	if preferredConnID == "" {
+		preferredConnID = r.Header.Get("x-provider-connection-id")
+	}
+	if preferredConnID == "" {
+		preferredConnID = modelInfo.ConnectionID
+	}
+	conn, connData, err := h.ChatH.GetBestConnection(modelInfo.Provider, preferredConnID, nil, modelInfo.Model)
 	if err != nil || connData == nil {
 		if cfg, ok := providers.KnownProviders[modelInfo.Provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
 			apiKey := cfg.DefaultAPIKey
@@ -616,7 +798,12 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	finalBody := handlerutil.UpdateModelInBody(body, modelInfo.Model)
+	finalBody := body
+	if !strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		finalBody = handlerutil.UpdateModelInBody(body, modelInfo.Model)
+	} else if model != modelInfo.Model {
+		finalBody = bytes.Replace(body, []byte(model), []byte(modelInfo.Model), 1)
+	}
 	client := h.ChatH.GetClientForConnection(connData)
 
 	connID := ""
@@ -643,44 +830,89 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			if err := json.Unmarshal(body, &checkStream); err == nil {
 				isStream = checkStream.Stream
 			}
-		fwdErr = exec(w, &executor.Request{
-			Ctx:           r.Context(),
-			Client:        client,
-			Config:        providerCfg,
-			APIKey:        apiKey,
-			Body:          finalBody,
-			ModelName:     modelInfo.Model,
-			IsStream:      isStream,
-			TranslateResp: false,
-			ConnectionID:  connID,
-			SessionID:     handlerutil.ExtractSessionID(r),
-			StartTime:     time.Now(),
-		})
-		if fwdErr != nil {
-			log.Error("media", "executor request failed", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "error", fwdErr)
-			handlerutil.WriteJSONError(w, http.StatusBadGateway, fwdErr.Error())
+			fwdErr = exec(w, &executor.Request{
+				Ctx:           r.Context(),
+				Client:        client,
+				Config:        providerCfg,
+				APIKey:        apiKey,
+				Body:          finalBody,
+				ModelName:     modelInfo.Model,
+				IsStream:      isStream,
+				TranslateResp: false,
+				ConnectionID:  connID,
+				SessionID:     handlerutil.ExtractSessionID(r),
+				StartTime:     time.Now(),
+			})
+			if fwdErr != nil {
+				log.Error("media", "executor request failed", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "error", fwdErr)
+				handlerutil.WriteJSONError(w, http.StatusBadGateway, fwdErr.Error())
+				return
+			}
+			if conn != nil {
+				h.Repo.UpdateConnectionLastUsed(conn.ID)
+			}
+			usagetracker.GetTracker().PushRecent(usagetracker.RecentRequest{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Model:     modelInfo.Model,
+				Provider:  modelInfo.Provider,
+				Status:    "ok",
+			}, h.Repo)
 			return
-		}
-		if conn != nil {
-			h.Repo.UpdateConnectionLastUsed(conn.ID)
-		}
-		usagetracker.GetTracker().PushRecent(usagetracker.RecentRequest{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Model:     modelInfo.Model,
-			Provider:  modelInfo.Provider,
-			Status:    "ok",
-		}, h.Repo)
-		return
 		}
 	}
 
 	baseURL := strings.TrimRight(providerCfg.BaseURL, "/")
-	if endpoint == "/responses" || endpoint == "/v1/responses" {
-		if strings.HasSuffix(baseURL, "/chat/completions") {
-			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
+	if connData != nil && connData.BaseURL != "" {
+		baseURL = strings.TrimRight(connData.BaseURL, "/")
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
+	baseURL = strings.TrimSuffix(baseURL, "/messages")
+
+	hasCustomBaseURL := connData != nil && connData.BaseURL != "" && connData.BaseURL != providerCfg.BaseURL
+
+	var targetURL string
+	switch endpoint {
+	case "/v1/images/generations", "/images/generations":
+		if !hasCustomBaseURL && providerCfg.ImageURL != "" {
+			targetURL = providerCfg.ImageURL
+		} else {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/images/generations"
+		}
+	case "/v1/audio/speech", "/audio/speech":
+		if !hasCustomBaseURL && providerCfg.TTSURL != "" {
+			targetURL = providerCfg.TTSURL
+		} else {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/audio/speech"
+		}
+	case "/v1/audio/transcriptions", "/audio/transcriptions":
+		if !hasCustomBaseURL && providerCfg.STTURL != "" {
+			targetURL = providerCfg.STTURL
+		} else {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/audio/transcriptions"
+		}
+	case "/v1/videos/generations", "/videos/generations":
+		if !hasCustomBaseURL && providerCfg.VideoURL != "" {
+			if strings.HasSuffix(providerCfg.VideoURL, "/generations") {
+				targetURL = providerCfg.VideoURL
+			} else {
+				targetURL = strings.TrimRight(providerCfg.VideoURL, "/") + "/generations"
+			}
+		} else {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/videos/generations"
+		}
+	case "/v1/systemone", "/systemone":
+		if !hasCustomBaseURL && providerCfg.SystemoneURL != "" {
+			targetURL = providerCfg.SystemoneURL
+		} else {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + "/v1/systemone"
+		}
+	default:
+		if strings.HasSuffix(baseURL, "/v1") && strings.HasPrefix(endpoint, "/v1/") {
+			targetURL = strings.TrimSuffix(baseURL, "/v1") + endpoint
+		} else {
+			targetURL = baseURL + endpoint
 		}
 	}
-	targetURL := baseURL + endpoint
 	method := r.Method
 	if endpoint == "/v1/web/fetch" && providerCfg.FetchURL != "" {
 		targetURL = providerCfg.FetchURL
@@ -700,17 +932,21 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	log.Info("media", "forwarding to targetURL", "targetURL", targetURL, "method", method, "model", modelInfo.Model)
 	req, err := http.NewRequestWithContext(r.Context(), method, targetURL, bytes.NewReader(finalBody))
 	if err != nil {
 		log.Error("media", "create request failed", "endpoint", endpoint, "error", err)
-		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to create request")
 		return
 	}
 
 	for k, v := range r.Header {
 		req.Header[k] = v
 	}
-
+	req.Header.Del("Host")
+	req.Header.Del("Content-Length")
+	for k, v := range providerCfg.StaticHeaders {
+		req.Header.Set(k, v)
+	}
 	handlerutil.SetAuthHeader(req, apiKey, providerCfg.AuthHeader, providerCfg.AuthScheme)
 	connIDStr := ""
 	if conn != nil {
@@ -732,7 +968,7 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := doDirectOrClient(r.Context(), client, req)
 	if err != nil {
 		log.Error("media", "upstream request failed", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "conn", connIDStr, "error", err)
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, "upstream request failed")

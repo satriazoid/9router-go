@@ -15,13 +15,48 @@ import (
 
 	"github.com/google/uuid"
 
+	"9router/proxy/internal/db"
+	"9router/proxy/internal/models"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy/executor"
 )
-
 // validateProbeTimeout mirrors upstream's AbortSignal.timeout(8000) on probes.
 const validateProbeTimeout = 8 * time.Second
+
+// probeClientKey carries the *http.Client a probe should use (e.g. the
+// connection's proxy-bound client during a dashboard connection test).
+type probeClientKey struct{}
+
+// withProbeClient makes validateProbeDo dial through client instead of
+// http.DefaultClient. A nil client keeps the default.
+func withProbeClient(ctx context.Context, client *http.Client) context.Context {
+	if client == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, probeClientKey{}, client)
+}
+
+var directProbeClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: nil, // direct connection to bypass proxy allowlist
+	},
+}
+
+func isProxyFailure(err error, resp *http.Response) bool {
+	if resp != nil && resp.StatusCode == http.StatusForbidden {
+		if resp.Header.Get("X-Proxy-Error") != "" || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/plain") {
+			return true
+		}
+	}
+	if err != nil {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "proxy") || strings.Contains(errStr, "connect tunnel failed") || strings.Contains(errStr, "blocked-by-allowlist") || strings.Contains(errStr, "forbidden") {
+			return true
+		}
+	}
+	return false
+}
 
 // validateProbeDo performs an outbound probe request and returns the status code
 // plus the (truncated) response body. Package-level so tests can stub the
@@ -40,7 +75,29 @@ var validateProbeDo = func(ctx context.Context, method, rawURL string, headers m
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if c, ok := ctx.Value(probeClientKey{}).(*http.Client); ok && c != nil {
+		client = c
+	}
+	resp, err := client.Do(req)
+	if isProxyFailure(err, resp) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		var directReader io.Reader
+		if len(body) > 0 {
+			directReader = bytes.NewReader(body)
+		}
+		if directReq, dErr := http.NewRequestWithContext(ctx, method, rawURL, directReader); dErr == nil {
+			for k, v := range headers {
+				directReq.Header.Set(k, v)
+			}
+			if directResp, dErr2 := directProbeClient.Do(directReq); dErr2 == nil {
+				resp = directResp
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -85,6 +142,15 @@ func (h *DashboardHandler) HandleValidateProvider(w http.ResponseWriter, r *http
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "Provider and API key required")
 		return
 	}
+
+	// Custom provider nodes (OpenAI-compatible, Anthropic-compatible, Custom Embedding)
+	if h.Repo != nil {
+		if node, nodeData, err := h.Repo.GetProviderNodeByID(provider); err == nil && node != nil {
+			h.validateProviderNodeConnection(w, r, node, nodeData, req.APIKey, req.ProviderSpecificData)
+			return
+		}
+	}
+
 	cfg, known := providers.KnownProviders[provider]
 	// ollama-local needs no key; noAuth providers are valid without one.
 	if req.APIKey == "" && provider != "ollama-local" && !(known && cfg.NoAuth) {
@@ -113,8 +179,213 @@ func (h *DashboardHandler) HandleValidateProvider(w http.ResponseWriter, r *http
 	handlerutil.WriteJSON(w, http.StatusOK, payload)
 }
 
-// validateProviderKey probes one provider. It follows the upstream branch order:
-// provider-specific probes first, then the generic OpenAI-compatible probe
+func (h *DashboardHandler) validateProviderNodeConnection(
+	w http.ResponseWriter,
+	r *http.Request,
+	node *models.ProviderNode,
+	nodeData *db.ProviderNodeData,
+	apiKey string,
+	psd map[string]any,
+) {
+	ctx := r.Context()
+	baseURL := ""
+	if nodeData != nil {
+		baseURL = strings.TrimSpace(nodeData.BaseURL)
+	}
+	if baseURL == "" {
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     false,
+			"supported": true,
+			"error":     "Missing base URL for provider node",
+		})
+		return
+	}
+
+	nodeType := ""
+	if node != nil && node.Type != nil {
+		nodeType = *node.Type
+	}
+
+	// 1. Custom Embedding
+	if strings.HasPrefix(node.ID, "custom-embedding-") || nodeType == "custom-embedding" {
+		base := strings.TrimSuffix(baseURL, "/")
+		status, _, err := validateProbeDo(ctx, http.MethodGet, base+"/models", map[string]string{
+			"Authorization": "Bearer " + apiKey,
+		}, nil)
+		if err == nil && status == http.StatusOK {
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"valid": true, "supported": true, "error": nil})
+			return
+		}
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"valid": false, "supported": true, "error": "Invalid API key"})
+			return
+		}
+		embedPayload, _ := json.Marshal(map[string]any{"model": "test", "input": "ping"})
+		eStatus, _, eErr := validateProbeDo(ctx, http.MethodPost, base+"/embeddings", map[string]string{
+			"Authorization": "Bearer " + apiKey,
+			"Content-Type":  "application/json",
+		}, embedPayload)
+		if eErr != nil {
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+				"valid":     false,
+				"supported": true,
+				"error":     validateNodeNetworkMessage(eErr),
+			})
+			return
+		}
+		isValid := eStatus != http.StatusUnauthorized && eStatus != http.StatusForbidden
+		errMsg := ""
+		if !isValid {
+			errMsg = "Invalid API key"
+		}
+		var errVal any
+		if !isValid {
+			errVal = errMsg
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     isValid,
+			"supported": true,
+			"error":     errVal,
+		})
+		return
+	}
+
+	// 2. Anthropic Compatible
+	if strings.HasPrefix(node.ID, "anthropic-compatible-") || nodeType == "anthropic-compatible" {
+		base := strings.TrimSuffix(baseURL, "/")
+		if strings.HasSuffix(base, "/messages") {
+			base = base[:len(base)-len("/messages")]
+		}
+		model := "claude-3-haiku-20240307"
+		if psd != nil {
+			if m, ok := psd["assignedModel"].(string); ok && strings.TrimSpace(m) != "" {
+				model = strings.TrimSpace(m)
+			}
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"model":      model,
+			"max_tokens": 1,
+			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+		})
+		status, _, err := validateProbeDo(ctx, http.MethodPost, base+"/v1/messages", map[string]string{
+			"x-api-key":         apiKey,
+			"anthropic-version": "2023-06-01",
+			"Authorization":     "Bearer " + apiKey,
+			"Content-Type":      "application/json",
+		}, payload)
+		if err == nil {
+			isValid := status != http.StatusUnauthorized && status != http.StatusForbidden
+			var errVal any
+			if !isValid {
+				errVal = "Invalid API key"
+			}
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+				"valid":     isValid,
+				"supported": true,
+				"error":     errVal,
+			})
+			return
+		}
+		// Fallback: try /models
+		mStatus, _, mErr := validateProbeDo(ctx, http.MethodGet, base+"/models", map[string]string{
+			"x-api-key":         apiKey,
+			"anthropic-version": "2023-06-01",
+			"Authorization":     "Bearer " + apiKey,
+		}, nil)
+		if mErr != nil {
+			handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+				"valid":     false,
+				"supported": true,
+				"error":     validateNodeNetworkMessage(err),
+			})
+			return
+		}
+		isValid := mStatus == http.StatusOK
+		var errVal any
+		if !isValid {
+			errVal = "Invalid API key"
+		}
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     isValid,
+			"supported": true,
+			"error":     errVal,
+		})
+		return
+	}
+
+	// 3. OpenAI Compatible (Default)
+	base := strings.TrimSuffix(baseURL, "/")
+	status, body, err := validateProbeDo(ctx, http.MethodGet, base+"/models", map[string]string{
+		"Authorization": "Bearer " + apiKey,
+	}, nil)
+	if err != nil {
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     false,
+			"supported": true,
+			"error":     validateNodeNetworkMessage(err),
+		})
+		return
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     false,
+			"supported": true,
+			"error":     "Invalid API key",
+		})
+		return
+	}
+
+	// Many compatible endpoints (LiteLLM, vLLM, public proxies) expose GET /models
+	// without authentication. Probe /chat/completions to verify auth actually succeeds.
+	model := "gpt-4o-mini"
+	if psd != nil {
+		if m, ok := psd["assignedModel"].(string); ok && strings.TrimSpace(m) != "" {
+			model = strings.TrimSpace(m)
+		}
+	}
+	if model == "gpt-4o-mini" && len(body) > 0 {
+		var modelsRes struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &modelsRes) == nil && len(modelsRes.Data) > 0 && modelsRes.Data[0].ID != "" {
+			model = modelsRes.Data[0].ID
+		}
+	}
+	chatPayload, _ := json.Marshal(map[string]any{
+		"model":      model,
+		"max_tokens": 1,
+		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	chatStatus, _, chatErr := validateProbeDo(ctx, http.MethodPost, base+"/chat/completions", map[string]string{
+		"Authorization": "Bearer " + apiKey,
+		"Content-Type":  "application/json",
+	}, chatPayload)
+	if chatErr == nil && (chatStatus == http.StatusUnauthorized || chatStatus == http.StatusForbidden) {
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"valid":     false,
+			"supported": true,
+			"error":     "Invalid API key",
+		})
+		return
+	}
+
+	isValid := status == http.StatusOK
+	var errVal any
+	if !isValid {
+		if status != http.StatusUnauthorized && status != http.StatusForbidden {
+			errVal = fmt.Sprintf("Unexpected status (%d)", status)
+		} else {
+			errVal = "Invalid API key"
+		}
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"valid":     isValid,
+		"supported": true,
+		"error":     errVal,
+	})
+}
 // (GET /models, falling back to a minimal chat request).
 func validateProviderKey(ctx context.Context, provider string, cfg providers.ProviderConfig, apiKey string, psd map[string]any) validateOutcome {
 	if cfg.NoAuth {

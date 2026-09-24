@@ -619,3 +619,95 @@ func TestHandleValidateProvider_IflowUsesGenericProbe(t *testing.T) {
 		t.Errorf("expected valid=true, got %v", out["valid"])
 	}
 }
+
+func TestHandleValidateProvider_CustomOpenAINode(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	nodeID := "openai-compatible-chat-custom123"
+	name := "Custom Node"
+	_, err := repo.CreateProviderNode(nodeID, "openai-compatible", name, `{"baseUrl":"https://my-custom-llm.com/v1","prefix":"cllm"}`)
+	if err != nil {
+		t.Fatalf("failed to create node: %v", err)
+	}
+
+	calls := staticProbeStub(t, http.StatusOK)
+
+	body := `{"provider":"` + nodeID + `","apiKey":"my-secret-key"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/providers/validate", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 probes (models + chat), got %d", len(*calls))
+	}
+	if (*calls)[0].url != "https://my-custom-llm.com/v1/models" {
+		t.Errorf("unexpected probe url %s", (*calls)[0].url)
+	}
+	if (*calls)[1].url != "https://my-custom-llm.com/v1/chat/completions" {
+		t.Errorf("unexpected probe url %s", (*calls)[1].url)
+	}
+	if got := (*calls)[0].headers.Get("Authorization"); got != "Bearer my-secret-key" {
+		t.Errorf("expected bearer auth, got %q", got)
+	}
+	if got := (*calls)[1].headers.Get("Authorization"); got != "Bearer my-secret-key" {
+		t.Errorf("expected bearer auth, got %q", got)
+	}
+
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["valid"] != true {
+		t.Errorf("expected valid=true, got %v", out["valid"])
+	}
+	if out["supported"] != true {
+		t.Errorf("expected supported=true, got %v", out["supported"])
+	}
+}
+
+func TestHandleValidateProvider_CustomOpenAINode_InvalidKeyRejection(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	nodeID := "openai-compatible-chat-public-models"
+	name := "Public Models Node"
+	_, err := repo.CreateProviderNode(nodeID, "openai-compatible", name, `{"baseUrl":"https://public-models-llm.com/v1","prefix":"pm"}`)
+	if err != nil {
+		t.Fatalf("failed to create node: %v", err)
+	}
+
+	// /models returns 200 (public), but /chat/completions returns 401 (invalid key rejected)
+	calls := withProbeStub(t, func(call int, p capturedProbe) (int, []byte, error) {
+		if strings.HasSuffix(p.url, "/models") {
+			return http.StatusOK, []byte(`{"data":[{"id":"test-model"}]}`), nil
+		}
+		return http.StatusUnauthorized, []byte(`{"error":{"message":"invalid token"}}`), nil
+	})
+
+	body := `{"provider":"` + nodeID + `","apiKey":"fake-random-key"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/providers/validate", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 probes, got %d", len(*calls))
+	}
+
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["valid"] != false {
+		t.Errorf("expected valid=false when chat returns 401, got %v", out["valid"])
+	}
+	if out["error"] != "Invalid API key" {
+		t.Errorf("expected 'Invalid API key', got %v", out["error"])
+	}
+}

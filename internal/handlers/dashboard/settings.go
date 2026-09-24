@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/handlerutil"
 )
@@ -25,6 +26,9 @@ const (
 	proxyDefaultURL = "https://google.com/"
 	proxyMaxTimeout = 30 * time.Second
 	proxyTimeout    = 8 * time.Second
+	// defaultInitialPassword mirrors upstream DEFAULT_PASSWORD ("123456"):
+	// accepted when no bcrypt hash is stored and INITIAL_PASSWORD is unset.
+	defaultInitialPassword = "123456"
 )
 
 // protectedSettingKeys may never be written by the dashboard client — matches
@@ -233,8 +237,9 @@ func (h *DashboardHandler) HandleProxyTest(w http.ResponseWriter, r *http.Reques
 }
 
 // changeDashboardPassword verifies currentPassword against the stored hash (or
-// accepts an empty value on first-time set) and stores a bcrypt hash of the new
-// one, mirroring Next's PATCH /api/settings password handling.
+// accepts an empty value on first-time set, plus the well-known "123456" the
+// way Next's PATCH /api/settings does) and stores a bcrypt hash of the new
+// one.
 func (h *DashboardHandler) changeDashboardPassword(currentPassword, newPassword string) error {
 	raw, err := h.Repo.GetSettingsRaw()
 	if err != nil || raw == nil {
@@ -245,8 +250,9 @@ func (h *DashboardHandler) changeDashboardPassword(currentPassword, newPassword 
 		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
 			return errors.New("Invalid current password")
 		}
-	} else if currentPassword != "" {
-		// No password set yet — only an empty value confirms the first-time set.
+	} else if currentPassword != "" && currentPassword != defaultInitialPassword {
+		// No password set yet — only an empty value (or the well-known
+		// default) confirms the first-time set.
 		return errors.New("Invalid current password")
 	}
 
@@ -256,9 +262,9 @@ func (h *DashboardHandler) changeDashboardPassword(currentPassword, newPassword 
 	}
 	return h.Repo.UpdateSettingsRaw(map[string]any{"password": string(hashed)})
 }
-
 // verifyDashboardPassword mirrors Next's verifyDashboardPassword: a stored
-// bcrypt hash wins, otherwise the operator's INITIAL_PASSWORD is accepted.
+// bcrypt hash wins, otherwise INITIAL_PASSWORD wins, otherwise the well-known
+// "123456" default (upstream DEFAULT_PASSWORD) is accepted.
 func (h *DashboardHandler) verifyDashboardPassword(password string) bool {
 	if password == "" {
 		return false
@@ -268,19 +274,19 @@ func (h *DashboardHandler) verifyDashboardPassword(password string) bool {
 			return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 		}
 	}
-	// INITIAL_PASSWORD is intentionally unset by default (no shipped default
-	// password), so an unconfigured instance rejects until one is set.
 	initial := config.LoadConfig().InitialPassword
 	if initial == "" {
-		return false
+		initial = defaultInitialPassword
 	}
 	return subtle.ConstantTimeCompare([]byte(initial), []byte(password)) == 1
 }
 
 // trustedRequest reports whether the caller is a local CLI client, which the
-// Next dashboard trusts without re-prompting for the password.
+// Next dashboard trusts without re-prompting for the password. The header
+// value is checked against the derived machine token — never trusted by
+// presence — so remote callers cannot bypass with an arbitrary value.
 func trustedRequest(r *http.Request) bool {
-	return r.Header.Get(cliTokenHeader) != ""
+	return auth.ValidCLIToken(r.Header.Get(cliTokenHeader))
 }
 
 // sanitizeSettings copies settings and drops secrets, exposing `hasPassword`

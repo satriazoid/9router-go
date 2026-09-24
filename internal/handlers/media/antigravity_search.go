@@ -63,8 +63,63 @@ func joinDeduped(items []string, sep string) string {
 	}
 	return strings.Join(filtered, sep)
 }
+// SearchResponse is the standardized envelope for /v1/search matching upstream 9router.
+type SearchResponse struct {
+	Provider string         `json:"provider"`
+	Query    string         `json:"query"`
+	Results  []SearchResult `json:"results"`
+	Answer   *SearchAnswer  `json:"answer,omitempty"`
+	Usage    SearchUsage    `json:"usage"`
+	Metrics  SearchMetrics  `json:"metrics"`
+	Errors   []any          `json:"errors"`
+}
+
+// SearchResult represents a single grounded search result.
+type SearchResult struct {
+	Title       string         `json:"title"`
+	URL         string         `json:"url"`
+	Snippet     string         `json:"snippet"`
+	Position    int            `json:"position"`
+	Score       any            `json:"score"`
+	PublishedAt any            `json:"published_at"`
+	FaviconURL  any            `json:"favicon_url"`
+	Content     string         `json:"content"`
+	Metadata    map[string]any `json:"metadata"`
+	Citation    SearchCitation `json:"citation"`
+	ProviderRaw any            `json:"provider_raw"`
+}
+
+// SearchCitation holds citation metadata for a search result.
+type SearchCitation struct {
+	Provider    string `json:"provider"`
+	RetrievedAt string `json:"retrieved_at"`
+	Rank        int    `json:"rank"`
+}
+
+// SearchAnswer holds the LLM-synthesized answer text and source model.
+type SearchAnswer struct {
+	Source string `json:"source"`
+	Text   string `json:"text"`
+	Model  string `json:"model"`
+}
+
+// SearchUsage tracks query and token consumption for the search request.
+type SearchUsage struct {
+	QueriesUsed   int `json:"queries_used"`
+	SearchCostUSD any `json:"search_cost_usd"`
+	LLMTokens     int `json:"llm_tokens"`
+}
+
+// SearchMetrics reports timings and result counts.
+type SearchMetrics struct {
+	ResponseTimeMS        int64 `json:"response_time_ms"`
+	UpstreamLatencyMS    int64 `json:"upstream_latency_ms"`
+	TotalResultsAvailable any   `json:"total_results_available"`
+}
+
 
 func (h *MediaHandler) handleAntigravitySearch(w http.ResponseWriter, r *http.Request, body []byte, modelInfo *chat.ModelInfo) error {
+	startTime := time.Now()
 	var reqBody struct {
 		Query      string `json:"query"`
 		Prompt     string `json:"prompt"`
@@ -176,7 +231,22 @@ func (h *MediaHandler) handleAntigravitySearch(w http.ResponseWriter, r *http.Re
 	httpReq.Header.Set("User-Agent", "antigravity/ide/2.11.0 darwin/arm64")
 
 	client := h.ChatH.GetClientForConnection(connData)
+	upstreamStart := time.Now()
 	resp, err := client.Do(httpReq)
+	if err != nil || (resp != nil && resp.StatusCode == http.StatusForbidden) {
+		directReq, err2 := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(searchBytes))
+		if err2 == nil {
+			directReq.Header = httpReq.Header.Clone()
+			if resp2, err3 := directHTTPClient.Do(directReq); err3 == nil {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				resp = resp2
+				err = nil
+			}
+		}
+	}
+	upstreamLatencyMs := time.Since(upstreamStart).Milliseconds()
 	if err != nil {
 		return fmt.Errorf("antigravity search upstream request: %w", err)
 	}
@@ -325,8 +395,8 @@ func (h *MediaHandler) handleAntigravitySearch(w http.ResponseWriter, r *http.Re
 		sourceOrder = sourceOrder[:limit]
 	}
 
-	retrievedAt := time.Now().UTC().Format(time.RFC3339)
-	var results []map[string]any
+	retrievedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	var results []SearchResult
 	for idx, u := range sourceOrder {
 		src := sourcesMap[u]
 		snippet := joinDeduped(src.Snippets, " | ")
@@ -338,22 +408,22 @@ func (h *MediaHandler) handleAntigravitySearch(w http.ResponseWriter, r *http.Re
 			content = snippet
 		}
 
-		results = append(results, map[string]any{
-			"title":        src.Title,
-			"url":          u,
-			"snippet":      snippet,
-			"position":     idx + 1,
-			"score":        nil,
-			"published_at": nil,
-			"favicon_url":  nil,
-			"content":      content,
-			"metadata":     map[string]any{},
-			"citation": map[string]any{
-				"provider":     "antigravity",
-				"retrieved_at": retrievedAt,
-				"rank":         idx + 1,
+		results = append(results, SearchResult{
+			Title:       src.Title,
+			URL:         u,
+			Snippet:     snippet,
+			Position:    idx + 1,
+			Score:       nil,
+			PublishedAt: nil,
+			FaviconURL:  nil,
+			Content:     content,
+			Metadata:    map[string]any{},
+			Citation: SearchCitation{
+				Provider:    "antigravity",
+				RetrievedAt: retrievedAt,
+				Rank:        idx + 1,
 			},
-			"provider_raw": nil,
+			ProviderRaw: nil,
 		})
 	}
 
@@ -366,26 +436,28 @@ func (h *MediaHandler) handleAntigravitySearch(w http.ResponseWriter, r *http.Re
 
 	h.Repo.UpdateConnectionLastUsed(conn.ID)
 	log.Info("request", "POST /v1/search", "provider", "antigravity", "model", model, "query", query, "results", len(results), "conn", conn.ID[:min(8, len(conn.ID))], "tokens", tokens)
+	responseTimeMs := time.Since(startTime).Milliseconds()
 	log.Info("usage", "logged", "provider", "antigravity", "model", model, "query", query, "results", len(results), "tokens", tokens)
-
-	searchResponse := map[string]any{
-		"provider": "antigravity",
-		"query":    query,
-		"results":  results,
-		"answer": map[string]any{
-			"source": "antigravity",
-			"text":   answerText,
-			"model":  model,
+	searchResponse := SearchResponse{
+		Provider: "antigravity",
+		Query:    query,
+		Results:  results,
+		Answer: &SearchAnswer{
+			Source: "antigravity",
+			Text:   answerText,
+			Model:  model,
 		},
-		"usage": map[string]any{
-			"queries_used":    1,
-			"search_cost_usd": 0,
-			"llm_tokens":      tokens,
+		Usage: SearchUsage{
+			QueriesUsed:   1,
+			SearchCostUSD: 0,
+			LLMTokens:     tokens,
 		},
-		"metrics": map[string]any{
-			"total_results_available": nil,
+		Metrics: SearchMetrics{
+			ResponseTimeMS:        responseTimeMs,
+			UpstreamLatencyMS:    upstreamLatencyMs,
+			TotalResultsAvailable: nil,
 		},
-		"errors": []any{},
+		Errors: []any{},
 	}
 
 	handlerutil.WriteJSON(w, http.StatusOK, searchResponse)

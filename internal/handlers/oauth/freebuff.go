@@ -20,6 +20,7 @@ import (
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/proxy/executor"
 )
 
 var freebuffAuthBaseURL = "https://freebuff.com"
@@ -84,8 +85,7 @@ func (h *OAuthHandler) HandleFreebuffInitiate(w http.ResponseWriter, r *http.Req
 		if reqErr == nil {
 			upReq.Header.Set("Content-Type", "application/json")
 			upReq.Header.Set("User-Agent", "codebuff-cli/0.0.138")
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, doErr := client.Do(upReq)
+			resp, doErr := executor.DoFreebuffHTTP(r.Context(), nil, upReq)
 			if doErr == nil {
 				defer resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
@@ -208,8 +208,7 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 	}
 	upReq.Header.Set("User-Agent", "codebuff-cli/0.0.138")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(upReq)
+	resp, err := executor.DoFreebuffHTTP(r.Context(), nil, upReq)
 	if err != nil {
 		log.Error("oauth", "freebuff poll status request failed", "error", err)
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, fmt.Sprintf("freebuff status failed: %v", err))

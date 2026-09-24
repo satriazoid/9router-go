@@ -7,7 +7,7 @@
 
   interface Props {
     isOpen: boolean
-    type?: 'openai-compatible' | 'anthropic-compatible'
+    type?: 'openai-compatible' | 'anthropic-compatible' | 'custom-embedding'
     isSubmitting?: boolean
     onClose: () => void
     onSubmit: (data: {
@@ -45,6 +45,15 @@
       modelIdPlaceholder: 'e.g. claude-3-opus',
       hasApiType: false,
     },
+    'custom-embedding': {
+      title: 'Add Custom Embedding',
+      defaultBaseUrl: 'https://api.openai.com/v1',
+      namePlaceholder: 'Voyage AI',
+      prefixPlaceholder: 'voyage',
+      baseUrlHint: 'Most embedding APIs are OpenAI-compatible: Voyage, Cohere, Jina, Mistral, Together...',
+      modelIdPlaceholder: 'e.g. voyage-3, embed-english-v3.0, text-embedding-3-small',
+      hasApiType: false,
+    },
   }
 
   let config = $derived(VARIANT_CONFIG[type] || VARIANT_CONFIG['openai-compatible'])
@@ -56,7 +65,7 @@
   let checkKey = $state('')
   let checkModelId = $state('')
   let validating = $state(false)
-  let validationResult = $state<{ valid: boolean; error?: string; method?: string } | null>(null)
+  let validationResult = $state<{ valid: boolean; error?: string; method?: string; dimensions?: number } | null>(null)
   let submitting = $state(false)
 
   // Reset the form when the modal opens.
@@ -124,7 +133,7 @@
       label="Name"
       bind:value={formName}
       placeholder={config.namePlaceholder}
-      hint="Required. A friendly label for this node."
+      hint={type === 'custom-embedding' ? 'Required. A friendly label for this embedding provider.' : 'Required. A friendly label for this node.'}
       required
     />
 
@@ -132,11 +141,12 @@
       label="Prefix"
       bind:value={formPrefix}
       placeholder={config.prefixPlaceholder}
-      hint="Required. Used as the provider prefix for model IDs."
+      hint={type === 'custom-embedding' ? 'Required. Used as the provider prefix for model IDs (e.g. voyage/voyage-3).' : 'Required. Used as the provider prefix for model IDs.'}
       required
     />
 
     {#if config.hasApiType}
+
       <div>
         <label for="api-type" class="text-sm font-medium text-text-main mb-1.5 block">API Type</label>
         <select
@@ -166,10 +176,10 @@
     />
 
     <Input
-      label="Model ID (optional)"
+      label="Model ID (for Check)"
       bind:value={checkModelId}
       placeholder={config.modelIdPlaceholder}
-      hint="If provider lacks /models endpoint, enter a model ID to validate via chat/completions instead."
+      hint={type === 'custom-embedding' ? 'Required for validation. Will send a test embeddings request.' : 'If provider lacks /models endpoint, enter a model ID to validate via chat/completions instead.'}
     />
 
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -187,6 +197,8 @@
             <Badge tone="success">Valid</Badge>
             {#if validationResult.method === 'chat'}
               <span class="text-sm text-text-muted">(via inference test)</span>
+            {:else if validationResult.dimensions}
+              <span class="text-sm text-text-muted">{validationResult.dimensions} dims</span>
             {/if}
           </span>
         {:else}

@@ -1511,6 +1511,35 @@ func fetchAntigravityDashboardUsage(ctx context.Context, accessToken, projectID 
 			}
 			quotas[key] = wq
 		}
+
+		// Reconcile gemini_session if all gemini models are exhausted (upstream google.js parity)
+		if s, ok := quotas["gemini_session"].(map[string]any); ok {
+			allGeminiExhausted := true
+			var geminiCount int
+			var maxResetAt string
+			for k, v := range quotas {
+				if strings.HasPrefix(k, "gemini-") && !strings.Contains(k, "image") {
+					geminiCount++
+					if vm, ok := v.(map[string]any); ok {
+						if rem, ok := vm["remainingPercentage"].(float64); ok && rem > 0 {
+							allGeminiExhausted = false
+						}
+						if rAt, ok := vm["resetAt"].(string); ok && rAt != "" {
+							if maxResetAt == "" || rAt > maxResetAt {
+								maxResetAt = rAt
+							}
+						}
+					}
+				}
+			}
+			if geminiCount > 0 && allGeminiExhausted {
+				s["used"] = s["total"]
+				s["remainingPercentage"] = 0.0
+				if maxResetAt != "" {
+					s["resetAt"] = maxResetAt
+				}
+			}
+		}
 	}
 	return usageResult{plan: plan, quotas: quotas}
 }
@@ -1535,16 +1564,26 @@ func fetchAntigravityDashboardWeekly(ctx context.Context, accessToken, projectID
 	if len(groups) == 0 {
 		return nil
 	}
-	type matcher struct {
-		test        func(string) bool
+	type familyTarget struct {
 		key         string
 		displayName string
 	}
-	matchers := []matcher{
-		{func(s string) bool { return strings.Contains(s, "gemini") }, "gemini_weekly", "Gemini (Weekly)"},
-		{func(s string) bool {
-			return strings.Contains(s, "claude") || strings.Contains(s, "gpt")
-		}, "claude_gpt_weekly", "Claude & GPT (Weekly)"},
+	type familyConfig struct {
+		pattern string
+		weekly  familyTarget
+		session familyTarget
+	}
+	configs := []familyConfig{
+		{
+			pattern: "gemini",
+			weekly:  familyTarget{"gemini_weekly", "Gemini (Weekly)"},
+			session: familyTarget{"gemini_session", "Gemini (5h)"},
+		},
+		{
+			pattern: "claude",
+			weekly:  familyTarget{"claude_gpt_weekly", "Claude & GPT (Weekly)"},
+			session: familyTarget{"claude_gpt_session", "Claude & GPT (5h)"},
+		},
 	}
 	result := map[string]any{}
 	for _, gRaw := range groups {
@@ -1560,38 +1599,54 @@ func fetchAntigravityDashboardWeekly(ctx context.Context, accessToken, projectID
 			if b == nil {
 				continue
 			}
-			text := strings.ToLower(usageStr(b["bucketId"]) + " " + usageStr(b["displayName"]))
-			if !strings.Contains(text, "weekly") {
+			windowType := strings.ToLower(usageStr(b["window"]))
+			bucketText := strings.ToLower(usageStr(b["bucketId"]) + " " + usageStr(b["displayName"]))
+			isWeekly := windowType == "weekly" || strings.Contains(bucketText, "weekly")
+			isSession := windowType == "5h" || strings.Contains(bucketText, "five hour") || strings.Contains(bucketText, "5h") || strings.Contains(bucketText, "daily") || windowType == "daily"
+			if !isWeekly && !isSession {
 				continue
 			}
-			if disabled, _ := b["disabled"].(bool); disabled {
+			disabled, _ := b["disabled"].(bool)
+			if disabled && isWeekly {
 				continue
 			}
-			frac, ok := usageFiniteNum(b["remainingFraction"])
-			if !ok {
-				continue
-			}
-			for _, m := range matchers {
-				if !m.test(gNameLower) {
+			var frac float64
+			if disabled {
+				frac = 0
+			} else {
+				var ok bool
+				frac, ok = usageFiniteNum(b["remainingFraction"])
+				if !ok {
 					continue
 				}
-				total := 1000.0
-				remaining := math.Round(total * frac)
-				used := math.Max(0, total-remaining)
-				result[m.key] = map[string]any{
-					"used": used, "total": total,
-					"resetAt":             usageResetTime(b["resetTime"]),
-					"remainingPercentage": frac * 100,
-					"unlimited":           false,
-					"displayName":         m.displayName,
+			}
+			for _, cfg := range configs {
+				if strings.Contains(gNameLower, cfg.pattern) || (cfg.pattern == "claude" && strings.Contains(gNameLower, "gpt")) {
+					target := cfg.session
+					if isWeekly {
+						target = cfg.weekly
+					}
+					if _, exists := result[target.key]; exists {
+						break
+					}
+					total := 1000.0
+					remaining := math.Round(total * frac)
+					used := math.Max(0, total-remaining)
+					result[target.key] = map[string]any{
+						"used":                used,
+						"total":               total,
+						"resetAt":             usageResetTime(b["resetTime"]),
+						"remainingPercentage": frac * 100,
+						"unlimited":           false,
+						"displayName":         target.displayName,
+					}
+					break
 				}
-				break
 			}
 		}
 	}
 	return result
 }
-
 // antigravityProjectID mirrors chat.extractProjectID (unexported there):
 // cloudaicompanionProject arrives as a string id or an {id} object.
 func antigravityProjectID(val any) string {

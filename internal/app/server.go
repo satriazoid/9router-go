@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"go.uber.org/fx"
@@ -41,7 +43,12 @@ type ServerParams struct {
 
 // ProvideServer creates *http.Server and registers lifecycle hooks.
 func ProvideServer(p ServerParams) *http.Server {
-	addr := fmt.Sprintf(":%d", p.Config.Port)
+	var addr string
+	if p.Config.Host != "" {
+		addr = net.JoinHostPort(p.Config.Host, strconv.Itoa(p.Config.Port))
+	} else {
+		addr = fmt.Sprintf(":%d", p.Config.Port)
+	}
 	server := &http.Server{
 		Addr:    addr,
 		Handler: p.Handler,

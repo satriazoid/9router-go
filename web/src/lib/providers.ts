@@ -8,6 +8,8 @@ export interface ProviderCatalogItem {
   icon: string
   noAuth?: boolean
   priority?: number
+  mediaPriority?: number
+  hiddenKinds?: string[]
   serviceKinds?: string[]
   /** auth modes from upstream registry (e.g. clinepass ["apikey","oauth"] = dual buttons). */
   authModes?: string[]
@@ -24,6 +26,16 @@ export interface ProviderCatalogItem {
   authHint?: string
   /** Upstream registry modelsFetcher (public catalog for "Suggested free models"). */
   modelsFetcher?: { url: string; type: string }
+  /** Upstream registry systemoneConfig */
+  systemoneConfig?: { baseUrl?: string; format?: string; headers?: Record<string, string> }
+  searchConfig?: Record<string, any>
+  fetchConfig?: Record<string, any>
+  searchViaChat?: {
+    defaultModel?: string
+    endpoint?: string
+    pricingUrl?: string
+    freeTier?: string
+  }
 }
 
 export const PROVIDER_CATEGORIES = [
@@ -51,7 +63,12 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
       "llm",
       "image",
       "webSearch"
-    ]
+    ],
+    "searchViaChat": {
+      "defaultModel": "gemini-2.5-flash",
+      "endpoint": "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+      "freeTier": "Free — Google Search grounding through an Antigravity OAuth account."
+    }
   },
   {
     "id": "claude",
@@ -152,7 +169,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "embedding"
     ]
   },
   {
@@ -240,7 +258,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"signupUrl":"https://chatgpt.com/codex"},
     "noAuth": false,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "image"
     ]
   },
   {
@@ -289,6 +308,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://platform.xiaomimimo.com/console/api-keys","signupUrl":"https://mimo.xiaomimimo.com/desktop/invite/"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 290,
     "authModes": ["oauth", "apikey"],
     "serviceKinds": [
       "llm",
@@ -371,8 +391,14 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#E87040",
     "icon": "terminal",
     "noAuth": true,
+    "priority": 40,
+    "systemoneConfig": {
+      "baseUrl": "https://opencode.ai/zen/v1/systemone",
+      "format": "systemone"
+    },
     "serviceKinds": [
-      "llm"
+      "llm",
+      "systemone"
     ],
     "modelsFetcher": {"url":"https://opencode.ai/zen/v1/models","type":"opencode-free"}
   },
@@ -447,6 +473,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://github.com/coqui-ai/TTS",
     "authType": "none",
     "noAuth": true,
+    "hidden": true,
     "serviceKinds": [
       "tts"
     ]
@@ -460,6 +487,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "record_voice_over",
     "authType": "none",
     "noAuth": true,
+    "mediaPriority": 5,
     "serviceKinds": [
       "tts"
     ]
@@ -475,6 +503,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://aistudio.google.com/app/apikey"},
     "authType": "apikey",
     "noAuth": false,
+    "mediaPriority": 1,
     "priority": 50,
     "serviceKinds": [
       "llm",
@@ -494,6 +523,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "record_voice_over",
     "authType": "none",
     "noAuth": true,
+    "mediaPriority": 5,
     "serviceKinds": [
       "tts"
     ]
@@ -537,6 +567,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "speaker",
     "authType": "none",
     "noAuth": true,
+    "mediaPriority": 5,
     "serviceKinds": [
       "tts"
     ]
@@ -552,9 +583,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"text":"Free access for NVIDIA Developer Program members (prototyping & testing).","apiKeyUrl":"https://build.nvidia.com/settings/api-keys"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 20,
     "serviceKinds": [
       "llm",
-      "stt",
       "tts",
       "embedding"
     ]
@@ -587,8 +618,17 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"text":"Free tier: 27+ free models, no credit card needed, 200 req/day. After  0 credit: 1,000 req/day.","apiKeyUrl":"https://openrouter.ai/settings/keys"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 10,
+    "systemoneConfig": {
+      "baseUrl": "https://openrouter.ai/api/v1/systemone",
+      "format": "systemone"
+    },
     "serviceKinds": [
-      "llm"
+      "llm",
+      "embedding",
+      "tts",
+      "video",
+      "systemone"
     ],
     "modelsFetcher": {"url":"https://openrouter.ai/api/v1/models","type":"openrouter-free"}
   },
@@ -632,6 +672,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://github.com/neonbjb/tortoise-tts",
     "authType": "none",
     "noAuth": true,
+    "hidden": true,
     "serviceKinds": [
       "tts"
     ]
@@ -743,6 +784,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://www.assemblyai.com/app/api-keys"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 30,
     "serviceKinds": [
       "stt"
     ]
@@ -775,8 +817,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "serviceKinds": [
       "llm",
       "image",
-      "tts",
-      "stt",
       "embedding"
     ]
   },
@@ -866,6 +906,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://play.cartesia.ai/keys"},
     "authType": "apikey",
     "noAuth": false,
+    "hidden": true,
     "serviceKinds": [
       "tts"
     ]
@@ -950,6 +991,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"text":"$200 free credit on signup (no card required). Aura-1: $0.015/1k chars, Aura-2: $0.030/1k chars (Pay-As-You-Go).","apiKeyUrl":"https://console.deepgram.com/api-keys"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 20,
     "serviceKinds": [
       "stt"
     ]
@@ -1075,7 +1117,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "embedding"
     ]
   },
   {
@@ -1151,6 +1194,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://console.groq.com/keys"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 60,
     "serviceKinds": [
       "llm",
       "stt"
@@ -1167,8 +1211,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://huggingface.co/settings/tokens"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 70,
     "serviceKinds": [
-      "llm",
       "image",
       "stt"
     ]
@@ -1185,8 +1229,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
-      "llm",
-      "tts"
+      "llm"
     ]
   },
   {
@@ -1289,9 +1332,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://platform.minimaxi.com/user-center/basic-information/interface-key"},
     "authType": "apikey",
     "noAuth": false,
+    "priority": 190,
     "serviceKinds": [
       "llm",
-      "image",
       "tts"
     ]
   },
@@ -1465,8 +1508,27 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
       "llm",
       "image",
       "video",
-      "tts",
       "embedding"
+    ]
+  },
+  {
+    "id": "opencode-zen",
+    "name": "OpenCode Zen",
+    "category": "apikey",
+    "alias": "ocz",
+    "color": "#E87040",
+    "icon": "terminal",
+    "website": "https://opencode.ai/auth",
+    "notice": {"text":"OpenCode Zen PAYG: pay-as-you-go, key from https://opencode.ai/auth. Same models as Zen: paid + free tiers on the fast lane.","apiKeyUrl":"https://opencode.ai/auth"},
+    "noAuth": false,
+    "priority": 205,
+    "systemoneConfig": {
+      "baseUrl": "https://opencode.ai/zen/v1/systemone",
+      "format": "systemone"
+    },
+    "serviceKinds": [
+      "llm",
+      "systemone"
     ]
   },
   {
@@ -1526,6 +1588,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "notice": {"apiKeyUrl":"https://play.ht/studio/api-access"},
     "authType": "apikey",
     "noAuth": false,
+    "hidden": true,
     "serviceKinds": [
       "tts"
     ]
@@ -1695,7 +1758,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "noAuth": false,
     "serviceKinds": [
       "llm",
-      "image",
       "embedding"
     ]
   },
@@ -1711,7 +1773,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "authType": "apikey",
     "noAuth": false,
     "serviceKinds": [
-      "llm"
+      "llm",
+      "embedding",
+      "image"
     ]
   },
   {
@@ -1786,6 +1850,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "priority": 160,
     "serviceKinds": [
       "llm",
+      "embedding",
+      "image",
       "webSearch"
     ]
   },
@@ -2010,6 +2076,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://github.com/remsky/Kokoro-FastAPI",
     "authType": "none",
     "noAuth": true,
+    "priority": 50,
     "serviceKinds": [
       "tts"
     ]
@@ -2024,8 +2091,9 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://github.com/ggml-org/whisper.cpp",
     "authType": "apikey",
     "noAuth": false,
+    "priority": 50,
     "serviceKinds": [
-      "llm"
+      "stt"
     ]
   },
   {
@@ -2051,7 +2119,15 @@ export function isChatProvider(p: ProviderCatalogItem): boolean {
 }
 
 export function getProvidersByKind(kind: string): ProviderCatalogItem[] {
-  return PROVIDER_CATALOG.filter((p) => (p.serviceKinds ?? ['llm']).includes(kind))
+  return PROVIDER_CATALOG
+    .filter((p) => {
+      const kinds = p.serviceKinds ?? ['llm']
+      if (!kinds.includes(kind)) return false
+      if (p.hidden) return false
+      if (p.hiddenKinds?.includes(kind)) return false
+      return true
+    })
+    .sort((a, b) => ((a.priority ?? a.mediaPriority ?? 999) - (b.priority ?? b.mediaPriority ?? 999)))
 }
 
 export const MEDIA_PROVIDER_KINDS = [

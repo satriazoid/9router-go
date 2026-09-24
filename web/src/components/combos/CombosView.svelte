@@ -45,7 +45,7 @@
 
   let comboStrategies = $state<Record<string, ComboStrategyInfo>>({})
   let capacityAdapter = $state<CapacityAdapterState>({
-    vision: { enabled: true, roundRobin: false, models: ['ag/gemini-3.7-flash-high'] },
+    vision: { enabled: true, roundRobin: false, models: ['ag/gemini-3.8-flash-high'] },
     audioInput: { enabled: true, roundRobin: false, models: [] },
   })
   let copiedId = $state<string | null>(null)

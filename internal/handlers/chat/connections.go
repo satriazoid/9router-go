@@ -116,7 +116,21 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 
 		// Rotate only connections eligible for the requested model.
 		if len(connections) > 1 && settingsErr == nil && settings != nil {
-			if strat, ok := settings.ProviderStrategies[provider]; ok && strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
+			strat := db.ProviderStrategy{}
+			hasStrat := false
+			if settings.ProviderStrategies != nil {
+				if s, ok := settings.ProviderStrategies[provider]; ok {
+					strat = s
+					hasStrat = true
+				}
+			}
+			if !hasStrat || strat.RotateStrategy == "" {
+				if settings.FallbackStrategy != "" && settings.FallbackStrategy != "fill-first" {
+					strat.RotateStrategy = settings.FallbackStrategy
+					strat.StickyLimit = settings.StickyRoundRobinLimit
+				}
+			}
+			if strat.RotateStrategy != "" && strat.RotateStrategy != "none" {
 				connections = h.applyConnectionStrategy(provider, connections, strat)
 			}
 		}
@@ -158,6 +172,15 @@ func (h *ChatHandler) getBestConnection(provider string, connectionID string, ex
 	if conn.Data != "" {
 		if err := json.Unmarshal([]byte(conn.Data), &connData); err != nil {
 			return nil, nil, fmt.Errorf("failed to parse connection data: %w", err)
+		}
+	}
+	// The dashboard's proxy assignment endpoint (upstream parity) stores the
+	// binding in providerSpecificData.proxyPoolId, while the top-level field is
+	// what this resolver reads. Accept both so a pool bound from either writer
+	// takes effect.
+	if connData.ProxyPoolID == "" {
+		if poolID, ok := connData.ProviderSpecificData["proxyPoolId"].(string); ok && poolID != "" && poolID != "__none__" {
+			connData.ProxyPoolID = poolID
 		}
 	}
 

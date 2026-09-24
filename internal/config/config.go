@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/viper"
 
@@ -16,6 +17,7 @@ import (
 
 // Config holds the proxy gateway configuration.
 type Config struct {
+	Host            string
 	Port            int
 	DatabasePath    string
 	JWTSecret       string
@@ -100,6 +102,11 @@ func LoadConfigFromViper(v *viper.Viper) *Config {
 	if v == nil {
 		v = NewViper()
 	}
+	host := strings.TrimSpace(v.GetString("HOST"))
+	if host == "" {
+		host = strings.TrimSpace(v.GetString("BIND_ADDR"))
+	}
+
 
 	port := v.GetInt("PORT")
 	if port <= 0 {
@@ -151,6 +158,7 @@ func LoadConfigFromViper(v *viper.Viper) *Config {
 	ponytailEnabled := v.GetBool("PONYTAIL_ENABLED")
 
 	return &Config{
+		Host:            host,
 		Port:            port,
 		DatabasePath:    dbPath,
 		JWTSecret:       loadJWTSecret(v, dataDir),

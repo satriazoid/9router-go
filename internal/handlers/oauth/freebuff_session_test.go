@@ -4,6 +4,7 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -140,8 +141,15 @@ func TestHandleFreebuffSessionStatus_ActiveSession(t *testing.T) {
 	if res.Freebucks == nil || res.Freebucks["balance"] != float64(20) {
 		t.Errorf("expected freebucks.balance=20, got %v", res.Freebucks)
 	}
-}
 
+	updatedConn, err := handler.Repo.GetProviderConnectionByID("fb-conn-1")
+	if err != nil {
+		t.Fatalf("failed to query updated connection: %v", err)
+	}
+	if !strings.Contains(updatedConn.Data, `"freebuffModel":"z-ai/glm-5.3-flash"`) {
+		t.Errorf("expected connection data to contain freebuffModel, got %s", updatedConn.Data)
+	}
+}
 func TestHandleFreebuffSessionStatus_Unauthorized(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()

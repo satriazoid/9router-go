@@ -444,13 +444,13 @@ func (r *Repo) GetComboByName(name string) (*models.Combo, error) {
 		return nil, err
 	}
 	combo.Strategy = "fallback" // default
-
-	// strategy column may exist in newer DBs
-	var strat string
-	if err := r.db.QueryRow("SELECT strategy FROM combos WHERE id = ?", combo.ID).Scan(&strat); err == nil && strat != "" {
-		combo.Strategy = strat
+	if s, err := r.GetSettings(); err == nil && s != nil {
+		if cs, ok := s.ComboStrategies[combo.Name]; ok && cs.Strategy != "" {
+			combo.Strategy = cs.Strategy
+		} else if s.ComboStrategy != "" {
+			combo.Strategy = s.ComboStrategy
+		}
 	}
-
 	return &combo, nil
 }
 
@@ -467,6 +467,14 @@ func (r *Repo) GetComboById(id string) (*models.Combo, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	combo.Strategy = "fallback" // default
+	if s, err := r.GetSettings(); err == nil && s != nil {
+		if cs, ok := s.ComboStrategies[combo.Name]; ok && cs.Strategy != "" {
+			combo.Strategy = cs.Strategy
+		} else if s.ComboStrategy != "" {
+			combo.Strategy = s.ComboStrategy
+		}
 	}
 	return &combo, nil
 }
@@ -534,6 +542,7 @@ func (r *Repo) GetCombos() ([]*models.Combo, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	settings, _ := r.GetSettings()
 
 	var combos []*models.Combo
 	for rows.Next() {
@@ -541,6 +550,14 @@ func (r *Repo) GetCombos() ([]*models.Combo, error) {
 		err := rows.Scan(&combo.ID, &combo.Name, &combo.Kind, &combo.Models, &combo.CreatedAt, &combo.UpdatedAt)
 		if err != nil {
 			return nil, err
+		}
+		combo.Strategy = "fallback"
+		if settings != nil {
+			if cs, ok := settings.ComboStrategies[combo.Name]; ok && cs.Strategy != "" {
+				combo.Strategy = cs.Strategy
+			} else if settings.ComboStrategy != "" {
+				combo.Strategy = settings.ComboStrategy
+			}
 		}
 		combos = append(combos, &combo)
 	}

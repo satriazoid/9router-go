@@ -61,10 +61,6 @@
       <p class="text-xs text-text-muted mt-0.5">
         Your model can't read image/audio? Auto-switches to a model in the pool below.
       </p>
-      <ul class="mt-1.5 text-[11px] text-text-muted flex flex-col gap-0.5">
-        <li><span class="font-medium text-text-main">Vision</span> — images (png, jpg, webp, …)</li>
-        <li><span class="font-medium text-text-main">Audio</span> — audio input</li>
-      </ul>
     </div>
   </div>
   <div class="flex flex-col gap-4">
@@ -78,13 +74,13 @@
           />
 
           <div class="size-8 rounded-lg bg-brand-500/10 flex items-center justify-center shrink-0">
-            <Eye class="w-4 h-4 text-brand-500" />
+            <span class="material-symbols-outlined text-brand-500 text-[18px]">visibility</span>
           </div>
 
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
               <code class="font-mono text-sm font-medium text-text-main">Vision</code>
-              <span class="text-[10px] text-text-muted">— Images</span>
+              <span class="text-[10px] text-text-muted">— images (png, jpg, webp, …)</span>
             </div>
             <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {#if capacityAdapter.vision.models.length === 0}
@@ -176,13 +172,13 @@
           />
 
           <div class="size-8 rounded-lg bg-brand-500/10 flex items-center justify-center shrink-0">
-            <Headphones class="w-4 h-4 text-brand-500" />
+            <span class="material-symbols-outlined text-brand-500 text-[18px]">graphic_eq</span>
           </div>
 
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
               <code class="font-mono text-sm font-medium text-text-main">Audio</code>
-              <span class="text-[10px] text-text-muted">— Audio input</span>
+              <span class="text-[10px] text-text-muted">— audio input</span>
             </div>
             <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {#if capacityAdapter.audioInput.models.length === 0}

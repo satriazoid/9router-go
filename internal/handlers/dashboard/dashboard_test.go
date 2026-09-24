@@ -75,6 +75,14 @@ func setupTestDB(t *testing.T) (*db.Repo, func()) {
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			data TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS providerNodes (
+			id TEXT PRIMARY KEY,
+			type TEXT,
+			name TEXT,
+			data TEXT NOT NULL,
+			createdAt TEXT NOT NULL,
+			updatedAt TEXT NOT NULL
+		);`,
 	}
 
 	for _, query := range schema {
@@ -423,12 +431,14 @@ func TestCustomModelsEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get custom models expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var customResp map[string]any
+	var customResp struct {
+		Models []any `json:"models"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &customResp); err != nil {
 		t.Fatalf("unmarshal custom models: %v", err)
 	}
-	if len(customResp) != 1 {
-		t.Fatalf("expected 1 custom model, got %d", len(customResp))
+	if len(customResp.Models) != 1 {
+		t.Fatalf("expected 1 custom model, got %d", len(customResp.Models))
 	}
 
 	// 4. DELETE /api/models/custom/{key}

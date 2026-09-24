@@ -81,6 +81,14 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/settings/database", h.HandleImportDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
 
+
+		// Tunnel & Tailscale
+		r.Get("/tunnel/status", h.HandleTunnelStatus)
+		r.Post("/tunnel/enable", h.HandleTunnelEnable)
+		r.Post("/tunnel/disable", h.HandleTunnelDisable)
+		r.Get("/tunnel/tailscale-check", h.HandleTailscaleCheck)
+		r.Post("/tunnel/tailscale-enable", h.HandleTailscaleEnable)
+		r.Post("/tunnel/tailscale-disable", h.HandleTailscaleDisable)
 		// Usage & Quotas
 		r.Get("/usage/providers", h.HandleGetUsageProviders)
 		r.Get("/usage/{connectionId}", h.HandleGetConnectionUsage)

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from '../api/client'
+  import ChangelogModal from './ChangelogModal.svelte'
   import { type ActiveTab } from '../lib/router'
 
   let {
@@ -25,6 +26,7 @@
   let isDonateOpen = $state(false)
   let isAppDrawerOpen = $state(false)
   let isLangMenuOpen = $state(false)
+  let isChangelogOpen = $state(false)
 
   $effect(() => {
     if (typeof window !== 'undefined') {
@@ -328,16 +330,17 @@
             <span class="flex-1 text-left">Theme</span>
           </button>
 
-          <a
-            href="https://github.com/decolua/9router"
-            target="_blank"
-            rel="noopener noreferrer"
-            onclick={() => (isAppDrawerOpen = false)}
+          <button
+            type="button"
+            onclick={() => {
+              isAppDrawerOpen = false
+              isChangelogOpen = true
+            }}
             class="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-text-main hover:bg-surface-2 transition-colors cursor-pointer"
           >
             <span class="material-symbols-outlined text-[20px] text-text-muted">history</span>
-            <span class="flex-1 text-left">Changelog</span>
-          </a>
+            <span class="flex-1 text-left">Change Log</span>
+          </button>
 
           <div class="h-px bg-border-subtle my-1"></div>
 
@@ -386,41 +389,41 @@
       </div>
 
       <p class="text-sm text-text-muted leading-relaxed">
-        9Router is a fast, free and open-source high-throughput AI gateway. If 9Router saves you time and tokens, consider supporting the project!
+        9router-go is a fast, lightweight and open-source high-throughput AI gateway in Go. If 9router-go saves you time and tokens, consider supporting the project!
       </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <a
-          href="https://github.com/sponsors/decolua"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="flex items-center gap-3 p-3.5 rounded-xl border border-border-subtle bg-surface-2 hover:border-pink-500/40 transition-all group"
-        >
-          <div class="size-10 rounded-full flex items-center justify-center bg-pink-500/10 text-pink-500">
-            <span class="material-symbols-outlined text-[22px]">favorite</span>
-          </div>
-          <div class="min-w-0">
-            <div class="text-sm font-semibold text-text-main group-hover:text-pink-500 transition-colors">
-              GitHub Sponsors
-            </div>
-            <div class="text-xs text-text-muted">Sponsor monthly or once</div>
-          </div>
-        </a>
-
-        <a
-          href="https://9english.net/"
+          href="https://github.com/luqman-v1/9router-go"
           target="_blank"
           rel="noopener noreferrer"
           class="flex items-center gap-3 p-3.5 rounded-xl border border-border-subtle bg-surface-2 hover:border-brand-500/40 transition-all group"
         >
           <div class="size-10 rounded-full flex items-center justify-center bg-brand-500/10 text-brand-500">
-            <span class="material-symbols-outlined text-[22px]">language</span>
+            <span class="material-symbols-outlined text-[22px]">star</span>
           </div>
           <div class="min-w-0">
             <div class="text-sm font-semibold text-text-main group-hover:text-brand-500 transition-colors">
-              9English Project
+              GitHub Repository
             </div>
-            <div class="text-xs text-text-muted">Visit sister ecosystem</div>
+            <div class="text-xs text-text-muted">Star & contribute on GitHub</div>
+          </div>
+        </a>
+
+        <a
+          href="https://github.com/luqman-v1/9router-go/releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-3 p-3.5 rounded-xl border border-border-subtle bg-surface-2 hover:border-pink-500/40 transition-all group"
+        >
+          <div class="size-10 rounded-full flex items-center justify-center bg-pink-500/10 text-pink-500">
+            <span class="material-symbols-outlined text-[22px]">rocket_launch</span>
+          </div>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-text-main group-hover:text-pink-500 transition-colors">
+              Releases & Updates
+            </div>
+            <div class="text-xs text-text-muted">Latest releases & changelog</div>
           </div>
         </a>
       </div>
@@ -437,3 +440,6 @@
     </div>
   </div>
 {/if}
+
+<!-- Change Log Modal -->
+<ChangelogModal isOpen={isChangelogOpen} onClose={() => (isChangelogOpen = false)} />

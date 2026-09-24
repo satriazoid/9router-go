@@ -112,12 +112,20 @@ export async function fetchProviderModelsData(
     let customModels: CustomModelData[] = []
     if (Array.isArray(customs)) {
       customModels = customs
+    } else if (customs && typeof customs === 'object' && 'models' in customs && Array.isArray(customs.models)) {
+      customModels = customs.models as CustomModelData[]
     } else if (customs && typeof customs === 'object') {
-      customModels = Object.entries(customs).map(([k, v]: [string, any]) =>
-        typeof v === 'object' && v !== null ? { id: k, ...v } : { id: k, name: String(v) }
-      )
+      const rec = customs as Record<string, unknown>
+      customModels = Object.entries(rec).map(([k, v]) => {
+        if (v && typeof v === 'object') {
+          const item = v as Record<string, unknown>
+          return { id: k, ...item }
+        }
+        return { id: k, name: String(v) }
+      })
     }
-    const disArr = (disabled && (disabled as any)[storageAlias]) || (disabled && (disabled as any)[providerId]) || []
+    const disRec = disabled && typeof disabled === 'object' ? (disabled as Record<string, unknown>) : null
+    const disArr = (disRec && disRec[storageAlias]) || (disRec && disRec[providerId]) || []
     return {
       customModels,
       disabledModelIds: Array.isArray(disArr) ? disArr : [],

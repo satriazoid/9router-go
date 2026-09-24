@@ -72,6 +72,10 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 			createdAt TEXT NOT NULL,
 			updatedAt TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			id INTEGER PRIMARY KEY,
+			data TEXT NOT NULL
+		);`,
 	}
 
 	for _, query := range schema {

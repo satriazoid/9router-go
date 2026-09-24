@@ -37,22 +37,26 @@
   // Local state for keys & settings
   let localKeys = $state<APIKey[]>([])
   let requireApiKey = $state(false)
+  let requireLogin = $state(true)
+  let hasPassword = $state(true)
   let tunnelDashboardAccess = $state(false)
   let copiedId = $state<string | null>(null)
   let shownKeyIds = $state<Set<string>>(new Set())
 
-  // Origin resolution
-  let localOrigin = $state('http://localhost:20128')
+  // Origin resolution (SSR fallback uses the Go default port 20130)
+  let localOrigin = $state('http://localhost:20130')
+  let localEndpoint = $derived(`${localOrigin}/v1`)
   onMount(() => {
     if (typeof window !== 'undefined') {
       localOrigin = window.location.origin
     }
   })
-  let localEndpoint = $derived(`${localOrigin}/v1`)
-
   // Tunnel state
   let tunnelEnabled = $state(false)
   let tunnelRunning = $state(false)
+  let tunnelReachable = $state(false)
+  let tunnelEverReachable = $state(false)
+  let tunnelMissCount = 0
   let tunnelUrl = $state('')
   let publicUrl = $state('')
   let isTunnelLoading = $state(false)
@@ -64,6 +68,9 @@
   // Tailscale state
   let tailscaleEnabled = $state(false)
   let tailscaleRunning = $state(false)
+  let tailscaleReachable = $state(false)
+  let tailscaleEverReachable = $state(false)
+  let tailscaleMissCount = 0
   let tailscaleUrl = $state('')
   let isTailscaleLoading = $state(false)
   let tailscaleStatusText = $state('')
@@ -94,13 +101,55 @@
       localKeys = [...apiKeys]
     }
   })
-
   $effect(() => {
     if (settings) {
       requireApiKey = !!settings.requireApiKey
       tunnelDashboardAccess = !!settings.tunnelDashboardAccess
+      if (typeof settings.requireLogin === 'boolean') requireLogin = settings.requireLogin
+      if (typeof settings.hasPassword === 'boolean') hasPassword = settings.hasPassword
     }
   })
+
+  // Browser-side health probe: must reach origin (not just CF/TS edge).
+  // /api/health sets Access-Control-Allow-Origin: * so CORS works through tunnel.
+  async function clientPingUrl(url: string): Promise<boolean> {
+    if (!url) return false
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+      const res = await fetch(`${url}/api/health`, {
+        mode: 'cors',
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
+  function markReachable(ok: boolean, kind: 'tunnel' | 'tailscale') {
+    // Debounce reachable=false: the server may briefly return false during a
+    // background refresh, so only flip after 5 consecutive misses (upstream).
+    if (kind === 'tunnel') {
+      if (ok) {
+        tunnelMissCount = 0
+        tunnelReachable = true
+        tunnelEverReachable = true
+      } else if (++tunnelMissCount >= 5) {
+        tunnelReachable = false
+      }
+    } else {
+      if (ok) {
+        tailscaleMissCount = 0
+        tailscaleReachable = true
+        tailscaleEverReachable = true
+      } else if (++tailscaleMissCount >= 5) {
+        tailscaleReachable = false
+      }
+    }
+  }
 
   // Load status
   async function loadStatus() {
@@ -117,6 +166,8 @@
       if (settingsRes) {
         requireApiKey = !!settingsRes.requireApiKey
         tunnelDashboardAccess = !!settingsRes.tunnelDashboardAccess
+        if (typeof settingsRes.requireLogin === 'boolean') requireLogin = settingsRes.requireLogin
+        if (typeof settingsRes.hasPassword === 'boolean') hasPassword = settingsRes.hasPassword
       }
       if (tunnelRes) {
         applyTunnelStatus(tunnelRes)
@@ -142,14 +193,34 @@
 
   onMount(() => {
     loadStatus()
-    const interval = setInterval(async () => {
+    // Status poll only while degraded; healthy tunnels rely on the browser
+    // ping below (upstream STATUS_POLL_FAST_MS behaviour).
+    const statusTimer = setInterval(async () => {
       if (typeof document !== 'undefined' && document.hidden) return
+      const tunnelHealthy = !tunnelEnabled || tunnelReachable
+      const tsHealthy = !tailscaleEnabled || tailscaleReachable
+      if (tunnelHealthy && tsHealthy) return
       try {
         const res = await api.getTunnelStatus()
         if (res) applyTunnelStatus(res)
       } catch {}
-    }, 6000)
-    return () => clearInterval(interval)
+    }, 5000)
+    // Browser-side ping: probe tunnel/tailscale URLs directly every 10s.
+    const pingTimer = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      if (tunnelEnabled && (tunnelUrl || publicUrl)) {
+        const direct = tunnelUrl ? clientPingUrl(tunnelUrl) : Promise.resolve(false)
+        const pub = publicUrl ? clientPingUrl(publicUrl) : Promise.resolve(false)
+        markReachable((await direct) || (await pub), 'tunnel')
+      }
+      if (tailscaleEnabled && tailscaleUrl) {
+        markReachable(await clientPingUrl(tailscaleUrl), 'tailscale')
+      }
+    }, 10000)
+    return () => {
+      clearInterval(statusTimer)
+      clearInterval(pingTimer)
+    }
   })
 
   function copy(text: string, id: string) {
@@ -200,6 +271,15 @@
     }
   }
 
+  // Security gate: block remote exposure while dashboard uses default
+  // password or login is off (upstream isLoginUnsafe).
+  let isLoginUnsafe = $derived(!requireLogin || !hasPassword)
+  let unsafeReason = $derived(
+    !requireLogin
+      ? 'Enable "Require login" and set a custom password before activating the tunnel.'
+      : 'Change the default dashboard password before activating the tunnel.'
+  )
+
   // Start Cloudflare Tunnel
   async function startTunnel() {
     showEnableTunnelModal = false
@@ -246,6 +326,10 @@
 
   // Tailscale handlers
   async function handleTailscaleClick() {
+    if (isLoginUnsafe) {
+      tailscaleError = `Security required: ${unsafeReason}`
+      return
+    }
     tailscaleError = null
     try {
       const check = await api.checkTailscale()
@@ -432,16 +516,16 @@
           Tunnel
         </span>
 
-        {#if tunnelRunning && tunnelUrl}
+        {#if tunnelEnabled && !isTunnelLoading && tunnelReachable}
           <input
             type="text"
-            value="{tunnelUrl}/v1"
+            value="{publicUrl || tunnelUrl}/v1"
             readonly
             class="flex-1 font-mono text-sm bg-bg border border-border rounded-lg px-3 py-2 text-text-main selection:bg-brand-500/30"
           />
           <button
             type="button"
-            onclick={() => copy(`${tunnelUrl}/v1`, 'tunnel_url')}
+            onclick={() => copy(`${publicUrl || tunnelUrl}/v1`, 'tunnel_url')}
             class="p-2 hover:bg-surface-2 rounded-lg text-text-muted hover:text-brand-500 transition-colors shrink-0 cursor-pointer border border-border"
             title="Copy Tunnel URL"
           >
@@ -451,6 +535,19 @@
               <Copy class="w-4 h-4" />
             {/if}
           </button>
+          <button
+            type="button"
+            onclick={() => (showDisableTunnelModal = true)}
+            class="p-2 hover:bg-danger/10 rounded-lg text-danger transition-colors shrink-0 cursor-pointer border border-danger/20"
+            title="Disable Tunnel"
+          >
+            <Power class="w-4 h-4" />
+          </button>
+        {:else if tunnelEnabled && !isTunnelLoading && !tunnelReachable}
+          <div class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/25 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
+            <Loader2 class="w-4 h-4 animate-spin text-amber-500" />
+            <span>{tunnelEverReachable ? 'Tunnel reconnecting...' : 'Tunnel checking...'}</span>
+          </div>
           <button
             type="button"
             onclick={() => (showDisableTunnelModal = true)}
@@ -492,7 +589,9 @@
           <button
             type="button"
             onclick={() => {
-              if (!requireApiKey) {
+              if (isLoginUnsafe) {
+                tunnelError = `Security required: ${unsafeReason}`
+              } else if (!requireApiKey) {
                 tunnelError = 'Security required: Enable "Require API key" before activating the tunnel.'
               } else {
                 showEnableTunnelModal = true
@@ -516,7 +615,7 @@
           Tailscale
         </span>
 
-        {#if tailscaleRunning && tailscaleUrl}
+        {#if tailscaleEnabled && !isTailscaleLoading && tailscaleReachable}
           <input
             type="text"
             value="{tailscaleUrl}/v1"
@@ -535,6 +634,19 @@
               <Copy class="w-4 h-4" />
             {/if}
           </button>
+          <button
+            type="button"
+            onclick={() => (showDisableTailscaleModal = true)}
+            class="p-2 hover:bg-danger/10 rounded-lg text-danger transition-colors shrink-0 cursor-pointer border border-danger/20"
+            title="Disable Tailscale"
+          >
+            <Power class="w-4 h-4" />
+          </button>
+        {:else if tailscaleEnabled && !isTailscaleLoading && !tailscaleReachable}
+          <div class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/25 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
+            <Loader2 class="w-4 h-4 animate-spin text-amber-500" />
+            <span>{tailscaleEverReachable ? 'Tailscale reconnecting...' : 'Tailscale checking...'}</span>
+          </div>
           <button
             type="button"
             onclick={() => (showDisableTailscaleModal = true)}
@@ -585,7 +697,13 @@
           </div>
           <button
             type="button"
-            onclick={handleTailscaleClick}
+            onclick={() => {
+              if (isLoginUnsafe) {
+                tailscaleError = `Security required: ${unsafeReason}`
+              } else {
+                handleTailscaleClick()
+              }
+            }}
             class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white font-semibold text-xs transition cursor-pointer shadow-sm"
           >
             <Shield class="w-3.5 h-3.5" />
@@ -595,20 +713,48 @@
       </div>
     </div>
 
-    <!-- Security Warning Banner if exposed without Require API Key -->
-    {#if (tunnelRunning || tailscaleRunning) && !requireApiKey}
-      <div class="mt-4 flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-700 dark:text-amber-400 text-xs">
+    <!-- Pre-enable security gate banner (upstream isLoginUnsafe) -->
+    {#if isLoginUnsafe && !tunnelEnabled && !tailscaleEnabled}
+      <div class="mt-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs">
         <AlertTriangle class="w-4 h-4 shrink-0 text-amber-500" />
-        <p class="flex-1 leading-relaxed">
-          Require API key is disabled — your endpoint is publicly accessible without authentication.
-        </p>
-        <button
-          type="button"
-          onclick={() => toggleRequireApiKey(true)}
-          class="font-semibold underline hover:opacity-80 shrink-0 cursor-pointer"
-        >
-          Enable
-        </button>
+        <p class="flex-1 leading-relaxed">{unsafeReason}</p>
+        <a href="/dashboard/profile" class="font-semibold underline hover:opacity-80 shrink-0">
+          Open settings
+        </a>
+      </div>
+    {/if}
+
+    <!-- Security warnings when tunnel or tailscale is active -->
+    {#if (tunnelEnabled || tailscaleEnabled) && (!requireApiKey || isLoginUnsafe)}
+      <div class="mt-4 flex flex-col gap-2">
+        {#if !requireApiKey}
+          <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs">
+            <AlertTriangle class="w-4 h-4 shrink-0 text-amber-500" />
+            <p class="flex-1 leading-relaxed">
+              Require API key is disabled — your endpoint is publicly accessible without authentication.
+            </p>
+            <button
+              type="button"
+              onclick={() => toggleRequireApiKey(true)}
+              class="font-semibold underline hover:opacity-80 shrink-0 cursor-pointer"
+            >
+              Enable
+            </button>
+          </div>
+        {/if}
+        {#if isLoginUnsafe}
+          <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs">
+            <AlertTriangle class="w-4 h-4 shrink-0 text-amber-500" />
+            <p class="flex-1 leading-relaxed">
+              {!requireLogin
+                ? 'Require login is disabled — anyone can access your dashboard via tunnel.'
+                : 'Dashboard uses the default password — change it in Profile settings.'}
+            </p>
+            <a href="/dashboard/profile" class="font-semibold underline hover:opacity-80 shrink-0">
+              {!requireLogin ? 'Enable' : 'Change password'}
+            </a>
+          </div>
+        {/if}
       </div>
     {/if}
 

@@ -9,6 +9,12 @@ import (
 	"9router/proxy/internal/constants"
 )
 
+// deterministicJSON makes Go maps serialize with their keys in sorted order, so
+// the same data always produces byte-identical JSON. Without it, encoding/json/v2
+// marshals maps in the runtime's randomized iteration order, which makes list
+// order shift between requests (e.g. the dashboard models list on every refresh).
+var deterministicJSON = json.Deterministic(true)
+
 // errorTypes maps HTTP status codes to OpenAI-compatible error types and codes.
 var errorTypes = map[int]struct {
 	errType string
@@ -48,7 +54,7 @@ func WriteJSONError(w http.ResponseWriter, status int, message string) {
 			"code":    errCode,
 		},
 	}
-	if err := json.MarshalWrite(w, errResp); err != nil {
+	if err := json.MarshalWrite(w, errResp, deterministicJSON); err != nil {
 		w.Write([]byte(`{"error":{"message":"internal error","type":"server_error","code":"internal_server_error"}}`))
 	}
 }
@@ -57,7 +63,7 @@ func WriteJSONError(w http.ResponseWriter, status int, message string) {
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(status)
-	if err := json.MarshalWrite(w, data); err != nil {
+	if err := json.MarshalWrite(w, data, deterministicJSON); err != nil {
 		w.Write([]byte(`{"error":{"message":"internal error","type":"invalid_request_error","code":500}}`))
 	}
 }

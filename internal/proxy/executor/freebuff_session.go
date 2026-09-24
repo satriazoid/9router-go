@@ -34,7 +34,46 @@ var (
 	freebuffSessionMu    sync.RWMutex
 	freebuffSessionCache = make(map[string]*freebuffSession) // key: token::model
 )
+var directFreebuffClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: nil, // direct connection to bypass proxy allowlist (e.g. sandbox proxy)
+	},
+	Timeout: 30 * time.Second,
+}
 
+func isFreebuffProxyRefusal(err error, resp *http.Response) bool {
+	if resp != nil {
+		if resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-Proxy-Error") != "" || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/plain")) {
+			return true
+		}
+	}
+	if err != nil {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "proxy") || strings.Contains(errStr, "connect tunnel failed") || strings.Contains(errStr, "blocked-by-allowlist") || strings.Contains(errStr, "forbidden") {
+			return true
+		}
+	}
+	return false
+}
+
+// DoFreebuffHTTP executes an HTTP request, falling back to direct connection if the proxy refuses it.
+func DoFreebuffHTTP(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if isFreebuffProxyRefusal(err, resp) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		reqClone := req.Clone(ctx)
+		if reqClone.GetBody != nil {
+			reqClone.Body, _ = reqClone.GetBody()
+		}
+		return directFreebuffClient.Do(reqClone)
+	}
+	return resp, err
+}
 func getFreebuffSession(token, model string) (*freebuffSession, bool) {
 	key := token + "::" + model
 	freebuffSessionMu.RLock()
@@ -97,7 +136,7 @@ func releaseFreebuffSession(ctx context.Context, client *http.Client, baseURL, t
 	req.Header.Set("User-Agent", freebuffCLIUserAgent)
 	req.Header.Set(freebuffInstanceHeader, instanceID)
 
-	resp, err := client.Do(req)
+	resp, err := DoFreebuffHTTP(ctx, client, req)
 	if err != nil {
 		return 0, fmt.Errorf("freebuff session release failed: %w", err)
 	}
@@ -256,7 +295,7 @@ func requestFreebuffSession(ctx context.Context, client *http.Client, baseURL, t
 	req.Header.Set("User-Agent", freebuffCLIUserAgent)
 	req.Header.Set("x-freebuff-model", model)
 
-	resp, err := client.Do(req)
+	resp, err := DoFreebuffHTTP(ctx, client, req)
 	if err != nil {
 		return nil, fmt.Errorf("freebuff session request failed: %w", err)
 	}

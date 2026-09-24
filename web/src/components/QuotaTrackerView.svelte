@@ -88,6 +88,20 @@
 
   // Quota visibility (hidden rows), persisted via /api/settings quotaVisibility
   let quotaVisibility = $state<QuotaVisibility>({})
+  let autoPingMaps = $state<{ claude: Record<string, boolean>; codex: Record<string, boolean> }>({
+    claude: {},
+    codex: {},
+  })
+
+  // Edit modal state
+  let editingConnection = $state<ProviderConnection | null>(null)
+  let editName = $state('')
+  let editPriority = $state(1)
+  let isTestingEdit = $state(false)
+  let editTestStatus = $state<'ok' | 'error' | null>(null)
+  let editTestError = $state<string | null>(null)
+  let isSavingEdit = $state(false)
+  let copiedArnId = $state<string | null>(null)
 
   // Timers
   let intervalTimer: ReturnType<typeof setInterval> | null = null
@@ -96,6 +110,128 @@
   let initialLoadDone = false
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
+  const KIRO_METHOD_LABELS: Record<string, string> = {
+    'builder-id': 'AWS Builder ID',
+    idc: 'IAM Identity Center',
+    google: 'Google',
+    github: 'GitHub',
+    imported: 'Imported Token',
+    api_key: 'API Key',
+  }
+
+  const AUTO_PING_SETTINGS_KEYS: Record<string, string> = {
+    claude: 'claudeAutoPing',
+    codex: 'codexAutoPing',
+  }
+
+  const AUTO_PING_TOOLTIPS: Record<string, string> = {
+    claude: 'When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.',
+    codex: 'Auto-starts the next 5h Codex window after reset by sending a tiny gpt-5.5 request. Consumes a small amount of quota.',
+  }
+
+  function kiroMethodLabel(conn: ProviderConnectionLike): string {
+    const m = (conn.providerSpecificData as Record<string, unknown> | undefined)?.authMethod as string | undefined
+    if (m && KIRO_METHOD_LABELS[m]) return KIRO_METHOD_LABELS[m]
+    return conn.authType === 'api_key' ? 'API Key' : 'OAuth'
+  }
+
+  function kiroRegion(conn: ProviderConnectionLike): string {
+    const r = (conn.providerSpecificData as Record<string, unknown> | undefined)?.region as string | undefined
+    if (r) return r
+    const arn = (conn.providerSpecificData as Record<string, unknown> | undefined)?.profileArn
+    const seg = typeof arn === 'string' ? arn.split(':')[3] : ''
+    return seg || ''
+  }
+
+  function getConnectionSecondaryLabel(conn: ProviderConnectionLike): string | null {
+    if (conn.name?.trim() && conn.email?.trim() && conn.name.trim() !== conn.email.trim()) {
+      return conn.email.trim()
+    }
+    if (conn.name?.trim() && conn.displayName?.trim() && conn.name.trim() !== conn.displayName.trim()) {
+      return conn.displayName.trim()
+    }
+    return null
+  }
+
+  function getCodexResetCreditCount(quota?: QuotaEntry): number {
+    const value = (quota?.raw as { resetCredits?: { availableCount?: unknown } } | undefined)?.resetCredits?.availableCount
+    const count = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(count) ? Math.max(0, count) : 0
+  }
+
+  async function toggleAutoPing(connId: string, provider: string, enabled: boolean) {
+    const key = AUTO_PING_SETTINGS_KEYS[provider]
+    if (!key) return
+    const currentMap = autoPingMaps[provider as 'claude' | 'codex'] || {}
+    const nextMap = { ...currentMap, [connId]: enabled }
+    autoPingMaps = {
+      ...autoPingMaps,
+      [provider]: nextMap,
+    }
+    try {
+      await api.updateSettingsRaw({
+        [key]: nextMap,
+      })
+    } catch (err) {
+      console.error('Failed to update autoPing:', err)
+    }
+  }
+
+  function openEditModal(conn: ProviderConnection) {
+    editingConnection = conn
+    editName = conn.name || ''
+    editPriority = conn.priority ?? 1
+    editTestStatus = null
+    editTestError = null
+  }
+
+  async function testEditingConnection() {
+    if (!editingConnection) return
+    isTestingEdit = true
+    editTestStatus = null
+    editTestError = null
+    try {
+      const res = await api.testConnection(editingConnection.id)
+      if (res?.valid) {
+        editTestStatus = 'ok'
+      } else {
+        editTestStatus = 'error'
+        editTestError = res?.error || 'Test failed'
+      }
+    } catch (err) {
+      editTestStatus = 'error'
+      editTestError = err instanceof Error ? err.message : 'Test failed'
+    } finally {
+      isTestingEdit = false
+    }
+  }
+
+  async function saveEditingConnection() {
+    if (!editingConnection) return
+    isSavingEdit = true
+    try {
+      await api.updateConnection(editingConnection.id, {
+        name: editName.trim(),
+        priority: editPriority,
+      })
+      editingConnection = null
+      await fetchConnections(page)
+    } catch (err) {
+      console.error('Failed to save connection:', err)
+    } finally {
+      isSavingEdit = false
+    }
+  }
+
+  function copyArn(text?: string, id?: string) {
+    if (!text || !id) return
+    navigator.clipboard?.writeText(text)
+    copiedArnId = id
+    setTimeout(() => {
+      if (copiedArnId === id) copiedArnId = null
+    }, 2000)
+  }
+
   function providerLabel(providerId: string): string {
     const cat = PROVIDER_CATALOG.find((p) => p.id === providerId || p.alias === providerId)
     return cat?.name || providerId
@@ -117,7 +253,6 @@
   function getConnectionLabel(conn: ProviderConnectionLike): string | null {
     return conn.name?.trim() || conn.email?.trim() || conn.displayName?.trim() || null
   }
-
   // ─── Data loading ──────────────────────────────────────────────────────────
   async function fetchConnections(targetPage = page): Promise<ProviderConnection[]> {
     try {
@@ -431,7 +566,12 @@
     api
       .getSettings()
       .then((s) => {
-        quotaVisibility = (s as QuotaVisibility)?.quotaVisibility || {}
+        const raw = s as unknown as Record<string, unknown>
+        quotaVisibility = (raw?.quotaVisibility as QuotaVisibility) || {}
+        autoPingMaps = {
+          claude: (raw?.claudeAutoPing as Record<string, boolean>) || {},
+          codex: (raw?.codexAutoPing as Record<string, boolean>) || {},
+        }
       })
       .catch(() => {})
 
@@ -769,26 +909,78 @@
                   {#if getConnectionLabel(conn)}
                     <p class="truncate text-xs text-text-muted">{getConnectionLabel(conn)}</p>
                   {/if}
-                  {#if conn.email && conn.name && conn.email.trim() !== conn.name?.trim()}
-                    <p class="truncate text-[11px] text-text-muted/80">{conn.email}</p>
+                  {#if getConnectionSecondaryLabel(conn)}
+                    <p class="truncate text-[11px] text-text-muted/80">{getConnectionSecondaryLabel(conn)}</p>
                   {/if}
-                  <div class="mt-1 flex flex-wrap items-center gap-1">
-                    <span
-                      class="rounded-full px-2 py-0.5 text-[10px] font-semibold {isActive
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                        : conn.testStatus === 'error' ||
-                            conn.testStatus === 'expired' ||
-                            conn.testStatus === 'unavailable'
-                          ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                          : 'bg-surface-3 text-text-muted'}"
-                    >
-                      {isActive ? 'active' : conn.testStatus || 'unknown'}
-                    </span>
-                  </div>
+                  {#if conn.provider === 'kiro'}
+                    <div class="mt-1 flex flex-wrap items-center gap-1">
+                      <span class="rounded-full bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-600 dark:text-brand-300">
+                        {kiroMethodLabel(conn)}
+                      </span>
+                      {#if kiroRegion(conn)}
+                        <span class="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-600 dark:text-blue-400">
+                          {kiroRegion(conn)}
+                        </span>
+                      {/if}
+                      <span
+                        class="rounded-full px-2 py-0.5 text-[10px] font-semibold {!isActive
+                          ? 'bg-surface-3 text-text-muted'
+                          : conn.testStatus === 'active' || conn.testStatus === 'success'
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : conn.testStatus === 'error' ||
+                                conn.testStatus === 'expired' ||
+                                conn.testStatus === 'unavailable'
+                              ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                              : 'bg-surface-3 text-text-muted'}"
+                      >
+                        {!isActive ? 'disabled' : conn.testStatus || 'unknown'}
+                      </span>
+                      {#if (conn.providerSpecificData as Record<string, unknown> | undefined)?.profileArn}
+                        {@const profileArn = String((conn.providerSpecificData as Record<string, unknown>).profileArn)}
+                        <button
+                          type="button"
+                          onclick={() => copyArn(profileArn, conn.id)}
+                          title={profileArn}
+                          class="inline-flex max-w-full items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[10px] text-text-muted transition-colors hover:text-primary cursor-pointer"
+                        >
+                          <span class="material-symbols-outlined text-[12px]">
+                            {copiedArnId === conn.id ? 'check' : 'content_copy'}
+                          </span>
+                          <code class="truncate font-mono">{profileArn}</code>
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
               </div>
 
               <div class="flex shrink-0 items-center gap-1">
+                {#if conn.provider === 'codex'}
+                  {@const resetCreditCount = getCodexResetCreditCount(quota)}
+                  <button
+                    type="button"
+                    disabled={resetCreditCount <= 0 || isLoading || rowBusy}
+                    title={resetCreditCount > 0 ? `Codex reset credits: ${resetCreditCount}` : 'No Codex reset credits available'}
+                    class="flex h-8 min-w-10 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-60 {resetCreditCount > 0 ? 'border-primary/30 bg-primary/5 text-primary hover:bg-primary/10' : 'border-border-subtle bg-surface-2 text-text-muted'}"
+                  >
+                    <span class="material-symbols-outlined text-[15px]">restart_alt</span>
+                    <span>{resetCreditCount}</span>
+                  </button>
+                {/if}
+
+                {#if (conn.provider === 'claude' || conn.provider === 'codex') && conn.authType === 'oauth'}
+                  {@const isAutoPingActive = autoPingMaps[conn.provider]?.[conn.id] === true}
+                  <button
+                    type="button"
+                    onclick={() => toggleAutoPing(conn.id, conn.provider, !isAutoPingActive)}
+                    title={AUTO_PING_TOOLTIPS[conn.provider]}
+                    aria-label="Toggle auto-ping"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-3 cursor-pointer {isAutoPingActive ? 'text-primary' : 'text-text-muted'}"
+                  >
+                    <span class="material-symbols-outlined text-[18px]">bolt</span>
+                  </button>
+                {/if}
+
                 <!-- Refresh quota -->
                 <button
                   type="button"
@@ -796,7 +988,7 @@
                   disabled={isLoading || rowBusy}
                   aria-label="Refresh quota"
                   title="Refresh quota"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-3 hover:text-text-main disabled:opacity-50"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-3 hover:text-text-main disabled:opacity-50 cursor-pointer"
                 >
                   <span
                     class="material-symbols-outlined text-[18px] {isLoading
@@ -804,6 +996,19 @@
                       : ''}">refresh</span
                   >
                 </button>
+
+                <!-- Edit connection -->
+                <button
+                  type="button"
+                  onclick={() => openEditModal(conn)}
+                  disabled={rowBusy}
+                  aria-label="Edit connection"
+                  title="Edit connection"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-3 hover:text-primary disabled:opacity-50 cursor-pointer"
+                >
+                  <span class="material-symbols-outlined text-[18px]">edit</span>
+                </button>
+
                 <!-- Delete connection -->
                 <button
                   type="button"
@@ -811,7 +1016,7 @@
                   disabled={rowBusy}
                   aria-label="Delete connection"
                   title="Delete connection"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50 cursor-pointer"
                 >
                   <span
                     class="material-symbols-outlined text-[18px] {deletingId === conn.id
@@ -819,6 +1024,7 @@
                       : ''}">delete</span
                   >
                 </button>
+
                 <div
                   class="inline-flex items-center pl-0.5"
                   title={isActive ? 'Disable connection' : 'Enable connection'}
@@ -844,8 +1050,7 @@
               </div>
             {:else if error}
               <div class="py-5 text-center">
-                <span class="material-symbols-outlined text-[28px] text-red-500">error</span>
-                <p class="mt-1.5 text-xs text-text-muted">{error}</p>
+                <p class="text-xs text-text-muted">{error}</p>
               </div>
             {:else if quota?.message}
               <div class="py-5 text-center">
@@ -971,3 +1176,91 @@
     </div>
   {/if}
 </div>
+
+{#if editingConnection}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      class="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+      onclick={() => (editingConnection = null)}
+      role="presentation"
+    ></div>
+    <div class="relative w-full max-w-md bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] p-6">
+      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
+        <h2 class="text-lg font-semibold text-text-main">Edit Connection</h2>
+        <button
+          type="button"
+          onclick={() => (editingConnection = null)}
+          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-quota-name">Name</label>
+          <input
+            id="edit-quota-name"
+            bind:value={editName}
+            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-main focus:outline-none focus:border-primary"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-quota-priority">Priority</label>
+          <input
+            id="edit-quota-priority"
+            type="number"
+            min="1"
+            max="100"
+            bind:value={editPriority}
+            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background text-text-main focus:outline-none focus:border-primary"
+          />
+        </div>
+
+        {#if editTestStatus === 'ok'}
+          <div class="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+            <span class="material-symbols-outlined text-sm">check_circle</span>
+            Connection is reachable
+          </div>
+        {:else if editTestStatus === 'error'}
+          <div class="flex items-center gap-1.5 text-xs text-red-500">
+            <span class="material-symbols-outlined text-sm">error</span>
+            {editTestError || 'Test failed'}
+          </div>
+        {/if}
+
+        <div class="flex items-center justify-between pt-2 border-t border-border-subtle">
+          <button
+            type="button"
+            onclick={testEditingConnection}
+            disabled={isTestingEdit}
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border text-text-main hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            <span class="material-symbols-outlined text-sm {isTestingEdit ? 'animate-spin' : ''}">
+              {isTestingEdit ? 'progress_activity' : 'science'}
+            </span>
+            {isTestingEdit ? 'Testing...' : 'Test'}
+          </button>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick={() => (editingConnection = null)}
+              class="px-3 py-1.5 text-xs font-medium rounded-md text-text-muted hover:text-text-main cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onclick={saveEditingConnection}
+              disabled={isSavingEdit}
+              class="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              {isSavingEdit ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}

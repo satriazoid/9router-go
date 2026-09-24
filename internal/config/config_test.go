@@ -251,3 +251,18 @@ func TestProvideViper(t *testing.T) {
 		t.Error("expected non-empty MACHINE_ID_SALT")
 	}
 }
+
+func TestLoadConfig_HostAndBindAddr(t *testing.T) {
+	t.Setenv("HOST", "127.0.0.1")
+	cfg := LoadConfig()
+	if cfg.Host != "127.0.0.1" {
+		t.Errorf("expected host 127.0.0.1 from HOST, got %s", cfg.Host)
+	}
+
+	t.Setenv("HOST", "")
+	t.Setenv("BIND_ADDR", "0.0.0.0")
+	cfg2 := LoadConfig()
+	if cfg2.Host != "0.0.0.0" {
+		t.Errorf("expected host 0.0.0.0 from BIND_ADDR, got %s", cfg2.Host)
+	}
+}

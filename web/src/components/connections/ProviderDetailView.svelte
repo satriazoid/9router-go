@@ -33,6 +33,7 @@
     type ProviderModelItem,
     type SuggestedModel
   } from './types'
+  import { proxyBadgeInfo } from './proxyBadge'
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import AddCompatibleNodeModal from './AddCompatibleNodeModal.svelte'
@@ -191,8 +192,10 @@
   let newCompatibleModel = $state('')
   let isAddingCompatibleModel = $state(false)
   let isImportingCompatibleModels = $state(false)
+  let isImportingLiveCatalogModels = $state(false)
   let compatibleTestId = $state<string | null>(null)
   let compatibleTestResults = $state<Record<string, 'ok' | 'error'>>({})
+  let compatibleTestErrors = $state<Record<string, string | null>>({})
   let compatibleRows = $derived.by(() => {
     const rows: Array<{ id: string; source: 'custom' | 'legacyAlias'; alias?: string }> = []
     const seen = new Set<string>()
@@ -212,7 +215,11 @@
       seen.add(full)
       rows.push({ id, source: 'legacyAlias', alias })
     }
-    return rows
+    // Display-only A–Z sort (case-insensitive) so the list order is stable
+    // instead of following the API response object's key order, which varies
+    // between requests. rows is created above on every evaluation, so the
+    // in-place sort is safe.
+    return rows.sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: 'base' }))
   })
   let canImportCompatible = $derived(providerConnections.some((c) => c.isActive !== 0))
 
@@ -233,14 +240,23 @@
   )
 
   // One-by-One Health Check state
+  // ONE_BY_ONE_DELAY_MS mirrors upstream: a pause between connections so a
+  // provider is not hit with back-to-back probes.
+  const ONE_BY_ONE_DELAY_MS = 1000
   let isTestingOneByOne = $state(false)
+  let isStoppingOneByOne = $state(false)
   let isStopTesting = $state(false)
+  let oneByOneCurrentId = $state<string | null>(null)
+  let oneByOneSummary = $state<
+    { total: number; completed: number; passed: number; failed: number; stopped: boolean } | null
+  >(null)
   let oneByOneStatuses = $state<
     Record<string, { state: 'queued' | 'testing' | 'success' | 'failed'; error?: string | null }>
   >({})
 
   // Row UI state
   let activeProxyDropdownId = $state<string | null>(null)
+  let updatingProxyConnId = $state<string | null>(null)
   let copiedModelId = $state<string | null>(null)
   let modelTestStatuses = $state<Record<string, 'ok' | 'error' | 'testing'>>({})
   let modelTestErrors = $state<Record<string, string | null>>({})
@@ -355,16 +371,37 @@
       if (e.key === OAUTH_CALLBACK_KEY || e.key === null) consumeOAuthCallback()
     }
     window.addEventListener('storage', onStorage)
+    const onWindowMessage = (e: MessageEvent) => {
+      if (e.data?.type === '9router-oauth-success' && e.data?.provider === 'antigravity') {
+        showOAuthModal = false
+        onRefresh()
+      } else if (e.data?.type === '9router-oauth-error' && e.data?.provider === 'antigravity') {
+        oauthError = `Login gagal: ${e.data.error || 'Unknown error'}`
+      }
+    }
+    window.addEventListener('message', onWindowMessage)
     let bc: BroadcastChannel | null = null
     try {
       bc = new BroadcastChannel(OAUTH_CHANNEL)
-      bc.onmessage = () => consumeOAuthCallback()
+      bc.onmessage = (e) => {
+        if (e.data?.provider === 'antigravity' && e.data?.success) {
+          showOAuthModal = false
+          onRefresh()
+          return
+        }
+        if (e.data?.provider === 'antigravity' && e.data?.error) {
+          oauthError = `Login gagal: ${e.data.error}`
+          return
+        }
+        consumeOAuthCallback()
+      }
     } catch {
       /* BroadcastChannel unavailable — poll covers it */
     }
     const timer = setInterval(consumeOAuthCallback, 1500)
     return () => {
       window.removeEventListener('storage', onStorage)
+      window.removeEventListener('message', onWindowMessage)
       try {
         bc?.close()
       } catch {
@@ -403,9 +440,16 @@
   // Connections are ordered by priority, and a disabled one can sort first —
   // its rejected credential reports `banned`/`unauthorized` and blanks the
   // panel while the live seat sits on the next account.
-  let freebuffConnection = $derived(
-    providerConnections.find((c) => c.isActive === 1) ?? providerConnections[0]
-  )
+  let selectedFreebuffConnId = $state<string>('')
+  let freebuffSessions = $state<Record<string, FreebuffSessionStatusResponse>>({})
+  let targetFreebuffConn = $derived.by(() => {
+    if (selectedFreebuffConnId) {
+      const found = providerConnections.find((c) => c.id === selectedFreebuffConnId)
+      if (found) return found
+    }
+    return providerConnections.find((c) => c.isActive === 1) ?? providerConnections[0]
+  })
+  let freebuffConnection = $derived(targetFreebuffConn)
   let freebuffSession = $state<FreebuffSessionStatusResponse | null>(null)
   let isLoadingSession = $state(false)
   let isAuthorizingFreebuff = $state(false)
@@ -418,19 +462,42 @@
   } | null>(null)
 
   async function loadFreebuffSession() {
-    if (!isFreebuff) {
+    if (!isFreebuff || providerConnections.length === 0) {
+      freebuffSession = null
+      return
+    }
+    const target = targetFreebuffConn
+    if (!target) {
       freebuffSession = null
       return
     }
     isLoadingSession = true
     try {
-      freebuffSession = await api.getFreebuffSessionStatus(freebuffConnection?.id)
+      const res = await api.getFreebuffSessionStatus(target.id)
+      freebuffSession = res
+      if (res && target.id) {
+        freebuffSessions = { ...freebuffSessions, [target.id]: res }
+      }
+      for (const c of providerConnections) {
+        if (c.id !== target.id) {
+          api.getFreebuffSessionStatus(c.id).then((st) => {
+            if (st) {
+              freebuffSessions = { ...freebuffSessions, [c.id]: st }
+            }
+          }).catch(() => {})
+        }
+      }
     } catch (err) {
       console.error('Failed to fetch Freebuff session status:', err)
       freebuffSession = null
     } finally {
       isLoadingSession = false
     }
+  }
+
+  function selectFreebuffAccount(connId: string) {
+    selectedFreebuffConnId = connId
+    loadFreebuffSession()
   }
 
   let sessionExpiresInMin = $derived.by(() => {
@@ -454,8 +521,10 @@
   // idle, so this is the only way to change models without waiting it out —
   // and it must stay an explicit user action (each switch spends a session).
   async function switchFreebuffModel(model: string) {
-    const res = await api.switchFreebuffSession(model, freebuffConnection?.id)
+    const target = targetFreebuffConn
+    const res = await api.switchFreebuffSession(model, target?.id)
     await loadFreebuffSession()
+    onRefresh()
     return res
   }
 
@@ -530,6 +599,24 @@
         fetchSuggestedModels(fetcher).then((list) => {
           suggestedModels = list
         })
+      } else if (providerId === 'antigravity' || providerId === 'gemini-cli' || providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') {
+        const activeConn = providerConnections.find((c) => c.isActive !== 0)
+        if (activeConn) {
+          api.getConnectionModels(activeConn.id).then((res) => {
+            if (Array.isArray(res?.models) && res.models.length > 0) {
+              const liveList: SuggestedModel[] = []
+              for (const m of res.models) {
+                const mid = typeof m === 'string' ? m : (m.id || m.name || m.model || '')
+                if (!mid) continue
+                const mname = typeof m === 'string' ? m : (m.name || mid)
+                liveList.push({ id: mid, name: mname })
+              }
+              suggestedModels = liveList
+            }
+          }).catch(() => {})
+        } else {
+          suggestedModels = []
+        }
       } else {
         suggestedModels = []
       }
@@ -707,10 +794,13 @@
       const current = settings?.providerStrategies || {}
       const updated = { ...current }
       if (fallback === 'round-robin') {
+        // Upstream saves `Number(sticky) || 3`; the entry is merged (not
+        // replaced) so the proxy/rotate keys saved by the free-provider card
+        // survive a round-robin toggle.
         updated[providerId] = {
           ...(updated[providerId] || {}),
           fallbackStrategy: 'round-robin',
-          stickyRoundRobinLimit: Number(sticky) || 1
+          stickyRoundRobinLimit: Number(sticky) || 3
         }
       } else {
         delete updated[providerId]
@@ -790,42 +880,97 @@
     }
   }
 
-  // One-by-One Health Test
+  // One-by-One Health Test (upstream handleRunOneByOneTest): sequential probes
+  // with a pause between them, a live summary, and a cooperative stop.
   async function runOneByOneTest() {
     if (isTestingOneByOne || providerConnections.length === 0) return
-    isTestingOneByOne = true
-    isStopTesting = false
 
-    const initial: Record<string, { state: 'queued' | 'testing' | 'success' | 'failed'; error?: string | null }> = {}
+    const queued: Record<string, { state: 'queued' | 'testing' | 'success' | 'failed'; error?: string | null }> = {}
     for (const c of providerConnections) {
-      initial[c.id] = { state: 'queued', error: null }
+      queued[c.id] = { state: 'queued', error: null }
     }
-    oneByOneStatuses = initial
 
-    for (const conn of providerConnections) {
-      if (isStopTesting) break
-      oneByOneStatuses[conn.id] = { state: 'testing', error: null }
-      try {
-        const res = await api.testConnection(conn.id)
-        if (res?.valid) {
-          oneByOneStatuses[conn.id] = { state: 'success', error: null }
-        } else {
-          oneByOneStatuses[conn.id] = { state: 'failed', error: res?.error || 'Test failed' }
+    isStopTesting = false
+    isStoppingOneByOne = false
+    oneByOneCurrentId = null
+    oneByOneStatuses = queued
+    oneByOneSummary = {
+      total: providerConnections.length,
+      completed: 0,
+      passed: 0,
+      failed: 0,
+      stopped: false
+    }
+    isTestingOneByOne = true
+
+    let passed = 0
+    let failed = 0
+
+    try {
+      for (let index = 0; index < providerConnections.length; index += 1) {
+        if (isStopTesting) {
+          oneByOneSummary = {
+            total: providerConnections.length,
+            completed: index,
+            passed,
+            failed,
+            stopped: true
+          }
+          break
         }
-      } catch (err) {
-        oneByOneStatuses[conn.id] = {
-          state: 'failed',
-          error: err instanceof Error ? err.message : 'Test failed'
+
+        const conn = providerConnections[index]
+        oneByOneCurrentId = conn.id
+        oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'testing', error: null } }
+
+        try {
+          const res = await api.testConnection(conn.id)
+          if (res?.valid) {
+            passed += 1
+            oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: { state: 'success', error: null } }
+          } else {
+            failed += 1
+            oneByOneStatuses = {
+              ...oneByOneStatuses,
+              [conn.id]: { state: 'failed', error: res?.error || 'Test failed' }
+            }
+          }
+        } catch (err) {
+          failed += 1
+          oneByOneStatuses = {
+            ...oneByOneStatuses,
+            [conn.id]: {
+              state: 'failed',
+              error: err instanceof Error ? err.message : 'Test failed'
+            }
+          }
+        }
+
+        oneByOneSummary = {
+          total: providerConnections.length,
+          completed: index + 1,
+          passed,
+          failed,
+          stopped: false
+        }
+
+        if (index < providerConnections.length - 1) {
+          await new Promise((r) => setTimeout(r, ONE_BY_ONE_DELAY_MS))
         }
       }
-      await new Promise((r) => setTimeout(r, 250))
+    } finally {
+      oneByOneCurrentId = null
+      isTestingOneByOne = false
+      isStoppingOneByOne = false
+      isStopTesting = false
+      onRefresh()
     }
-
-    isTestingOneByOne = false
   }
 
   function stopOneByOneTest() {
+    if (!isTestingOneByOne) return
     isStopTesting = true
+    isStoppingOneByOne = true
   }
 
   // Priority reordering
@@ -866,49 +1011,62 @@
     }
   }
 
+  // Per-row proxy badge (upstream ConnectionRow) — see proxyBadge.ts.
+  function proxyBadgeFor(conn: ProviderConnection) {
+    return proxyBadgeInfo(conn, proxyPools)
+  }
+
   // Proxy assignment
+  // The payload carries the binding in both places: upstream stores it under
+  // providerSpecificData.proxyPoolId, while this backend's proxy resolver reads
+  // the top-level field.
+  function proxyAssignmentPayload(poolId: string | null) {
+    return {
+      proxyPoolId: poolId,
+      providerSpecificData: { proxyPoolId: poolId }
+    }
+  }
+
   async function assignProxyPool(conn: ProviderConnection, poolId: string | null) {
     activeProxyDropdownId = null
+    updatingProxyConnId = conn.id
     try {
-      await api.updateConnection(conn.id, {
-        proxyPoolId: poolId,
-        providerSpecificData: {
-          ...(conn.providerSpecificData as Record<string, unknown> || {}),
-          proxyPoolId: poolId
-        }
-      })
+      await api.updateConnection(conn.id, proxyAssignmentPayload(poolId))
       onRefresh()
     } catch (err) {
       alert(`Failed to update proxy: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      updatingProxyConnId = null
+    }
+  }
+
+  // Upstream applies bulk proxy changes to every connection of the provider,
+  // regardless of the checkbox selection.
+  async function applyProxyAssignments(assignments: Array<{ id: string; poolId: string | null }>) {
+    isApplyingProxy = true
+    let failed = 0
+    try {
+      for (const assignment of assignments) {
+        try {
+          await api.updateConnection(assignment.id, proxyAssignmentPayload(assignment.poolId))
+        } catch {
+          failed++
+        }
+      }
+      onRefresh()
+      showApplyProxyModal = false
+      if (failed > 0) {
+        alert(`Updated with ${failed} failed request(s).`)
+      }
+    } finally {
+      isApplyingProxy = false
     }
   }
 
   async function handleApplyProxyPool(poolId: string | null) {
-    isApplyingProxy = true
-    const targets = selectedConnIds.length > 0
-      ? providerConnections.filter((c) => selectedConnIds.includes(c.id))
-      : providerConnections
-
-    let failed = 0
-    for (const conn of targets) {
-      try {
-        await api.updateConnection(conn.id, {
-          proxyPoolId: poolId,
-          providerSpecificData: {
-            ...(conn.providerSpecificData as Record<string, unknown> || {}),
-            proxyPoolId: poolId
-          }
-        })
-      } catch {
-        failed++
-      }
-    }
-    isApplyingProxy = false
-    showApplyProxyModal = false
-    onRefresh()
-    if (failed > 0) {
-      alert(`Applied with ${failed} failed update(s).`)
-    }
+    await applyProxyAssignments(
+      providerConnections.map((c) => ({ id: c.id, poolId }))
+    )
   }
 
   async function handleApplyProxyRotate() {
@@ -916,33 +1074,13 @@
       alert('No active proxy pools available.')
       return
     }
-    isApplyingProxy = true
-    const targets = selectedConnIds.length > 0
-      ? providerConnections.filter((c) => selectedConnIds.includes(c.id))
-      : providerConnections
-
-    let failed = 0
-    for (let i = 0; i < targets.length; i++) {
-      const conn = targets[i]
-      const pool = activeProxyPools[i % activeProxyPools.length]
-      try {
-        await api.updateConnection(conn.id, {
-          proxyPoolId: pool.id,
-          providerSpecificData: {
-            ...(conn.providerSpecificData as Record<string, unknown> || {}),
-            proxyPoolId: pool.id
-          }
-        })
-      } catch {
-        failed++
-      }
-    }
-    isApplyingProxy = false
-    showApplyProxyModal = false
-    onRefresh()
-    if (failed > 0) {
-      alert(`Applied with ${failed} failed update(s).`)
-    }
+    // One-to-one (rotate): connection i gets active pool i, wrapping around.
+    await applyProxyAssignments(
+      providerConnections.map((c, i) => ({
+        id: c.id,
+        poolId: activeProxyPools[i % activeProxyPools.length].id
+      }))
+    )
   }
 
   // Edit connection modal
@@ -1037,6 +1175,12 @@
     try {
       const res = await api.getAntigravityAuthorizeUrl()
       oauthAuthUrl = res.url || res.redirectUrl
+      if (res.state) {
+        rememberPending({
+          state: res.state,
+          redirectUri: `${dashboardOrigin()}/api/oauth/antigravity/callback`,
+        })
+      }
       showOAuthModal = true
       if (typeof window !== 'undefined' && oauthAuthUrl) {
         window.open(oauthAuthUrl, '_blank', 'width=600,height=700')
@@ -1339,16 +1483,25 @@
       }
 
       if (!raw) return
-      let code = raw
+      let code = raw.trim()
       let redirectUri: string | undefined
-      if (raw.includes('code=')) {
+      if (code.includes('code=')) {
         try {
-          const u = new URL(raw)
-          code = u.searchParams.get('code') || raw
+          const u = new URL(code)
+          code = u.searchParams.get('code') || code
           redirectUri = `${u.origin}${u.pathname}`
         } catch {
-          const match = raw.match(/code=([^&]+)/)
+          const match = code.match(/code=([^&]+)/)
           if (match) code = decodeURIComponent(match[1])
+        }
+      }
+      while (code.includes('%')) {
+        try {
+          const decoded = decodeURIComponent(code)
+          if (decoded === code) break
+          code = decoded
+        } catch {
+          break
         }
       }
       if (isClineOAuth) {
@@ -1518,8 +1671,8 @@
         return
       }
       const res = await api.antigravityCallback(code, redirectUri)
-      if (res?.success === false) {
-        oauthError = res?.error || 'Authorization failed'
+      if (res?.success === false || (res as { error?: string })?.error) {
+        oauthError = (res as { error?: string })?.error || res?.error || 'Authorization failed'
       } else {
         showOAuthModal = false
         onRefresh()
@@ -1727,11 +1880,23 @@
   async function handleTestCompatibleModel(modelId: string) {
     if (compatibleTestId) return
     compatibleTestId = modelId
+    compatibleTestErrors[modelId] = null
     try {
       const res = await api.testModel(`${storageAlias}/${modelId}`)
-      compatibleTestResults[modelId] = res.ok ? 'ok' : 'error'
-    } catch {
+      if (res.ok) {
+        compatibleTestResults[modelId] = 'ok'
+        compatibleTestErrors[modelId] = null
+      } else {
+        compatibleTestResults[modelId] = 'error'
+        const err = res.error || 'Model test failed'
+        compatibleTestErrors[modelId] = err
+        activeModelTestError = `${modelId}: ${err}`
+      }
+    } catch (err) {
       compatibleTestResults[modelId] = 'error'
+      const msg = err instanceof Error ? err.message : 'Model test failed'
+      compatibleTestErrors[modelId] = msg
+      activeModelTestError = `${modelId}: ${msg}`
     } finally {
       compatibleTestId = null
     }
@@ -1772,6 +1937,58 @@
       alert(err instanceof Error ? err.message : 'Failed to import models')
     } finally {
       isImportingCompatibleModels = false
+    }
+  }
+
+  async function handleImportLiveCatalogModels() {
+    if (isImportingLiveCatalogModels) return
+    const active = providerConnections.find((c) => c.isActive !== 0)
+    if (!active) {
+      alert('Add an active connection first to fetch models.')
+      return
+    }
+    isImportingLiveCatalogModels = true
+    try {
+      const res = await api.getConnectionModels(active.id)
+      const models = res.models || []
+      if (models.length === 0) {
+        alert('No models returned from /models.')
+        return
+      }
+      let imported = 0
+      for (const m of models) {
+        const modelId = typeof m === 'string' ? m : (m.id || m.name || m.model || '')
+        if (!modelId) continue
+        const alreadyBuiltin = builtInModels.some((b) => b.id === modelId)
+        const alreadyCustom = providerCustomModels.some((c) => c.id === modelId)
+        if (alreadyBuiltin || alreadyCustom) continue
+        const caps =
+          typeof m === 'object' &&
+          m !== null &&
+          'capabilities' in m &&
+          m.capabilities &&
+          typeof m.capabilities === 'object'
+            ? (m.capabilities as { vision?: boolean; reasoning?: boolean })
+            : undefined
+        await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
+          id: modelId,
+          providerAlias: storageAlias,
+          type: 'llm',
+          ...(caps ? { caps } : {}),
+        })
+        imported++
+      }
+      const modelsData = await fetchProviderModelsData(providerId, storageAlias)
+      customModels = modelsData.customModels
+      if (imported === 0) {
+        alert('All models already exist, no new models added.')
+      } else {
+        alert(`Successfully added ${imported} models.`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to import models')
+    } finally {
+      isImportingLiveCatalogModels = false
     }
   }
 </script>
@@ -1999,14 +2216,16 @@
           </button>
         {/if}
 
-        <button
-          type="button"
-          onclick={() => (showApplyProxyModal = true)}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
-        >
-          <span class="material-symbols-outlined text-[18px]">lan</span>
-          Apply Proxy
-        </button>
+        {#if providerConnections.length > 0 && proxyPools.length > 0}
+          <button
+            type="button"
+            onclick={() => (showApplyProxyModal = true)}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-7 px-3 text-xs rounded-[8px]"
+          >
+            <span class="material-symbols-outlined text-[18px]">lan</span>
+            Apply Proxy
+          </button>
+        {/if}
 
         <button
           type="button"
@@ -2022,10 +2241,11 @@
           <button
             type="button"
             onclick={stopOneByOneTest}
-            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-transparent hover:bg-surface-2 text-text-muted hover:text-text-main h-7 px-3 text-xs rounded-[8px]"
+            disabled={isStoppingOneByOne}
+            class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed bg-transparent hover:bg-surface-2 text-text-muted hover:text-text-main h-7 px-3 text-xs rounded-[8px]"
           >
             <span class="material-symbols-outlined text-[18px]">stop</span>
-            Stop
+            {isStoppingOneByOne ? 'Stopping...' : 'Stop'}
           </button>
         {/if}
 
@@ -2059,6 +2279,26 @@
         </div>
       </div>
     </div>
+
+    <!-- One-by-One summary (upstream parity) -->
+    {#if oneByOneSummary}
+      <div class="mb-4 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2 text-xs text-text-muted dark:border-white/10 dark:bg-white/[0.03]">
+        <div class="flex flex-wrap items-center gap-3">
+          <span>Total: {oneByOneSummary.total}</span>
+          <span>Completed: {oneByOneSummary.completed}</span>
+          <span>Passed: {oneByOneSummary.passed}</span>
+          <span>Failed: {oneByOneSummary.failed}</span>
+          {#if oneByOneSummary.stopped}
+            <span class="text-amber-600 dark:text-amber-400">Stopped</span>
+          {/if}
+          {#if isTestingOneByOne && oneByOneCurrentId}
+            <span>
+              Running: {providerConnections.find((conn) => conn.id === oneByOneCurrentId)?.name || oneByOneCurrentId}
+            </span>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     <!-- Select All Checkbox -->
     {#if providerConnections.length > 0}
@@ -2149,7 +2389,7 @@
           {@const status = oneByOneStatuses[conn.id]}
           {@const specificData = conn.providerSpecificData as Record<string, unknown> | undefined}
           {@const assignedPoolId = (typeof specificData?.proxyPoolId === 'string' ? specificData.proxyPoolId : null)}
-          {@const assignedPool = proxyPools.find((p) => p.id === assignedPoolId)}
+          {@const proxyBadge = proxyBadgeFor(conn)}
           {@const lastErr = conn.lastError || status?.error}
           {@const priorityNum = conn.priority ?? idx + 1}
           {@const isConnActive = conn.isActive === 1}
@@ -2199,19 +2439,33 @@
                       {conn.name || conn.email || (conn.authType === 'oauth' ? 'OAuth Account' : 'API Key Slot')}
                     </p>
                     <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
-                      <!-- Status badge -->
-                      {#if status?.state === 'testing'}
+                      <!-- Status badge (queued/testing/success/failed while a one-by-one run is in flight) -->
+                      {#if status?.state === 'queued'}
+                        <span
+                          class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-surface-2 text-text-muted px-2 py-0.5 text-[10px]"
+                          title="Waiting for its turn"
+                        >
+                          <span class="size-1.5 rounded-full bg-text-muted/50"></span>
+                          queued
+                        </span>
+                      {:else if status?.state === 'testing'}
                         <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 text-[10px]">
                           <span class="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>
                           testing
                         </span>
-                      {:else if status?.state === 'failed' || conn.testStatus === 'failed' || conn.testStatus === 'error'}
-                        <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 text-[10px]">
+                      {:else if (status?.state === 'failed' && status.error !== 'Provider test not supported') || ((conn.testStatus === 'failed' || conn.testStatus === 'error') && conn.lastError !== 'Provider test not supported')}
+                        <span
+                          class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 text-[10px]"
+                          title={status?.state === 'failed' && status.error ? `failed: ${status.error}` : undefined}
+                        >
                           <span class="size-1.5 rounded-full bg-red-500"></span>
                           error
                         </span>
                       {:else}
-                        <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 text-[10px]">
+                        <span
+                          class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 text-[10px]"
+                          title={status?.state === 'success' ? 'last one-by-one probe passed' : undefined}
+                        >
                           <span class="size-1.5 rounded-full bg-green-500"></span>
                           active
                         </span>
@@ -2239,8 +2493,56 @@
                       <span class="inline-flex items-center gap-1.5 rounded-full font-semibold bg-surface-2 text-text-muted px-2 py-0.5 text-[10px]">
                         {conn.authType === 'oauth' ? 'OAuth' : 'API Key'}
                       </span>
+                      <!-- Freebuff Session status badge -->
+                      {#if isFreebuff}
+                        {@const fbSess = freebuffSessions[conn.id]}
+                        {@const boundModel = fbSess?.currentModel || (specificData?.freebuffModel as string) || (specificData?.assignedModel as string)}
+                        {#if fbSess?.status === 'active' || boundModel}
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full font-semibold px-2 py-0.5 text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                            title="Active session bound to {boundModel}"
+                          >
+                            <span>🔒</span>
+                            <span class="font-mono">{boundModel}</span>
+                          </span>
+                        {:else if fbSess?.status === 'queued'}
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full font-semibold px-2 py-0.5 text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                            title="Waiting in queue"
+                          >
+                            <span>⏳</span> queued
+                          </span>
+                        {:else if fbSess?.status === 'banned'}
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full font-semibold px-2 py-0.5 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20"
+                            title="Account banned"
+                          >
+                            <span>🚫</span> banned
+                          </span>
+                        {:else if fbSess}
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full font-normal px-2 py-0.5 text-[10px] bg-surface-2 text-text-muted border border-border/50"
+                            title="No active session held"
+                          >
+                            no session
+                          </span>
+                        {/if}
+                      {/if}
+                      <!-- Proxy badge (upstream: green when the bound pool is active,
+                           red when bound to a missing/inactive pool or a legacy proxy) -->
+                      {#if proxyBadge.hasAnyProxy}
+                        <span
+                          class="inline-flex items-center gap-1.5 rounded-full font-semibold px-2 py-0.5 text-[10px] {proxyBadge.variant === 'success'
+                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                            : 'bg-red-500/10 text-red-600 dark:text-red-400'}"
+                          title={proxyBadge.displayText}
+                        >
+                          <span class="size-1.5 rounded-full {proxyBadge.variant === 'success' ? 'bg-green-500' : 'bg-red-500'}"></span>
+                          Proxy
+                        </span>
+                      {/if}
                       <!-- Last error tooltip -->
-                      {#if lastErr}
+                      {#if lastErr && lastErr !== 'Provider test not supported'}
                         <span class="max-w-full truncate text-xs text-red-500 sm:max-w-[300px]" title={lastErr}>
                           {lastErr.length > 50 ? lastErr.slice(0, 50) + '...' : lastErr}
                         </span>
@@ -2249,20 +2551,57 @@
                       <!-- Priority tag -->
                       <span class="text-xs text-text-muted">#{priorityNum}</span>
                     </div>
+                    <!-- Error message block -->
+                    {#if lastErr && lastErr !== 'Provider test not supported' && (status?.state === 'failed' || conn.testStatus === 'failed' || conn.testStatus === 'error')}
+                      <div class="mt-1.5 flex items-start gap-1.5 text-xs text-red-500 bg-red-500/10 px-2.5 py-1.5 rounded-md border border-red-500/20 max-w-full">
+                        <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">error</span>
+                        <span class="break-words font-medium leading-relaxed">{lastErr}</span>
+                      </div>
+                    {/if}
+                    <!-- Proxy detail line: pool/legacy label, masked endpoint, no_proxy -->
+                    {#if proxyBadge.hasAnyProxy}
+                      <div class="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                        <span
+                          class="max-w-full truncate text-[11px] text-text-muted sm:max-w-[420px]"
+                          title={proxyBadge.displayText}
+                        >
+                          {proxyBadge.displayText}
+                        </span>
+                        {#if proxyBadge.maskedProxyUrl}
+                          <code
+                            class="max-w-full truncate rounded bg-black/5 px-1 py-0.5 font-mono text-[10px] text-text-muted dark:bg-white/5 sm:max-w-[260px]"
+                          >
+                            {proxyBadge.maskedProxyUrl}
+                          </code>
+                        {/if}
+                        {#if proxyBadge.noProxyText}
+                          <span
+                            class="max-w-full truncate text-[11px] text-text-muted sm:max-w-[320px]"
+                            title={proxyBadge.noProxyText}
+                          >
+                            no_proxy: {proxyBadge.noProxyText}
+                          </span>
+                        {/if}
+                      </div>
+                    {/if}
                   </div>
                 </div>
 
                 <!-- Right actions -->
                 <div class="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
                   <div class="grid flex-1 grid-cols-3 gap-1 sm:flex sm:flex-none">
-                    <!-- Proxy dropdown -->
+                    <!-- Proxy dropdown (upstream: hidden while no pools exist) -->
+                    {#if proxyPools.length > 0}
                     <div class="relative">
                       <button
                         type="button"
                         onclick={() => (activeProxyDropdownId = activeProxyDropdownId === conn.id ? null : conn.id)}
-                        class="flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 {assignedPool ? 'text-primary' : 'text-text-muted hover:text-primary'} cursor-pointer"
+                        disabled={updatingProxyConnId === conn.id}
+                        class="flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 {proxyBadge.hasAnyProxy ? 'text-primary' : 'text-text-muted hover:text-primary'} cursor-pointer"
                       >
-                        <span class="material-symbols-outlined text-[18px]">lan</span>
+                        <span class="material-symbols-outlined text-[18px] {updatingProxyConnId === conn.id ? 'animate-spin' : ''}">
+                          {updatingProxyConnId === conn.id ? 'progress_activity' : 'lan'}
+                        </span>
                         <span class="text-[10px] leading-tight">Proxy</span>
                       </button>
 
@@ -2281,18 +2620,34 @@
                           >
                             None
                           </button>
-                          {#each activeProxyPools as pool}
+                          {#each proxyPools as pool}
                             <button
                               type="button"
                               onclick={() => assignProxyPool(conn, pool.id)}
-                              class="flex w-full items-center px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {assignedPoolId === pool.id ? 'text-primary font-medium' : 'text-text-main'}"
+                              class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-2 transition-colors cursor-pointer {assignedPoolId === pool.id ? 'text-primary font-medium' : 'text-text-main'}"
                             >
-                              {pool.name}
+                              <span class="truncate">{pool.name}</span>
+                              {#if !pool.isActive}
+                                <span class="text-[10px] text-text-muted shrink-0">(inactive)</span>
+                              {/if}
                             </button>
                           {/each}
                         </div>
                       {/if}
                     </div>
+                    {/if}
+                    <!-- Freebuff session manage button -->
+                    {#if isFreebuff}
+                    <button
+                      type="button"
+                      onclick={() => selectFreebuffAccount(conn.id)}
+                      class="flex flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 {targetFreebuffConn?.id === conn.id ? 'text-primary font-medium' : 'text-text-muted hover:text-primary'} cursor-pointer"
+                      title="Manage session for this account"
+                    >
+                      <span class="material-symbols-outlined text-[18px]">lock_clock</span>
+                      <span class="text-[10px] leading-tight">Session</span>
+                    </button>
+                    {/if}
 
                     <!-- Edit button -->
                     <button
@@ -2428,10 +2783,11 @@
         <div class="flex flex-col gap-3">
           {#each compatibleRows as row (row.source + ':' + row.id)}
             {@const tStatus = compatibleTestResults[row.id]}
+            {@const tError = compatibleTestErrors[row.id]}
             {@const isTestingRow = compatibleTestId === row.id}
-            <div class="flex items-center gap-3 p-3 rounded-lg border {tStatus === 'ok' ? 'border-green-500/40' : tStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50">
+            <div class="flex items-start gap-3 p-3 rounded-lg border {tStatus === 'ok' ? 'border-green-500/40' : tStatus === 'error' ? 'border-red-500/40' : 'border-border'} hover:bg-sidebar/50">
               <span
-                class="material-symbols-outlined text-base text-text-muted"
+                class="material-symbols-outlined text-base text-text-muted mt-0.5"
                 style={tStatus === 'ok' ? 'color:#22c55e' : tStatus === 'error' ? 'color:#ef4444' : undefined}
               >
                 {tStatus === 'ok' ? 'check_circle' : tStatus === 'error' ? 'cancel' : 'smart_toy'}
@@ -2470,6 +2826,12 @@
                     </div>
                   {/if}
                 </div>
+                {#if tError}
+                  <div class="mt-2 flex items-start gap-1.5 text-xs text-red-500 bg-red-500/10 px-2.5 py-1.5 rounded-md border border-red-500/20">
+                    <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">error</span>
+                    <span class="break-words font-medium leading-relaxed">{tError}</span>
+                  </div>
+                {/if}
               </div>
               <button
                 type="button"
@@ -2544,11 +2906,21 @@
           onRefresh={loadFreebuffSession}
           models={visibleModels.map((m) => ({ id: m.id, name: m.name }))}
           onSwitch={switchFreebuffModel}
+          connections={providerConnections.map((c) => {
+            const specific = c.providerSpecificData as Record<string, any> | undefined
+            return {
+              id: c.id,
+              name: c.name || c.email || 'Freebuff Account',
+              isActive: c.isActive === 1,
+              currentModel: freebuffSessions[c.id]?.currentModel || (specific?.freebuffModel as string) || (specific?.assignedModel as string),
+              status: freebuffSessions[c.id]?.status,
+            }
+          })}
+          selectedConnectionId={targetFreebuffConn?.id}
+          onSelectConnection={selectFreebuffAccount}
         />
       </div>
     {/if}
-
-
     <!-- Models flex-wrap list matching upstream -->
     <div class="flex flex-wrap gap-3">
       {#each visibleModels as model (model.id)}
@@ -2672,12 +3044,25 @@
         <span class="material-symbols-outlined text-sm">add</span>
         Add Model
       </button>
-    </div>
 
+      {#if (providerId === 'antigravity' || providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
+        <button
+          type="button"
+          onclick={handleImportLiveCatalogModels}
+          disabled={isImportingLiveCatalogModels}
+          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 px-3 py-2 text-xs text-text-main transition-colors sm:w-auto cursor-pointer disabled:opacity-50"
+        >
+          <span class="material-symbols-outlined text-sm">download</span>
+          {isImportingLiveCatalogModels ? 'Fetching...' : 'Import from /models'}
+        </button>
+      {/if}
+    </div>
     <!-- Suggested models from provider API — show only models not yet added -->
     {#if suggestedNotAdded.length > 0}
       <div class="w-full mt-2">
-        <p class="text-xs text-text-muted mb-2">Suggested free models (≥200k context):</p>
+        <p class="text-xs text-text-muted mb-2">
+          {providerId === 'antigravity' ? 'Suggested models from Google:' : 'Suggested free models (≥200k context):'}
+        </p>
         <div class="flex flex-wrap gap-2">
           {#each suggestedNotAdded as m (m.id)}
             <button
@@ -2994,7 +3379,7 @@
     <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-lg p-6">
       <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
         <h2 class="text-lg font-semibold text-text-main">
-          Apply Proxy ({selectedConnIds.length > 0 ? selectedConnIds.length : providerConnections.length} connections)
+          Apply Proxy ({providerConnections.length} connections)
         </h2>
         <button
           type="button"
@@ -3032,21 +3417,30 @@
           </div>
         </button>
 
-        {#each activeProxyPools as pool}
+        {#each proxyPools as pool}
           <button
             type="button"
             onclick={() => handleApplyProxyPool(pool.id)}
-            disabled={isApplyingProxy}
-            class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left border border-border hover:bg-surface-2 transition-colors cursor-pointer"
+            disabled={isApplyingProxy || !pool.isActive}
+            class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left border border-border hover:bg-surface-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
             <span class="material-symbols-outlined text-text-muted text-lg">lan</span>
-            <div>
-              <div class="text-xs font-medium text-text-main">{pool.name}</div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <div class="text-xs font-medium text-text-main truncate">{pool.name}</div>
+                {#if !pool.isActive}
+                  <span class="text-[10px] text-text-muted">(inactive)</span>
+                {/if}
+              </div>
               <div class="text-[11px] text-text-muted truncate">{pool.proxyUrl}</div>
             </div>
           </button>
         {/each}
       </div>
+
+      {#if isApplyingProxy}
+        <p class="mb-4 text-xs text-text-muted">Applying...</p>
+      {/if}
 
       <div class="flex justify-end">
         <button

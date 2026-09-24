@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -56,19 +57,32 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
+	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {
+		augmented, _ := h.AugmentModelsWithCapacityAdapter(modelInfo.ComboModels, requiredCaps)
 		if modelInfo.Strategy == "fusion" {
-			h.handleFusion(ctx, w, body, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit)
+			h.handleFusion(ctx, w, body, augmented, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
-		h.handleComboFallback(ctx, w, body, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit)
+		h.handleComboFallback(ctx, w, body, augmented, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit)
+		return
+	}
+
+	// Single model request: check if capacity adapter should auto-switch (e.g. vision for image inputs)
+	targetEntry := reqBody.Model
+	if !strings.Contains(targetEntry, "/") && modelInfo != nil && modelInfo.Provider != "" {
+		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
+	}
+	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps)
+	if len(augmented) > 1 {
+		log.Info("chat", "capacity adapter auto-switch", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))
+		h.handleComboFallback(ctx, w, body, augmented, strat, reqBody.Stream, false, reqBody.Model, 0)
 		return
 	}
 
 	h.handleSingleModel(ctx, w, body, modelInfo, reqBody.Stream, false)
 }
-
 // handleSingleModel resolves a single ModelInfo and forwards the request upstream.
 func (h *ChatHandler) handleSingleModel(ctx context.Context, w http.ResponseWriter, body []byte, modelInfo *ModelInfo, isStream bool, translateResponse bool) {
 	cw := newCommittedResponseWriter(w)
@@ -165,23 +179,37 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Store requested model for streaming echo (PR #3693) and for [1m] marker handling
 	ctx = translator.WithRequestedModel(ctx, stripModelContextMarker(reqBody.Model))
 
+	requiredCaps := DetectRequiredCapabilities(body)
+
 	if len(modelInfo.ComboModels) > 0 {
+		augmented, _ := h.AugmentModelsWithCapacityAdapter(modelInfo.ComboModels, requiredCaps)
 		if modelInfo.Strategy == "fusion" {
 			bodyJSON, err := json.Marshal(workingBody)
 			if err != nil {
 				handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to marshal request body")
 				return
 			}
-			h.handleFusion(ctx, w, bodyJSON, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, translateResponse, reqBody.Model, modelInfo.StickyLimit)
+			h.handleFusion(ctx, w, bodyJSON, augmented, modelInfo.Strategy, reqBody.Stream, translateResponse, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
-		h.handleMessagesComboFallback(ctx, w, workingBody, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, reqBody.Model, modelInfo.StickyLimit)
+		h.handleMessagesComboFallback(ctx, w, workingBody, augmented, modelInfo.Strategy, reqBody.Stream, reqBody.Model, modelInfo.StickyLimit)
+		return
+	}
+
+	// Single model request: check if capacity adapter should auto-switch (e.g. vision for image inputs)
+	targetEntry := reqBody.Model
+	if !strings.Contains(targetEntry, "/") && modelInfo != nil && modelInfo.Provider != "" {
+		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
+	}
+	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps)
+	if len(augmented) > 1 {
+		log.Info("chat", "capacity adapter auto-switch messages", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))
+		h.handleMessagesComboFallback(ctx, w, workingBody, augmented, strat, reqBody.Stream, reqBody.Model, 0)
 		return
 	}
 
 	h.handleMessagesSingleModel(ctx, w, workingBody, modelInfo, reqBody.Stream, translateResponse)
 }
-
 // handleMessagesSingleModel forwards a translated Claude request for a single model.
 func (h *ChatHandler) handleMessagesSingleModel(ctx context.Context, w http.ResponseWriter, translatedReq map[string]any, modelInfo *ModelInfo, isStream bool, translateResponse bool) {
 	cw := newCommittedResponseWriter(w)
@@ -224,6 +252,50 @@ func (h *ChatHandler) HandleVersion(w http.ResponseWriter, r *http.Request) {
 func (h *ChatHandler) HandleVersionStatus(w http.ResponseWriter, r *http.Request) {
 	status := updater.GetStatus()
 	handlerutil.WriteJSON(w, http.StatusOK, status)
+}
+
+// HandleChangelog serves the CHANGELOG.md file or fetches it from remote with fallbacks.
+func (h *ChatHandler) HandleChangelog(w http.ResponseWriter, r *http.Request) {
+	candidates := []string{
+		"CHANGELOG.md",
+		"../CHANGELOG.md",
+		"../../CHANGELOG.md",
+	}
+	for _, path := range candidates {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+			return
+		}
+	}
+
+	urls := []string{
+		"https://raw.githubusercontent.com/luqman-v1/9router-go/main/CHANGELOG.md",
+		"https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md",
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, u := range urls {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			data, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr == nil && len(data) > 0 {
+				w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(data)
+				return
+			}
+		} else if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	handlerutil.WriteJSONError(w, http.StatusNotFound, "changelog not found")
 }
 
 // HandleToggleAutoUpdate enables or disables automatic updates in settings and runtime.
@@ -630,6 +702,8 @@ func (h *ChatHandler) HandleModelsByKind(w http.ResponseWriter, r *http.Request)
 			match = cfg.TTSURL != ""
 		case "stt":
 			match = cfg.STTURL != ""
+		case "systemone":
+			match = cfg.SystemoneURL != ""
 		case "embedding":
 			match = strings.Contains(cfg.BaseURL, "/embeddings")
 		case "web":
@@ -654,6 +728,9 @@ func (h *ChatHandler) HandleModelsByKind(w http.ResponseWriter, r *http.Request)
 		}
 		if kind == "embedding" {
 			endpoint = "/v1/embeddings"
+		}
+		if kind == "systemone" {
+			endpoint = "/v1/systemone"
 		}
 		if kind == "image-to-text" {
 			endpoint = "/v1/chat/completions"

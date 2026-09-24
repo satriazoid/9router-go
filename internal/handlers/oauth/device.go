@@ -406,6 +406,10 @@ func (h *OAuthHandler) HandleDevicePoll(w http.ResponseWriter, r *http.Request) 
 		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": status, "error": errMsg, "provider": body.Provider})
 		return
 	}
+	if status != "authorized" || strings.TrimSpace(tokens.access) == "" {
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"status": "pending", "provider": body.Provider})
+		return
+	}
 	conn := h.saveDeviceConnection(deviceCanonical(body.Provider), tokens)
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "authorized", "id": conn.id, "connectionId": conn.id,
@@ -456,6 +460,9 @@ func devicePoll(provider, code string, session map[string]any) (deviceTokens, st
 type savedConn struct{ id, name, email string }
 
 func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) savedConn {
+	if strings.TrimSpace(t.access) == "" {
+		return savedConn{}
+	}
 	email := t.email
 	if email == "" {
 		email = extractEmailFromJWT(t.access)

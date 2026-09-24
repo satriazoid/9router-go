@@ -5,7 +5,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/pprof"
-
+	"os"
+	"strings"
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/chat"
@@ -41,15 +42,13 @@ func SetupRoutes(r interface {
 	oauthH := oauth.NewOAuthHandler(repo)
 
 	dashH := dashboard.NewDashboardHandler(repo)
-	ssoH := sso.NewHandler(repo)
 	// Chat, Version & Models Domain
 	r.Get("/version", chatH.HandleVersion)
 	r.Get("/api/version", chatH.HandleVersion)
 	r.Get("/api/version/status", chatH.HandleVersionStatus)
 	r.Get("/api/version/check", chatH.HandleCheckUpdate)
-	r.Post("/api/version/update", chatH.HandleTriggerUpdate)
-	r.Post("/api/version/auto-update", chatH.HandleToggleAutoUpdate)
-	r.Post("/api/version/shutdown", HandleShutdown)
+	r.Get("/changelog", chatH.HandleChangelog)
+	r.Get("/api/changelog", chatH.HandleChangelog)
 	r.Get("/models", chatH.HandleModels)
 	r.Get("/models/info", chatH.HandleModelsInfo)
 	r.Get("/models/{kind}", chatH.HandleModelsByKind)
@@ -76,6 +75,11 @@ func SetupRoutes(r interface {
 	r.Post("/images/generations", mediaH.HandleImages)
 	r.Post("/audio/speech", mediaH.HandleAudioSpeech)
 	r.Get("/audio/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/inworld/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/minimax/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/deepgram/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/elevenlabs/voices", mediaH.HandleAudioVoices)
 	r.Post("/audio/transcriptions", mediaH.HandleAudioTranscriptions)
 	r.Post("/videos/generations", mediaH.HandleVideoGenerations)
 	r.Post("/videos/edits", mediaH.HandleVideoEdits)
@@ -83,7 +87,7 @@ func SetupRoutes(r interface {
 	r.Get("/videos/{id}", mediaH.HandleVideoGet)
 	r.Post("/search", mediaH.HandleSearch)
 	r.Post("/scrape", mediaH.HandleScrape)
-	r.Post("/web/fetch", mediaH.HandleWebFetch)
+	r.Post("/systemone", mediaH.HandleSystemone)
 
 	// Proxy Pool Deploy Domain
 	r.Post("/proxy-pools/vercel-deploy", mediaH.HandleVercelDeploy)
@@ -106,41 +110,19 @@ func SetupRoutes(r interface {
 	r.HandleFunc("/headroom/proxy", headroomH.HandleHeadroomProxy)
 	r.HandleFunc("/headroom/proxy/*", headroomH.HandleHeadroomProxy)
 
+	r.Post("/api/headroom/start", headroomH.HandleHeadroomStart)
+	r.Post("/api/headroom/stop", headroomH.HandleHeadroomStop)
+	r.Post("/api/headroom/restart", headroomH.HandleHeadroomRestart)
+	r.Get("/api/headroom/status", headroomH.HandleHeadroomStatus)
+	r.Get("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.Post("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.Delete("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.HandleFunc("/api/headroom/proxy", headroomH.HandleHeadroomProxy)
+	r.HandleFunc("/api/headroom/proxy/*", headroomH.HandleHeadroomProxy)
 	// OAuth & Import Tokens Domain
-	r.Post("/api/oauth/{provider}/import", oauthH.HandleOAuthImport)
-	r.Get("/api/oauth/kiro/social-authorize", oauthH.HandleOAuthKiroSocialAuthorize)
-	r.Post("/api/oauth/kiro/social-exchange", oauthH.HandleOAuthKiroSocialExchange)
-	r.Post("/api/oauth/codex/bulk-import", oauthH.HandleOAuthCodexBulkImport)
-	r.Post("/api/oauth/grok-cli/bulk-import", oauthH.HandleOAuthGrokCliBulkImport)
-	r.Post("/api/oauth/freebuff/initiate", oauthH.HandleFreebuffInitiate)
-	r.Post("/api/oauth/freebuff/poll", oauthH.HandleFreebuffPoll)
-	r.Get("/api/oauth/freebuff/session", oauthH.HandleFreebuffSessionStatus)
-	r.Post("/api/oauth/freebuff/session/switch", oauthH.HandleFreebuffSessionSwitch)
-	r.Get("/api/oauth/antigravity/authorize", oauthH.HandleAntigravityAuthorize)
+	mountOAuthRoutes(r, oauthH)
 	r.Get("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
 	r.Post("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
-	r.Get("/api/oauth/cline/authorize", oauthH.HandleClineAuthorize)
-	r.Post("/api/oauth/cline/exchange", oauthH.HandleClineExchange)
-	r.Get("/api/oauth/pkce/authorize", oauthH.HandlePKCEAuthorize)
-	r.Post("/api/oauth/pkce/exchange", oauthH.HandlePKCEExchange)
-	r.Get("/api/oauth/authcode/authorize", oauthH.HandleAuthCodeAuthorize)
-	r.Post("/api/oauth/authcode/exchange", oauthH.HandleAuthCodeExchange)
-	r.Get("/api/oauth/trae/authorize", oauthH.HandleTraeAuthorize)
-	r.Post("/api/oauth/trae/exchange", oauthH.HandleTraeExchange)
-	r.Get("/api/oauth/windsurf/authorize", oauthH.HandleWindsurfAuthorize)
-	r.Post("/api/oauth/windsurf/exchange", oauthH.HandleWindsurfExchange)
-	r.Get("/api/oauth/zed/authorize", oauthH.HandleZedAuthorize)
-	r.Post("/api/oauth/zed/exchange", oauthH.HandleZedExchange)
-	r.Post("/api/oauth/device/start", oauthH.HandleDeviceStart)
-	r.Post("/api/oauth/device/poll", oauthH.HandleDevicePoll)
-	r.Post("/api/oauth/cursor/import", oauthH.HandleCursorImport)
-	r.Get("/api/oauth/cursor/auto-import", oauthH.HandleCursorAutoImport)
-	r.Get("/api/oauth/kimchi/authorize", oauthH.HandleKimchiAuthorize)
-	r.Post("/api/oauth/kimchi/exchange", oauthH.HandleKimchiExchange)
-	r.Post("/api/oauth/gitlab/pat", oauthH.HandleGitlabPAT)
-	r.Post("/api/oauth/iflow/cookie", oauthH.HandleIflowCookie)
-	r.Get("/api/oauth/xiaomi-mimo/authorize", oauthH.HandleMimoAuthorize)
-	r.Post("/api/oauth/xiaomi-mimo/exchange", oauthH.HandleMimoExchange)
 
 	// Live Console Logs Domain (dashboard "Monitor Console Log")
 	r.Get("/translator/console-logs", HandleConsoleLogsGet)
@@ -160,8 +142,16 @@ func SetupRoutes(r interface {
 
 	// Debug Tracing Domain (p50/p95 latency per provider+model)
 	r.Get("/debug/traces", HandleDebugTraces)
+}
 
-	// Dashboard REST API Domain
+// SetupDashboardRoutes mounts the dashboard REST API. It is wrapped in
+// RequireDashboardAuth by the server router, which lets a cookie-authenticated
+// browser session, a valid API key or the local CLI token through when login is
+// enabled (upstream dashboardGuard).
+func SetupDashboardRoutes(r chi.Router, repo *db.Repo) {
+	dashH := dashboard.NewDashboardHandler(repo)
+	ssoH := sso.NewHandler(repo)
+
 	r.Get("/api/connections", dashH.HandleGetConnections)
 	r.Get("/api/providers", dashH.HandleGetProvidersClient)
 	r.Get("/api/providers/client", dashH.HandleGetProvidersClient)
@@ -174,6 +164,14 @@ func SetupRoutes(r interface {
 	r.Post("/api/connections/{id}/test", dashH.HandleTestConnection)
 	r.Post("/api/providers/{id}/test", dashH.HandleTestConnection)
 	r.Get("/api/providers/suggested-models", HandleSuggestedModels)
+	// Usage & Quota Endpoints (dashboard quota tracker, usage stats, and topology stream)
+	r.Get("/api/usage/stream", HandleUsageStream(repo))
+	r.Get("/usage/stream", HandleUsageStream(repo))
+	r.Get("/api/usage/stats", HandleUsageStats(repo))
+	r.Get("/usage/stats", HandleUsageStats(repo))
+	r.Get("/api/usage/request-details", HandleRequestDetails(repo))
+	r.Get("/api/usage/providers", dashH.HandleGetUsageProviders)
+	r.Get("/api/usage/{connectionId}", dashH.HandleGetConnectionUsage)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)
@@ -202,6 +200,12 @@ func SetupRoutes(r interface {
 	r.Post("/api/models/custom", dashH.HandleSaveCustomModel)
 	r.Delete("/api/models/custom/{key}", dashH.HandleDeleteCustomModel)
 	r.Get("/api/models/disabled", dashH.HandleGetDisabledModels)
+	mediaH := media.NewMediaHandler(repo, nil, nil)
+	r.Get("/api/media-providers/tts/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/inworld/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/minimax/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/deepgram/voices", mediaH.HandleAudioVoices)
+	r.Get("/api/media-providers/tts/elevenlabs/voices", mediaH.HandleAudioVoices)
 	r.Put("/api/models/disabled/{provider}", dashH.HandleSaveDisabledModels)
 	r.Get("/api/models/alias", dashH.HandleGetModelAliases)
 	r.Put("/api/models/alias", dashH.HandleSetModelAlias)
@@ -218,10 +222,72 @@ func SetupRoutes(r interface {
 	r.Post("/api/settings/database", dashH.HandleImportDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
 
+	// Headroom token-compression proxy management (dashboard parity)
+	headroomH := media.NewHeadroomHandler(repo)
+	r.Get("/api/headroom/status", headroomH.HandleHeadroomStatus)
+	r.Post("/api/headroom/start", headroomH.HandleHeadroomStart)
+	r.Post("/api/headroom/stop", headroomH.HandleHeadroomStop)
+	r.Post("/api/headroom/restart", headroomH.HandleHeadroomRestart)
+	r.Get("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.Post("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.Delete("/api/headroom/extras", headroomH.HandleHeadroomExtras)
+	r.HandleFunc("/api/headroom/proxy", headroomH.HandleHeadroomProxy)
+	r.HandleFunc("/api/headroom/proxy/*", headroomH.HandleHeadroomProxy)
+
+	// Tunnel & Tailscale
+	r.Get("/api/tunnel/status", dashH.HandleTunnelStatus)
+	r.Post("/api/tunnel/enable", dashH.HandleTunnelEnable)
+	r.Post("/api/tunnel/disable", dashH.HandleTunnelDisable)
+	r.Get("/api/tunnel/tailscale-check", dashH.HandleTailscaleCheck)
+	r.Post("/api/tunnel/tailscale-enable", dashH.HandleTailscaleEnable)
+	r.Post("/api/tunnel/tailscale-disable", dashH.HandleTailscaleDisable)
+
 	// Single Sign-On settings checks + SP metadata (profile page)
 	r.Post("/api/auth/oidc/test", ssoH.HandleOidcTest)
 	r.Post("/api/auth/saml/test", ssoH.HandleSamlTest)
 	r.Get("/api/auth/saml/metadata", ssoH.HandleSamlMetadata)
+
+	// Mount OAuth routes under dashboard auth so web dashboard can initiate and exchange tokens
+	oauthH := oauth.NewOAuthHandler(repo)
+	mountOAuthRoutes(r, oauthH)
+}
+
+func mountOAuthRoutes(r interface {
+	Get(pattern string, handlerFn http.HandlerFunc)
+	Post(pattern string, handlerFn http.HandlerFunc)
+}, oauthH *oauth.OAuthHandler) {
+	r.Post("/api/oauth/{provider}/import", oauthH.HandleOAuthImport)
+	r.Get("/api/oauth/kiro/social-authorize", oauthH.HandleOAuthKiroSocialAuthorize)
+	r.Post("/api/oauth/kiro/social-exchange", oauthH.HandleOAuthKiroSocialExchange)
+	r.Post("/api/oauth/codex/bulk-import", oauthH.HandleOAuthCodexBulkImport)
+	r.Post("/api/oauth/grok-cli/bulk-import", oauthH.HandleOAuthGrokCliBulkImport)
+	r.Post("/api/oauth/freebuff/initiate", oauthH.HandleFreebuffInitiate)
+	r.Post("/api/oauth/freebuff/poll", oauthH.HandleFreebuffPoll)
+	r.Get("/api/oauth/freebuff/session", oauthH.HandleFreebuffSessionStatus)
+	r.Post("/api/oauth/freebuff/session/switch", oauthH.HandleFreebuffSessionSwitch)
+	r.Get("/api/oauth/antigravity/authorize", oauthH.HandleAntigravityAuthorize)
+	r.Get("/api/oauth/cline/authorize", oauthH.HandleClineAuthorize)
+	r.Post("/api/oauth/cline/exchange", oauthH.HandleClineExchange)
+	r.Get("/api/oauth/pkce/authorize", oauthH.HandlePKCEAuthorize)
+	r.Post("/api/oauth/pkce/exchange", oauthH.HandlePKCEExchange)
+	r.Get("/api/oauth/authcode/authorize", oauthH.HandleAuthCodeAuthorize)
+	r.Post("/api/oauth/authcode/exchange", oauthH.HandleAuthCodeExchange)
+	r.Get("/api/oauth/trae/authorize", oauthH.HandleTraeAuthorize)
+	r.Post("/api/oauth/trae/exchange", oauthH.HandleTraeExchange)
+	r.Get("/api/oauth/windsurf/authorize", oauthH.HandleWindsurfAuthorize)
+	r.Post("/api/oauth/windsurf/exchange", oauthH.HandleWindsurfExchange)
+	r.Get("/api/oauth/zed/authorize", oauthH.HandleZedAuthorize)
+	r.Post("/api/oauth/zed/exchange", oauthH.HandleZedExchange)
+	r.Post("/api/oauth/device/start", oauthH.HandleDeviceStart)
+	r.Post("/api/oauth/device/poll", oauthH.HandleDevicePoll)
+	r.Post("/api/oauth/cursor/import", oauthH.HandleCursorImport)
+	r.Get("/api/oauth/cursor/auto-import", oauthH.HandleCursorAutoImport)
+	r.Get("/api/oauth/kimchi/authorize", oauthH.HandleKimchiAuthorize)
+	r.Post("/api/oauth/kimchi/exchange", oauthH.HandleKimchiExchange)
+	r.Post("/api/oauth/gitlab/pat", oauthH.HandleGitlabPAT)
+	r.Post("/api/oauth/iflow/cookie", oauthH.HandleIflowCookie)
+	r.Get("/api/oauth/xiaomi-mimo/authorize", oauthH.HandleMimoAuthorize)
+	r.Post("/api/oauth/xiaomi-mimo/exchange", oauthH.HandleMimoExchange)
 }
 
 // SetupServerRouter mounts public endpoints (/health, /api/hello) and
@@ -235,15 +301,20 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	// Embedded Native Dashboard SPA
 	webH := web.Handler()
 	oauthH := oauth.NewOAuthHandler(repo)
-	// Public OAuth landing page: providers redirect browsers here after login
-	// (/callback?code=...). No API key — browsers carry none; the page only
-	// displays the code for the user to paste into the dashboard modal.
+	// Public OAuth landing page & callbacks: providers redirect browsers here after login
+	// (/callback?code=... or /api/oauth/antigravity/callback?code=...). No API key — browsers carry none.
 	r.Get("/callback", oauthH.HandleCallbackPage)
+	r.Get("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
+	r.Post("/api/oauth/antigravity/callback", oauthH.HandleAntigravityCallback)
 	r.Get("/", webH.ServeHTTP)
-	r.Get("/dashboard", webH.ServeHTTP)
-	r.Get("/dashboard/*", webH.ServeHTTP)
-	r.Get("/dashboard/media-providers/*", webH.ServeHTTP)
-	r.Get("/dashboard/media-providers/web", webH.ServeHTTP)
+	r.Get("/login", webH.ServeHTTP)
+	// Dashboard pages require the login session when requireLogin is on; the
+	// guard redirects browsers to /login (upstream dashboardGuard).
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireDashboardPage(repo))
+		r.Get("/dashboard", webH.ServeHTTP)
+		r.Get("/dashboard/*", webH.ServeHTTP)
+	})
 	r.Get("/media", webH.ServeHTTP)
 	r.Get("/media-providers/*", webH.ServeHTTP)
 	r.Get("/media-providers/web", webH.ServeHTTP)
@@ -268,31 +339,29 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 			w.Write([]byte(`{"status":"ok","message":"hello"}`))
 		}
 	})
-	r.Get("/api/auth/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		w.Write([]byte(`{"requireLogin":false,"authMode":"password","ssoType":"oidc","oidcConfigured":false,"oidcLoginLabel":"Sign in with OIDC","samlConfigured":false,"samlLoginLabel":"Sign in with SAML SSO","hasPassword":true,"displayName":"9router-go","loginMethod":"Password","authenticated":true}`))
-	})
-	r.Get("/api/settings/require-login", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		w.Write([]byte(`{"requireLogin":false,"tunnelDashboardAccess":true,"tunnelUrl":"","tailscaleUrl":""}`))
-	})
-	r.Get("/api/tunnel/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		w.Write([]byte(`{"tunnel":{"enabled":false,"settingsEnabled":false,"tunnelUrl":"","shortId":"","publicUrl":"","running":false},"tailscale":{"enabled":false,"settingsEnabled":false,"tunnelUrl":"","running":false,"loggedIn":false},"download":{"downloading":false,"progress":0}}`))
-	})
+	// Dashboard login session. status/login/logout/require-login are public so
+	// the login page can load before a cookie exists (upstream PUBLIC_API_PATHS).
+	dashH := dashboard.NewDashboardHandler(repo)
+	r.Get("/api/auth/status", dashH.HandleAuthStatus)
+	r.Post("/api/auth/login", dashH.HandleAuthLogin)
+	r.Post("/api/auth/logout", dashH.HandleAuthLogout)
+	r.Get("/api/settings/require-login", dashH.HandleRequireLogin)
+	r.Get("/api/tunnel/status", dashH.HandleTunnelStatus)
 
-	// Profiling endpoints (pprof)
-	r.HandleFunc("/debug/pprof/", pprof.Index)
-	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	r.HandleFunc("/debug/pprof/*", pprof.Index)
-
-	// API-key protected domain routes (includes /admin/health/reset so health
-	// state cannot be reset by an unauthenticated caller — open-source hardening)
+	// Profiling endpoints (pprof) — disabled by default in production for security;
+	// enable explicitly via PPROF_ENABLED=true
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("PPROF_ENABLED")), "true") {
+		r.HandleFunc("/debug/pprof/", pprof.Index)
+		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		r.HandleFunc("/debug/pprof/*", pprof.Index)
+	}
+	// Admin-only operations (health reset, shutdown, update) - strictly requires session cookie or CLI token.
+	// Standard client API keys are rejected, matching upstream ALWAYS_PROTECTED.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireApiKey(repo))
+		r.Use(middleware.RequireAdminAuth())
 
 		// Health reset endpoint — dashboard calls this via headroom proxy
 		r.Post("/admin/health/reset", func(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +375,22 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 			json.MarshalWrite(w, map[string]string{"status": "ok"})
 		})
 
+		chatH := chat.NewChatHandler(repo, ts)
+		r.Post("/api/version/update", chatH.HandleTriggerUpdate)
+		r.Post("/api/version/auto-update", chatH.HandleToggleAutoUpdate)
+		r.Post("/api/version/shutdown", HandleShutdown)
+	})
+
+	// API-key protected domain routes
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireApiKey(repo))
 		SetupRoutes(r, repo, ts)
+	})
+
+	// Dashboard management API: login-gated when requireLogin is on, but still
+	// reachable with a valid API key or the local CLI token (upstream parity).
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireDashboardAuth(repo))
+		SetupDashboardRoutes(r, repo)
 	})
 }

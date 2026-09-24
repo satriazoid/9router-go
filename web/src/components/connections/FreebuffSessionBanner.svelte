@@ -10,6 +10,14 @@
     name: string
   }
 
+  export interface ConnectionOption {
+    id: string
+    name: string
+    isActive: boolean
+    currentModel?: string
+    status?: string
+  }
+
   interface Props {
     session: FreebuffSessionStatusResponse | null
     isLoading: boolean
@@ -18,9 +26,23 @@
     /** Selectable models. Switching ends the current session and re-admits. */
     models?: ModelOption[]
     onSwitch?: (model: string) => Promise<FreebuffSessionSwitchResponse>
+    /** Available Freebuff connections so user can manage session per account. */
+    connections?: ConnectionOption[]
+    selectedConnectionId?: string
+    onSelectConnection?: (id: string) => void
   }
 
-  let { session, isLoading, expiresInMin, onRefresh, models = [], onSwitch }: Props = $props()
+  let {
+    session,
+    isLoading,
+    expiresInMin,
+    onRefresh,
+    models = [],
+    onSwitch,
+    connections = [],
+    selectedConnectionId,
+    onSelectConnection,
+  }: Props = $props()
 
   let selectedModel = $state('')
   let isSwitching = $state(false)
@@ -186,8 +208,11 @@
               ({expiresInMin > 0 ? `Expires in ${expiresInMin} min` : 'Expires soon'})
             </span>
           {/if}
-        {:else if session?.connectionName}
-          : <span class="font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-xs">{session.connectionName}</span>
+        {/if}
+        {#if session?.connectionName}
+          <span class="font-normal text-xs {tone.muted} ml-1.5">
+            · Account: <span class="font-mono font-medium px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10">{session.connectionName}</span>
+          </span>
         {/if}
       </p>
       <button
@@ -229,6 +254,30 @@
         {/if}
       </div>
     {/if}
+    {#if connections && connections.length > 1}
+      <div class="mt-2.5 flex items-center gap-2 flex-wrap text-xs">
+        <span class="font-medium {tone.muted}">Manage Account:</span>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          {#each connections as conn (conn.id)}
+            <button
+              type="button"
+              onclick={() => onSelectConnection?.(conn.id)}
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors cursor-pointer {selectedConnectionId === conn.id ? 'bg-primary text-white border-primary shadow-xs' : 'border-border bg-surface-2 hover:bg-surface-3 text-text-main'}"
+            >
+              <span>{conn.name}</span>
+              {#if conn.currentModel}
+                <span class="font-mono text-[10px] {selectedConnectionId === conn.id ? 'text-white/90 bg-black/20' : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'} px-1 py-0.5 rounded">
+                  {conn.currentModel.split('/').pop()}
+                </span>
+              {:else if conn.status === 'banned'}
+                <span class="text-[10px] text-red-500 font-semibold">(banned)</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
 
     {#if onSwitch && models.length > 0}
       <div class="mt-2.5 flex items-center gap-2 flex-wrap">

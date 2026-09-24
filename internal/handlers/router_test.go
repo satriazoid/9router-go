@@ -79,6 +79,7 @@ func TestSetupRoutes_OAuthEndpointsMounted(t *testing.T) {
 }
 
 func TestSetupServerRouter_PprofMounted(t *testing.T) {
+	t.Setenv("PPROF_ENABLED", "true")
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -91,7 +92,26 @@ func TestSetupServerRouter_PprofMounted(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
-			t.Errorf("expected %s to return 200 OK, got %d", path, w.Code)
+			t.Errorf("expected %s to return 200 OK when PPROF_ENABLED=true, got %d", path, w.Code)
+		}
+	}
+}
+
+func TestSetupServerRouter_PprofDisabledByDefault(t *testing.T) {
+	t.Setenv("PPROF_ENABLED", "false")
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := db.NewRepo(database)
+	r := chi.NewRouter()
+	SetupServerRouter(r, repo, nil)
+
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected %s to return 404 Not Found by default, got %d", path, w.Code)
 		}
 	}
 }
@@ -104,13 +124,31 @@ func TestSetupServerRouter_SPARoutes(t *testing.T) {
 	r := chi.NewRouter()
 	SetupServerRouter(r, repo, nil)
 
-	spaPaths := []string{
+	// Unauthenticated with no settings row: login is required, so /dashboard
+	// pages redirect to /login (upstream dashboardGuard) while the other SPA
+	// aliases still serve the shell (the SPA shows the login screen itself).
+	guardedPaths := []string{
 		"/dashboard",
 		"/dashboard/combos",
 		"/dashboard/providers",
 		"/dashboard/terminal",
 		"/dashboard/usage",
 		"/dashboard/quota",
+	}
+	for _, p := range guardedPaths {
+		req := httptest.NewRequest("GET", p, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusFound {
+			t.Errorf("expected GET %s to redirect to /login, got %d", p, w.Code)
+		}
+		if loc := w.Header().Get("Location"); loc != "/login" {
+			t.Errorf("expected GET %s Location /login, got %q", p, loc)
+		}
+	}
+
+	spaPaths := []string{
+		"/login",
 		"/connections",
 		"/combos",
 		"/analytics",

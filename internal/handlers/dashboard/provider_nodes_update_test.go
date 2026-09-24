@@ -5,6 +5,7 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"9router/proxy/internal/db"
@@ -192,5 +193,63 @@ func TestHandleGetConnectionModels_NonCompatibleRejected(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGetConnectionModels_Antigravity(t *testing.T) {
+	repo, cleanup := setupNodeTestDB(t)
+	defer cleanup()
+	router := setupTestRouter(repo)
+
+	if _, err := repo.RawDB().Exec(`INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES
+		('conn-ag-test', 'antigravity', 'oauth', 'AG', 1, 1, '{"accessToken":"ya29.fake","providerSpecificData":{"projectId":"ag-proj"}}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("seed connection: %v", err)
+	}
+
+	calls := withProbeStub(t, func(_ int, p capturedProbe) (int, []byte, error) {
+		if !strings.Contains(p.url, ":fetchAvailableModels") {
+			t.Errorf("unexpected probe url %q", p.url)
+		}
+		if p.headers.Get("Authorization") != "Bearer ya29.fake" {
+			t.Errorf("unexpected auth %q", p.headers.Get("Authorization"))
+		}
+		fakeResp := `{
+			"models": {
+				"gemini-2.5-flash": {
+					"displayName": "Gemini 2.5 Flash",
+					"supportsImages": true,
+					"supportsThinking": true,
+					"isInternal": false
+				},
+				"chat_internal_1": {
+					"displayName": "Internal Chat",
+					"isInternal": true
+				}
+			}
+		}`
+		return http.StatusOK, []byte(fakeResp), nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/providers/conn-ag-test/models", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Provider string           `json:"provider"`
+		Models   []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Provider != "antigravity" {
+		t.Errorf("expected antigravity, got %s", out.Provider)
+	}
+	if len(out.Models) != 1 || out.Models[0]["id"] != "gemini-2.5-flash" {
+		t.Fatalf("unexpected models: %v", out.Models)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 probe call, got %d", len(*calls))
 	}
 }

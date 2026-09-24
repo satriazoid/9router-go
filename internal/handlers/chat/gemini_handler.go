@@ -141,8 +141,12 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 	return h.handleGeminiNonStream(ctx, w, resp.Body, translateResponse, metrics)
 }
 
-// storeAntigravityProjectID persists a discovered Antigravity project ID on the
+// StoreAntigravityProjectID persists a discovered Antigravity project ID on the
 // connection so later requests skip the onboarding RPCs entirely.
+func (h *ChatHandler) StoreAntigravityProjectID(connectionID, pid string) {
+	h.storeAntigravityProjectID(connectionID, pid)
+}
+
 func (h *ChatHandler) storeAntigravityProjectID(connectionID, pid string) {
 	if connectionID == "" || pid == "" {
 		return
@@ -154,12 +158,15 @@ func (h *ChatHandler) storeAntigravityProjectID(connectionID, pid string) {
 	}()
 }
 
-// refreshOAuthTokenIfExpired checks and refreshes OAuth token for any provider with refreshToken.
+// RefreshOAuthTokenIfExpired checks and refreshes OAuth token for any provider with refreshToken.
+func (h *ChatHandler) RefreshOAuthTokenIfExpired(connectionID, currentToken string) (string, string, error) {
+	return h.refreshOAuthTokenIfExpired(connectionID, currentToken)
+}
+
 func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken string) (string, string, error) {
 	if connectionID == "" {
 		return currentToken, "", nil
 	}
-
 	db := h.Repo.RawDB()
 	row := db.QueryRow("SELECT provider, data FROM providerConnections WHERE id = ?", connectionID)
 	var provider string

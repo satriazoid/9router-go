@@ -471,6 +471,11 @@ func TestHandleChatCompletions_AccountFallback_401(t *testing.T) {
 	}))
 	defer upstream2.Close()
 
+	// Clear pre-seeded connections so only test-managed mocks are used
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1', 'conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
+
 	// Insert two connections for deepseek: first will fail with 401, second will succeed
 	data1, _ := json.Marshal(map[string]any{
 		"apiKey":  "sk-bad-key",
@@ -1094,6 +1099,11 @@ func TestHandleChatCompletions_ComboAllFail(t *testing.T) {
 		w.Write([]byte(`{"error":{"message":"rate limited","type":"rate_limit_error"}}`))
 	}))
 	defer failingUpstream.Close()
+
+	// Clear pre-seeded connections so only test-managed mocks are used
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1', 'conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
 
 	// Insert connections for both providers pointing to the same failing upstream
 	failingData, _ := json.Marshal(map[string]any{

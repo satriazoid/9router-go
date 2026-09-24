@@ -264,6 +264,94 @@ func ReorderByCapabilities(comboModels []string, required map[string]bool) []str
 	return result
 }
 
+// hardCapabilities are input-modality capabilities that trigger the capacity adapter fallback pool.
+var hardCapabilities = []string{"vision", "pdf", "audioInput", "videoInput"}
+
+// AugmentModelsWithCapacityAdapter prepends models from the capacity adapter pool if NONE of the target models satisfy
+// all required hard capabilities (e.g. vision for image inputs).
+func (h *ChatHandler) AugmentModelsWithCapacityAdapter(models []string, required map[string]bool) ([]string, string) {
+	if len(models) == 0 || len(required) == 0 {
+		return models, "fallback"
+	}
+
+	// Filter required to hard capabilities only
+	var hardRequired []string
+	for _, cap := range hardCapabilities {
+		if required[cap] {
+			hardRequired = append(hardRequired, cap)
+		}
+	}
+	if len(hardRequired) == 0 {
+		return models, "fallback"
+	}
+
+	// If any model in the list already satisfies all required hard capabilities, do not augment.
+	for _, m := range models {
+		allMatch := true
+		for _, cap := range hardRequired {
+			if !modelHasCapability(m, cap) {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return models, "fallback"
+		}
+	}
+
+	// None of the target models satisfy the requirements.
+	// Look up capacity adapter settings.
+	strategy := "fallback"
+	var pool []string
+	seen := make(map[string]bool)
+	for _, m := range models {
+		seen[m] = true
+	}
+
+	if h.Repo != nil {
+		settings, err := h.Repo.GetSettings()
+		if err == nil && settings != nil && len(settings.CapacityAdapter) > 0 {
+			for _, cap := range hardRequired {
+				entry, ok := settings.CapacityAdapter[cap]
+				if !ok || !entry.Enabled {
+					continue
+				}
+				if entry.RoundRobin {
+					strategy = "round-robin"
+				}
+				candModels := entry.Models
+				if len(candModels) == 0 {
+					if cap == "vision" {
+						candModels = []string{"ag/gemini-3.8-flash-high"}
+					} else {
+						candModels = []string{"oc/mimo-v2.6-flash-free"}
+					}
+				}
+				for _, m := range candModels {
+					if !seen[m] && modelHasCapability(m, cap) {
+						seen[m] = true
+						pool = append(pool, m)
+					}
+				}
+			}
+		}
+	}
+
+	// Default fallback if pool is still empty and vision is required
+	if len(pool) == 0 && required["vision"] {
+		defaultModel := "ag/gemini-3.8-flash-high"
+		if !seen[defaultModel] {
+			pool = append(pool, defaultModel)
+		}
+	}
+
+	if len(pool) == 0 {
+		return models, "fallback"
+	}
+
+	return append(pool, models...), strategy
+}
+
 // ApplyComboStrategy rotates the array of models based on the selected strategy.
 // It treats every call as a new turn (backward-compatible wrapper).
 func (h *ChatHandler) ApplyComboStrategy(strategy string, models []string, comboName string, stickyLimit int) []string {
@@ -279,12 +367,13 @@ func (h *ChatHandler) applyComboStrategy(strategy string, models []string, combo
 	}
 
 	switch strategy {
-	case "round-robin":
-		// Round-robin is just sticky with limit=1
-		stickyLimit = 1
+	case "round-robin", "roundrobin":
+		if stickyLimit <= 0 {
+			stickyLimit = 1
+		}
 		fallthrough
 	case "sticky":
-		if stickyLimit <= 1 {
+		if stickyLimit <= 0 {
 			stickyLimit = 1
 		}
 		h.stickyMu.Lock()
@@ -825,7 +914,7 @@ var fusionDefaults = FusionTuning{
 
 // handleFusion implements combo fusion: parallel model fan-out + judge synthesis.
 // Matches JS handleFusionChat in combo.js.
-func (h *ChatHandler) handleFusion(ctx context.Context, w http.ResponseWriter, body []byte, comboModels []string, strategy string, isStream bool, translateResponse bool, comboName string, stickyLimit int) {
+func (h *ChatHandler) handleFusion(ctx context.Context, w http.ResponseWriter, body []byte, comboModels []string, strategy string, isStream bool, translateResponse bool, comboName string, stickyLimit int, customJudgeModel string) {
 	cw := newCommittedResponseWriter(w)
 	panel := h.ApplyComboStrategy(strategy, comboModels, comboName, stickyLimit)
 	if len(panel) == 0 {
@@ -867,6 +956,9 @@ func (h *ChatHandler) handleFusion(ctx context.Context, w http.ResponseWriter, b
 	// Extract successful answers
 	var answers []fusionAnswer
 	judgeModel := panel[0] // default: first panel model
+	if customJudgeModel != "" {
+		judgeModel = customJudgeModel
+	}
 	for i, res := range settled {
 		if res == nil || !res.ok {
 			continue

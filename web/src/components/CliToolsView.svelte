@@ -36,10 +36,9 @@
   let isLoading = $state(true)
   let searchQuery = $state('')
   let activeCategory = $state<'all' | 'cli' | 'ide' | 'mitm'>('all')
-  let selectedTool = $state<ToolItem | null>(null)
   let copiedSnippetId = $state<string | null>(null)
-  let localOrigin = $state(typeof window !== 'undefined' ? window.location.origin : 'http://localhost:20128')
-
+  // SSR fallback uses the Go default port 20130; live origin wins on mount.
+  let localOrigin = $state(typeof window !== 'undefined' ? window.location.origin : 'http://localhost:20130')
   onMount(() => {
     if (typeof window !== 'undefined') {
       localOrigin = window.location.origin

@@ -36,8 +36,7 @@ func fetchFreebuffUpstreamSession(ctx context.Context, token string) (*freebuffU
 	req.Header.Set("User-Agent", "codebuff-cli/0.0.138")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: freebuffSessionRequestTimeout}
-	resp, err := client.Do(req)
+	resp, err := executor.DoFreebuffHTTP(ctx, nil, req)
 	if err != nil {
 		return nil, fmt.Errorf("freebuff session request failed: %w", err)
 	}
@@ -175,18 +174,16 @@ func (h *OAuthHandler) HandleFreebuffSessionSwitch(w http.ResponseWriter, r *htt
 		instanceID = current.InstanceID
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	result, err := executor.SwitchFreebuffModel(ctx, client, freebuffAPIBaseURL, token, instanceID, model)
+	result, err := executor.SwitchFreebuffModel(ctx, nil, freebuffAPIBaseURL, token, instanceID, model)
 	if err != nil {
 		// The held seat survives a failed switch, so nothing is lost: the user
-		// can retry or wait the session out.
 		log.Error("oauth", "freebuff model switch failed", "conn", conn.ID, "model", model, "error", err)
 		handlerutil.WriteJSONError(w, http.StatusBadGateway, "freebuff model switch failed: "+err.Error())
 		return
 	}
 
 	log.Info("oauth", "freebuff model switched", "conn", conn.ID, "model", model, "refund", result.FreebucksRefund)
-
+	updateConnectionFreebuffModel(h.Repo, conn, model)
 	resp := map[string]any{
 		"status":       "active",
 		"currentModel": result.Model,

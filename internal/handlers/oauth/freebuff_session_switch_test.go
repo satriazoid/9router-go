@@ -89,6 +89,14 @@ func TestHandleFreebuffSessionSwitch_ReleasesHeldSeatAndAdmitsNewModel(t *testin
 	if admittedModel != "model-b" {
 		t.Errorf("expected admission for model-b, got %q", admittedModel)
 	}
+
+	updatedConn, err := handler.Repo.GetProviderConnectionByID("fb-conn-1")
+	if err != nil {
+		t.Fatalf("failed to query updated connection: %v", err)
+	}
+	if !strings.Contains(updatedConn.Data, `"freebuffModel":"model-b"`) {
+		t.Errorf("expected connection data to contain freebuffModel model-b, got %s", updatedConn.Data)
+	}
 }
 
 func TestHandleFreebuffSessionSwitch_AlreadyOnModelDoesNotBurnASeat(t *testing.T) {

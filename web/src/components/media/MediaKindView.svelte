@@ -1,74 +1,108 @@
 <script lang="ts">
-  import { Search, Server } from 'lucide-svelte'
-  import { api, type ProviderConnection } from '../../api/client'
-  import { getModelKind, getModelsByProviderId } from '../../lib/models'
+  import { onMount } from 'svelte'
+  import { api, type APIKey, type Combo, type ProviderConnection, type ProviderNode, type Settings } from '../../api/client'
   import { getProvidersByKind, type ProviderCatalogItem } from '../../lib/providers'
   import Badge from '../../lib/ui/Badge.svelte'
+  import Card from '../../lib/ui/Card.svelte'
+  import AddCompatibleNodeModal from '../connections/AddCompatibleNodeModal.svelte'
   import MediaProviderCard from './MediaProviderCard.svelte'
   import MediaProviderDetail from './MediaProviderDetail.svelte'
-  import {
-    getMediaProviderStats,
-    MEDIA_KIND_INFO,
-    type MediaKind
-  } from './mediaTypes'
+  import { MEDIA_KIND_INFO, type MediaKind } from './mediaTypes'
 
   interface Props {
     kind: MediaKind
     connections?: ProviderConnection[]
+    apiKeys?: APIKey[]
+    settings?: Settings
+    combos?: Combo[]
     onRefresh: () => void
+    onSelectProvider?: (kind: string, id: string) => void
+    initialProviderId?: string | null
   }
 
-  let { kind, connections = [], onRefresh }: Props = $props()
+  let {
+    kind,
+    connections = [],
+    apiKeys = [],
+    settings = {},
+    combos = [],
+    onRefresh,
+    onSelectProvider,
+    initialProviderId = null,
+  }: Props = $props()
 
   let selectedProvider = $state<ProviderCatalogItem | null>(null)
-  let searchQuery = $state('')
-  let statusFilter = $state<'all' | 'connected' | 'error' | 'disabled' | 'not_connected'>('all')
+  let customNodes = $state<ProviderNode[]>([])
+  let showCustomModal = $state(false)
 
-  let info = $derived(MEDIA_KIND_INFO[kind])
+  const COMBO_KINDS = new Set<string>([])
+  const COMBO_BASE_NAMES: Record<string, string> = { image: 'image-combo', tts: 'tts-combo' }
+
+  let kindConfig = $derived(MEDIA_KIND_INFO[kind])
+  let isEmbedding = $derived(kind === 'embedding')
+  let supportsCombo = $derived(COMBO_KINDS.has(kind))
+  let kindCombos = $derived(combos.filter((c) => (c as any).kind === kind))
+
   let providers = $derived(getProvidersByKind(kind))
 
-  function getKindModelCount(providerId: string): number {
-    return getModelsByProviderId(providerId).filter((m) => getModelKind(m) === kind).length
-  }
+  $effect(() => {
+    if (initialProviderId && providers.length > 0) {
+      const match = providers.find((p) => p.id === initialProviderId)
+      if (match) selectedProvider = match
+    }
+  })
 
-  let filteredProviders = $derived(
-    providers
-      .filter((p) => {
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase()
-          if (!p.name.toLowerCase().includes(q) && !p.id.toLowerCase().includes(q)) {
-            return false
-          }
-        }
-        const stats = getMediaProviderStats(connections, p.id, p.noAuth)
-        if (statusFilter === 'all') return true
-        if (statusFilter === 'connected') return stats.status === 'connected'
-        if (statusFilter === 'error') return stats.status === 'error'
-        if (statusFilter === 'disabled') return stats.status === 'disabled'
-        if (statusFilter === 'not_connected') return stats.status === 'none'
-        return true
-      })
-      .sort((a, b) => {
-        const statsA = getMediaProviderStats(connections, a.id, a.noAuth)
-        const statsB = getMediaProviderStats(connections, b.id, b.noAuth)
-        const scoreA = statsA.active > 0 ? 2 : statsA.status === 'ready' ? 1 : 0
-        const scoreB = statsB.active > 0 ? 2 : statsB.status === 'ready' ? 1 : 0
-        return scoreB - scoreA || a.name.localeCompare(b.name)
-      })
+  onMount(() => {
+    if (isEmbedding) {
+      api.getProviderNodes().then((nodes) => {
+        customNodes = (nodes || []).filter((n) => n.type === 'custom-embedding')
+      }).catch(() => {})
+    }
+  })
+
+  let customProviders = $derived(
+    customNodes.map((n) => ({
+      id: n.id,
+      name: n.name || 'Custom Embedding',
+      category: 'custom' as const,
+      alias: n.prefix || n.id,
+      color: '#6366F1',
+      icon: 'data_array',
+      serviceKinds: ['embedding'],
+      noAuth: true,
+    } as ProviderCatalogItem))
   )
 
-  let connectedCount = $derived(
-    providers.filter((p) => {
-      const stats = getMediaProviderStats(connections, p.id, p.noAuth)
-      return stats.status === 'connected' || stats.status === 'ready'
-    }).length
-  )
+  let allProviders = $derived([...providers, ...customProviders])
 
-  async function handleToggleAll(providerId: string, newActive: boolean) {
+  async function handleToggleProvider(providerId: string, newActive: boolean) {
     const list = connections.filter((c) => c.provider === providerId)
     await Promise.allSettled(
       list.map((c) => api.updateConnection(c.id, { isActive: newActive ? 1 : 0 }))
     )
+    onRefresh()
+  }
+
+  async function handleCreateCombo() {
+    const base = COMBO_BASE_NAMES[kind] || `${kind}-combo`
+    let name = base
+    let i = 1
+    const existing = new Set(combos.map((c) => c.name))
+    while (existing.has(name)) {
+      name = `${base}-${i++}`
+    }
+    try {
+      await api.createCombo({ name, models: [], kind })
+      onRefresh()
+    } catch (err: any) {
+      alert(err.message || 'Failed to create combo')
+    }
+  }
+
+  async function handleCreateCustomNode(data: { name: string; prefix: string; baseUrl: string; type: string }) {
+    const node = await api.createProviderNode(data)
+    customNodes = [...customNodes, node]
+    showCustomModal = false
     onRefresh()
   }
 </script>
@@ -78,72 +112,110 @@
     provider={selectedProvider}
     {kind}
     {connections}
+    {apiKeys}
+    {settings}
     onBack={() => (selectedProvider = null)}
     {onRefresh}
   />
 {:else}
   <div class="flex flex-col gap-6 animate-fade-in">
-    <!-- Header banner / summary -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-border">
-      <div>
-        <h1 class="text-xl font-bold text-text-main flex items-center gap-2.5">
-          <span>{info.title}</span>
-          <Badge tone="default" size="sm">{providers.length} providers</Badge>
-        </h1>
-        <p class="text-xs text-text-muted mt-1 leading-relaxed max-w-2xl">
-          {info.description}
-        </p>
+    {#if isEmbedding || supportsCombo}
+      <div class="flex items-center justify-end gap-2">
+        {#if supportsCombo}
+          <button
+            type="button"
+            onclick={handleCreateCombo}
+            class="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-surface border border-border hover:bg-surface-2 text-text-main text-xs font-medium transition-colors cursor-pointer shadow-sm"
+          >
+            <span class="material-symbols-outlined text-sm">add</span>
+            Create Combo
+          </button>
+        {/if}
+        {#if isEmbedding}
+          <button
+            type="button"
+            onclick={() => (showCustomModal = true)}
+            class="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors cursor-pointer shadow-sm"
+          >
+            <span class="material-symbols-outlined text-sm">add</span>
+            Add Custom Embedding
+          </button>
+        {/if}
       </div>
+    {/if}
 
-      <div class="flex items-center gap-2">
-        <Badge variant={connectedCount > 0 ? 'success' : 'default'} size="md" dot={connectedCount > 0}>
-          {connectedCount} / {providers.length} ready
-        </Badge>
+    {#if supportsCombo && kindCombos.length > 0}
+      <div class="flex flex-col gap-2">
+        <h2 class="text-xs font-semibold text-text-muted uppercase tracking-wider">Combos</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {#each kindCombos as combo (combo.id)}
+            <a href={`/dashboard/media-providers/combo/${combo.id}`}>
+              <Card padding="xs" class="h-full hover:bg-black/[0.01] dark:hover:bg-white/[0.01] transition-colors cursor-pointer">
+                <div class="flex items-center gap-3">
+                  <div class="size-8 rounded-lg flex items-center justify-center shrink-0 bg-primary/10 text-primary">
+                    <span class="material-symbols-outlined text-lg">alt_route</span>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="font-semibold text-sm truncate">{combo.name}</h3>
+                    <div class="flex items-center gap-2 mt-0.5">
+                      <Badge variant="default" size="sm">{combo.models?.length ?? 0} models</Badge>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </a>
+          {/each}
+        </div>
       </div>
-    </div>
+    {/if}
 
-    <!-- Search & Filter Bar -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div class="relative flex-1 max-w-md">
-        <Search class="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
-        <input
-          type="text"
-          bind:value={searchQuery}
-          placeholder="Search {info.singular.toLowerCase()} providers..."
-          class="w-full pl-9 pr-4 py-1.5 text-xs rounded-xl bg-surface border border-border text-text-main placeholder:text-text-muted focus:outline-none focus:border-brand-500 transition-colors"
-        />
-      </div>
-
-      <select
-        bind:value={statusFilter}
-        class="h-8 rounded-lg border border-border bg-surface px-2 text-xs text-text-main outline-none transition-colors hover:border-brand-500/40 cursor-pointer"
-      >
-        <option value="all">All Providers</option>
-        <option value="connected">Connected</option>
-        <option value="error">Error</option>
-        <option value="disabled">Disabled</option>
-        <option value="not_connected">Not Connected</option>
-      </select>
-    </div>
-
-    <!-- Providers Grid -->
-    {#if filteredProviders.length === 0}
-      <div class="flex flex-col items-center justify-center py-16 gap-3 text-text-muted text-xs border border-dashed border-border rounded-xl">
-        <Server class="w-8 h-8 opacity-40" />
-        <span>{info.emptyMessage}</span>
+    {#if allProviders.length === 0}
+      <div class="text-center py-12 border border-dashed border-border rounded-xl text-text-muted text-sm">
+        No providers support <strong>{kindConfig?.title || kind}</strong> yet.
       </div>
     {:else}
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-        {#each filteredProviders as provider (provider.id)}
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {#each providers as provider (provider.id)}
           <MediaProviderCard
             {provider}
-            stats={getMediaProviderStats(connections, provider.id, provider.noAuth)}
-            modelCount={getKindModelCount(provider.id)}
-            onSelect={() => (selectedProvider = provider)}
-            onToggleAll={(active) => handleToggleAll(provider.id, active)}
+            {kind}
+            {connections}
+            onToggle={handleToggleProvider}
+            onSelect={() => {
+              if (onSelectProvider) {
+                onSelectProvider(kind, provider.id)
+              } else {
+                selectedProvider = provider
+              }
+            }}
+          />
+        {/each}
+        {#each customProviders as provider (provider.id)}
+          <MediaProviderCard
+            {provider}
+            {kind}
+            {connections}
+            isCustom
+            onToggle={handleToggleProvider}
+            onSelect={() => {
+              if (onSelectProvider) {
+                onSelectProvider(kind, provider.id)
+              } else {
+                selectedProvider = provider
+              }
+            }}
           />
         {/each}
       </div>
+    {/if}
+
+    {#if isEmbedding && showCustomModal}
+      <AddCompatibleNodeModal
+        isOpen={showCustomModal}
+        nodeType="custom-embedding"
+        onClose={() => (showCustomModal = false)}
+        onCreated={handleCreateCustomNode}
+      />
     {/if}
   </div>
 {/if}

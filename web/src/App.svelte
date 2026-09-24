@@ -124,7 +124,9 @@
     try {
       const authStatus = await api.checkRequireLogin()
       requireLogin = !!authStatus.requireLogin
-      isAuthenticatedState = isAuthenticated() || !requireLogin
+      // Trust the server session (auth_token cookie) first; the localStorage
+      // flag is only a hint because the cookie is httpOnly and unreadable by JS.
+      isAuthenticatedState = !!authStatus.authenticated || isAuthenticated() || !requireLogin
     } catch {
       requireLogin = false
       isAuthenticatedState = true
@@ -208,7 +210,7 @@
     'media-image': { title: 'Text to Image', description: 'Image generation and transformation models' },
     'media-tts': { title: 'Text to Speech', description: 'Voice synthesis and audio generation models' },
     'media-stt': { title: 'Speech to Text', description: 'Audio transcription and speech recognition models' },
-    'media-video': { title: 'Video Generation', description: 'Text-to-video and motion synthesis models' },
+    'media-systemone': { title: 'System One', description: 'Structured state evaluation models' },
     'media-web': { title: 'Web Fetch & Search', description: 'Configure web search and scrape tools' },
     'proxy-pools': { title: 'Proxy Pools', description: 'Manage your proxy pool configurations' },
     skills: { title: 'Agent Skills', description: 'Copy a link and paste to your AI to use 9Router — no install needed' },
@@ -325,15 +327,155 @@
             {:else if activeTab === 'keys'}
               <ApiKeysView {apiKeys} onRefresh={loadData} />
             {:else if activeTab === 'media-embedding'}
-              <MediaKindView kind="embedding" {connections} onRefresh={loadData} />
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind="embedding"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-embedding')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="embedding"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
             {:else if activeTab === 'media-image'}
-              <MediaKindView kind="image" {connections} onRefresh={loadData} />
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind="image"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-image')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="image"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
             {:else if activeTab === 'media-tts'}
-              <MediaKindView kind="tts" {connections} onRefresh={loadData} />
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind="tts"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-tts')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="tts"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
             {:else if activeTab === 'media-stt'}
-              <MediaKindView kind="stt" {connections} onRefresh={loadData} />
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind="stt"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-stt')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="stt"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
             {:else if activeTab === 'media-video'}
-              <MediaKindView kind="video" {connections} onRefresh={loadData} />
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind="video"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-video')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="video"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
+            {:else if activeTab === 'media-systemone'}
+              {#if selectedMedia && selectedMediaCatalogItem}
+                <MediaProviderDetail
+                  provider={selectedMediaCatalogItem}
+                  kind={selectedMedia.kind as any}
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  onBack={() => {
+                    selectedMedia = null
+                    navigate('media-systemone')
+                  }}
+                  onRefresh={loadData}
+                />
+              {:else}
+                <MediaKindView
+                  kind="systemone"
+                  {connections}
+                  {apiKeys}
+                  {settings}
+                  {combos}
+                  onRefresh={loadData}
+                  onSelectProvider={(k, id) => navigateMediaProvider(k, id)}
+                />
+              {/if}
             {:else if activeTab === 'media-web'}
               {#if selectedMedia && selectedMediaCatalogItem}
                 <MediaProviderDetail
@@ -341,6 +483,7 @@
                   kind={selectedMedia.kind as any}
                   {connections}
                   {apiKeys}
+                  {settings}
                   onBack={() => {
                     selectedMedia = null
                     navigate('media-web')
