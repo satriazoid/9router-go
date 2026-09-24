@@ -2,10 +2,14 @@ package executor
 
 import (
 	json "encoding/json/v2"
+	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"9router/proxy/internal/proxy"
 )
 
 func parseToolCalls(t *testing.T, sse string) (id string, idx int) {
@@ -315,5 +319,39 @@ func TestHandleCodexStream_SplitPackets(t *testing.T) {
 	}
 	if !strings.Contains(body, "[DONE]") {
 		t.Errorf("expected [DONE], got body: %s", body)
+	}
+}
+
+func TestHandleCodexStream_UpstreamErrorFailsLoud(t *testing.T) {
+	// Upstream FreeTierError must surface as an error, never a 200 with
+	// empty content (silent success). Mirrors the live muse-spark-free case.
+	rawSSE := "data: {\"type\":\"error\",\"error\":{\"type\":\"FreeTierError\",\"message\":\"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode\"}}\n\n" +
+		"data: [DONE]\n\n"
+	rec := httptest.NewRecorder()
+	req := &Request{IsStream: false, TranslateResp: false}
+	err := handleCodexStream(rec, req, strings.NewReader(rawSSE))
+	if err == nil {
+		t.Fatalf("expected upstream error, got nil (body: %s)", rec.Body.String())
+	}
+	var ue *proxy.UpstreamError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected *proxy.UpstreamError, got %T: %v", err, err)
+	}
+	if ue.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 for FreeTierError, got %d", ue.StatusCode)
+	}
+	if !strings.Contains(string(ue.Body), "free tier") {
+		t.Errorf("expected upstream message preserved, got %s", string(ue.Body))
+	}
+}
+
+func TestProcessCodexEvent_ErrorRecorded(t *testing.T) {
+	state := &CodexStreamState{}
+	out := ProcessCodexEvent(`{"type":"error","error":{"type":"FreeTierError","message":"nope"}}`, state, "r", 1)
+	if len(out) != 0 {
+		t.Errorf("error events must emit no chunks, got %v", out)
+	}
+	if len(state.UpstreamErr) == 0 {
+		t.Fatalf("error event must be recorded on state")
 	}
 }

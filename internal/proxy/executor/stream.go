@@ -22,7 +22,8 @@ type CodexStreamState struct {
 	CurrentEvent      string
 	OutputLength      int
 	ToolCallCount     int
-	Completed         bool // response.completed seen — finish chunk already emitted
+	Completed         bool   // response.completed seen — finish chunk already emitted
+	UpstreamErr       []byte // raw upstream {"type":"error",...} event, if any
 	CurrentToolCallID string
 	ToolCallIdx       map[string]int
 	ToolCallNames     map[string]string
@@ -38,6 +39,19 @@ func ProcessCodexEvent(data string, state *CodexStreamState, responseID string, 
 	}
 
 	eventType, _ := event["type"].(string)
+
+	// Upstream error events (e.g. {"type":"error","error":{...FreeTierError}})
+	// must surface, never vanish: without this the converter below emits a
+	// 200 with empty content for a failed turn (silent success). Record on
+	// state; handleCodexStream converts to an UpstreamError after the scan.
+	if eventType == "error" {
+		if raw, err := json.Marshal(event); err == nil {
+			state.UpstreamErr = raw
+		} else {
+			state.UpstreamErr = []byte(`{"type":"error"}`)
+		}
+		return nil
+	}
 
 	switch eventType {
 	case "response.output_text.delta", "response.text.delta":
@@ -312,9 +326,9 @@ func ProcessCodexEvent(data string, state *CodexStreamState, responseID string, 
 				"index": 0,
 				"delta": map[string]any{
 					"tool_calls": []map[string]any{{
-						"index": idx,
-						"id":    callID,
-						"type":  "function",
+						"index":    idx,
+						"id":       callID,
+						"type":     "function",
 						"function": fnMapDone,
 					}},
 				},
@@ -503,6 +517,10 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 				}
 			})
 
+			// Headers are already committed on the stream path, so a pure
+			// upstream error (no content at all) can only be signaled by
+			// closing without useful chunks; the non-stream path below
+			// returns a proper UpstreamError instead.
 			if !doneSeen {
 				return writeSSEFinish(hw, flusher, req, state, responseID, created)
 			}
@@ -589,12 +607,47 @@ func handleCodexStream(w http.ResponseWriter, req *Request, upstream io.Reader) 
 		}
 	})
 
+	// Upstream error events must fail loudly, never masquerade as an empty
+	// 200. Parse status/message from the recorded event (default 502).
+	if len(state.UpstreamErr) > 0 && state.OutputLength == 0 && state.ToolCallCount == 0 {
+		return codexUpstreamError(state.UpstreamErr)
+	}
 	converted, ok := sseToOpenAIJSON(sseBuf.Bytes())
 	if !ok {
+		if len(state.UpstreamErr) > 0 {
+			return codexUpstreamError(state.UpstreamErr)
+		}
 		// Fallback empty response
 		converted = []byte(fmt.Sprintf(`{"id":"%s","object":"chat.completion","created":%d,"choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}`, responseID, created))
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(converted), req.TranslateResp, req.ResponseBuf)
+}
+
+// codexUpstreamError converts a recorded upstream {"type":"error",...} event
+// into an UpstreamError (default 502). FreeTierError / access gates map to
+// 403 so fallback treats them as credential problems, not capacity.
+func codexUpstreamError(raw []byte) error {
+	var event struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	status := http.StatusBadGateway
+	msg := "upstream error"
+	if err := json.Unmarshal(raw, &event); err == nil {
+		if event.Error.Message != "" {
+			msg = event.Error.Message
+		}
+		t := strings.ToLower(event.Error.Type)
+		if strings.Contains(t, "freetier") || strings.Contains(t, "forbidden") || strings.Contains(t, "auth") {
+			status = http.StatusForbidden
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{"message": msg, "type": "upstream_error", "code": status},
+	})
+	return &proxy.UpstreamError{StatusCode: status, Body: body}
 }
 
 // writeSSEFinish writes the closing [DONE] frame and records usage. If the
