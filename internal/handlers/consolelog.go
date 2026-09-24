@@ -9,6 +9,7 @@ import (
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
+	"9router/proxy/internal/shutdown"
 	"9router/proxy/internal/tracing"
 )
 
@@ -134,6 +135,11 @@ func HandleConsoleLogsStream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-shutdown.Done():
+			// Server is stopping: close the endless stream now instead of
+			// holding server.Shutdown until its deadline (the browser tab
+			// behind this connection never goes idle on its own).
 			return
 		case ev, ok := <-ch:
 			if !ok {

@@ -7,6 +7,7 @@ import (
 
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
+	"9router/proxy/internal/shutdown"
 	"9router/proxy/internal/usagetracker"
 )
 
@@ -56,6 +57,9 @@ func HandleUsageStream(repo *db.Repo) http.HandlerFunc {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-shutdown.Done():
+				// Same as console-log stream: never hold Shutdown hostage.
 				return
 			case b, ok := <-ch:
 				if !ok {
