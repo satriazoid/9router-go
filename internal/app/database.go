@@ -30,6 +30,18 @@ func ProvideDatabase(lc fx.Lifecycle, cfg *config.Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("database connect: %w", err)
 	}
 
+	// Cross-process lease table for upstream coordination (Freebuff
+	// sessions, future scopes). Idempotent: no-op when already present,
+	// invisible to dashboards that do not know the table. Best-effort:
+	// a shared test binary may hand us a connection bound to a removed
+	// temp file (global singleton); leases then simply stay unavailable.
+	if err := db.EnsureUpstreamLeases(conn); err != nil {
+		_, statErr := conn.Exec("SELECT 1")
+		if statErr == nil {
+			return nil, fmt.Errorf("database leases: %w", err)
+		}
+	}
+
 	lc.Append(fx.Hook{
 		OnStop: func(ctx context.Context) error {
 			return conn.Close()

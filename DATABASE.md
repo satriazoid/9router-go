@@ -428,7 +428,49 @@ Example `data` content:
 
 ---
 
-### 11. `_meta` — Schema Version (Next.js only)
+### 11. `upstream_leases` — Cross-Process Coordination (Go only)
+
+Generic lease table so multiple 9router-go processes sharing one DB file
+coordinate upstream state instead of fighting over it. Created idempotently
+at startup (`EnsureUpstreamLeases`, every run — no-op when present) and
+ignored by the Next.js dashboard, which does not know the table.
+
+```sql
+CREATE TABLE IF NOT EXISTS upstream_leases (
+    scope      TEXT NOT NULL,  -- use-case namespace, e.g. "freebuff-session"
+    key        TEXT NOT NULL,  -- hashed identity, NEVER raw secret text
+    value      TEXT NOT NULL,  -- opaque lease payload (instance id, etag…)
+    expires_at TEXT NOT NULL,  -- RFC3339; dead holders stop blocking
+    updated_at TEXT NOT NULL,  -- RFC3339
+    PRIMARY KEY (scope, key)
+);
+```
+
+**Contract** (`internal/db/leases.go` — `ReadLease` / `AcquireLease` /
+`RefreshLease` / `ReleaseLease`):
+
+- `Acquire` is atomic across processes (single guarded `UPDATE`-then-`INSERT`);
+  exactly one racer wins, losers read the winner's value and follow it.
+- Expired rows read as absent; a new acquirer takes over explicitly — a
+  crashed process never blocks others past its TTL.
+- `Release` is compare-and-delete (`WHERE value = ?`): a stale holder can
+  never delete a fresh row stored by another process.
+- `LeaseKey(parts...)` = `hex(sha256("a::b::c"))` — raw tokens/API keys
+  must never touch `scope`, `key`, or `value`.
+
+**Registered scopes:**
+
+| Scope | Key Format | Value | TTL | Purpose |
+|-------|-----------|-------|-----|---------|
+| `freebuff-session` | `hex(sha256(token))::model` | `instanceId` | session TTL (~1h) | One admitter per account+model; followers reuse the stored instance instead of re-claiming (upstream punishes re-claims with 409 `session_superseded`) |
+
+**Rules for new scopes:** add one `LeaseScope*` constant per use-case, never
+reuse a scope for another purpose; keep values small, opaque, and secret-free;
+pick a TTL matching the upstream lifetime (not longer).
+
+---
+
+### 12. `_meta` — Schema Version (Next.js only)
 
 ```sql
 CREATE TABLE _meta (
@@ -459,6 +501,7 @@ flowchart LR
     Handler --> ReqLog["requestDetails\nDebug log"]
 
     Handler --> Settings["settings\nGlobal config\ncomboStrategies"]
+    Handler --> Lease["upstream_leases\nCross-process leases"]
 ```
 
 ## Go vs Next.js Schema Differences
