@@ -103,7 +103,7 @@ func ConcealFingerprintTools(body []byte) ([]byte, map[string]string) {
 	if raw, ok := m["tools"].([]any); ok {
 		tools = raw
 	}
-
+	hadClientTools := len(tools) > 0
 	toolNameMap := map[string]string{}
 	seen := map[string]bool{}
 	kept := make([]any, 0, len(tools)+len(OpenCodeFingerprintTools))
@@ -133,13 +133,20 @@ func ConcealFingerprintTools(body []byte) ([]byte, map[string]string) {
 
 	// Injected declarations mirror the shape already in use: the Responses API
 	// puts "name" at the top level, Chat Completions wraps it in "function".
-	flat := true
+	flat := false
+	if _, hasInput := m["input"]; hasInput {
+		flat = true
+	}
 	for _, tool := range kept {
 		if tm, ok := tool.(map[string]any); ok {
 			if _, has := tm["function"]; has {
 				flat = false
+				break
 			}
-			break
+			if _, has := tm["name"]; has {
+				flat = true
+				break
+			}
 		}
 	}
 
@@ -148,16 +155,16 @@ func ConcealFingerprintTools(body []byte) ([]byte, map[string]string) {
 			continue
 		}
 		entry := map[string]any{
-			"type":        "function",
-			"description": "OpenCode built-in " + name + " tool",
-			"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+			"type": "function",
 		}
 		if flat {
 			entry["name"] = name
+			entry["description"] = "This tool is currently unavailable and must not be used."
+			entry["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
 		} else {
 			entry["function"] = map[string]any{
 				"name":        name,
-				"description": "OpenCode built-in " + name + " tool",
+				"description": "This tool is currently unavailable and must not be used.",
 				"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
 			}
 		}
@@ -166,15 +173,20 @@ func ConcealFingerprintTools(body []byte) ([]byte, map[string]string) {
 	}
 	m["tools"] = kept
 
-	// Point an explicit tool_choice at the renamed tool.
+	// Point an explicit tool_choice at the renamed tool, or apply upstream defaults.
 	if choice, ok := m["tool_choice"].(map[string]any); ok {
 		if n, ok := choice["name"].(string); ok {
 			if key := FingerprintToolKey(n); key != "" && toolNameMap[key] != "" {
 				choice["name"] = key
 			}
 		}
+	} else if m["tool_choice"] == nil {
+		if flat {
+			m["tool_choice"] = "auto"
+		} else if !hadClientTools {
+			m["tool_choice"] = "none"
+		}
 	}
-
 	out, err := json.Marshal(m)
 	if err != nil {
 		return body, noop

@@ -655,3 +655,80 @@ func TestLiveE2E_Gemini38_FlashHigh_RealStream(t *testing.T) {
 		t.Errorf("expected SSE chunks and [DONE], got: %s", rec.Body.String())
 	}
 }
+
+func TestLiveE2E_SpaceBunny_Free(t *testing.T) {
+	repo, cleanup := getRealUserDB(t)
+	defer cleanup()
+
+	handler := NewChatHandler(repo)
+
+	reqBody := `{
+		"model": "oc/space-bunny-free",
+		"messages": [
+			{"role": "user", "content": "hi"}
+		],
+		"stream": false
+	}`
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.HandleChatCompletions(rec, req)
+
+	t.Logf("Space bunny response code: %d", rec.Code)
+	t.Logf("Space bunny response body:\n%s", rec.Body.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 from space-bunny-free, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLiveE2E_SpaceBunny_AntigravityPrefix(t *testing.T) {
+	repo, cleanup := getRealUserDB(t)
+	defer cleanup()
+
+	handler := NewChatHandler(repo)
+
+	reqBody := `{
+		"model": "ag/space-bunny-free",
+		"messages": [
+			{"role": "user", "content": "hi"}
+		],
+		"stream": false
+	}`
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.HandleChatCompletions(rec, req)
+
+	t.Logf("Space bunny via ag/ response code: %d", rec.Code)
+	t.Logf("Space bunny via ag/ response body:\n%s", rec.Body.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 from ag/space-bunny-free, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLiveE2E_HandleTestModel_SpaceBunny(t *testing.T) {
+	repo, cleanup := getRealUserDB(t)
+	defer cleanup()
+
+	handler := NewChatHandler(repo)
+
+	for _, modelName := range []string{"ag/space-bunny-free", "oc/space-bunny-free", "space-bunny-free"} {
+		body, _ := json.Marshal(map[string]string{"model": modelName})
+		req := httptest.NewRequest("POST", "/api/models/test", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handler.HandleTestModel(rec, req)
+
+		t.Logf("HandleTestModel %s -> %d: %s", modelName, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+			t.Fatalf("expected ok:true for %s, got: %s", modelName, rec.Body.String())
+		}
+	}
+}

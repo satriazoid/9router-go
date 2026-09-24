@@ -107,6 +107,12 @@
 
 ### 🐛 Bug Fixes
 
+**OpenCode Chat Completions Tool Fingerprint & Model Prefix Fix (`space-bunny-free`):**
+- `internal/translator/fingerprint.go`: Fixed `ConcealFingerprintTools` to preserve standard Chat Completions tool shape (`{"type":"function","function":{"name":...}}`) with `"tool_choice":"none"` when client tools are absent, instead of falling back to flat Responses format (`{"type":"function","name":...}`) which caused upstream `[invalid_request_error] invalid request` on OpenCode Chat Completions models like `space-bunny-free`.
+- `internal/proxy/executor/providers.go`: Stripped provider prefixes (`oc/`, `ag/`, `antigravity/`, `opencode/`) from `model` in `ForwardOpencode` and `ForwardOpencodeGo` before forwarding upstream.
+- `internal/handlers/chat/resolution.go`: Route OpenCode models (`space-bunny-free`, `bunny`, `big-pickle`, `muse-spark`, `*-free`) to `opencode` even when requested with `ag/` or `antigravity/` prefix or bare without a prefix.
+- `web/src/components/connections/ProviderDetailView.svelte`: Reset `suggestedModels` at the beginning of `loadData()` to prevent suggested models from lingering across provider detail views.
+
 **Antigravity Google OAuth Callback percent-encoding unescape:**
 - `internal/handlers/oauth/antigravity.go`: Added `cleanAuthCode` to unescape double-encoded slashes (`4/0A...` vs `4%252F...`) and strip raw URL parameter prefixes before submitting `application/x-www-form-urlencoded` token exchange requests to Google.
 - `web/src/components/connections/ProviderDetailView.svelte`: Added `decodeURIComponent` input cleansing for pasted OAuth authorization callback URLs.

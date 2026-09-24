@@ -580,6 +580,7 @@
 
   // Load models, settings, proxy pools
   async function loadData() {
+    suggestedModels = []
     try {
       const [modelsData, settingsData, poolsData, aliasesData] = await Promise.all([
         fetchProviderModelsData(providerId, storageAlias),

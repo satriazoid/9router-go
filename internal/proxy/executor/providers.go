@@ -615,6 +615,9 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	var reqMap map[string]any
 	if err := json.Unmarshal(body, &reqMap); err == nil {
 		reqMap["stream"] = true
+		if cleanModel != "" {
+			reqMap["model"] = cleanModel
+		}
 		if b, err := json.Marshal(reqMap); err == nil {
 			body = b
 		}
@@ -1218,6 +1221,16 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	body, toolNameMap := translator.ConcealFingerprintTools(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
+
+	var reqGoMap map[string]any
+	if err := json.Unmarshal(body, &reqGoMap); err == nil {
+		if cleanModel != "" {
+			reqGoMap["model"] = cleanModel
+		}
+		if b, err := json.Marshal(reqGoMap); err == nil {
+			body = b
+		}
+	}
 
 	cfg := *req.Config
 	headers := make(map[string]string)

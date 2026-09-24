@@ -111,7 +111,7 @@ func (h *ChatHandler) resolveModelEntry(entry string) *ModelInfo {
 			}
 		}
 	}
-	if (provider == "antigravity" || provider == "ag") && strings.Contains(model, "muse-spark") {
+	if (provider == "antigravity" || provider == "ag") && isOpenCodeModel(model) {
 		provider = "opencode"
 	}
 	return &ModelInfo{Provider: provider, Model: model}
@@ -218,7 +218,7 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 				}
 			}
 		}
-		if (provider == "antigravity" || provider == "ag") && strings.Contains(model, "muse-spark") {
+		if (provider == "antigravity" || provider == "ag") && isOpenCodeModel(model) {
 			provider = "opencode"
 		}
 		return &ModelInfo{Provider: provider, Model: model}, nil
@@ -263,6 +263,11 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 	// Outside Repo guard so it resolves with nil Repo / empty DB (static catalog).
 	if modelStr == "codex-auto-review" {
 		return &ModelInfo{Provider: "codex", Model: "codex-auto-review"}, nil
+	}
+
+	// Resolve OpenCode free models (e.g., "space-bunny-free", "muse-spark-1.3-contributor-free")
+	if isOpenCodeModel(modelStr) {
+		return &ModelInfo{Provider: "opencode", Model: modelStr}, nil
 	}
 
 	// 3. Check if it's a combo name
@@ -386,4 +391,14 @@ func (h *ChatHandler) resolveComboRouting(comboName string, fallbackStrategy str
 	}
 
 	return strategy, stickyLimit, ""
+}
+
+func isOpenCodeModel(model string) bool {
+	lower := strings.ToLower(model)
+	return strings.Contains(lower, "muse-spark") ||
+		strings.Contains(lower, "space-bunny") ||
+		strings.Contains(lower, "bunny") ||
+		strings.Contains(lower, "big-pickle") ||
+		strings.Contains(lower, "union-alpha") ||
+		strings.HasSuffix(lower, "-free")
 }

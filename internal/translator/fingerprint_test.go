@@ -327,3 +327,32 @@ func TestToolNameMapContext(t *testing.T) {
 		t.Errorf("a nil context must yield a nil map, got %v", got)
 	}
 }
+
+func TestConcealFingerprintToolsChatShapeWhenNoTools(t *testing.T) {
+	body := []byte(`{"model":"space-bunny-free","messages":[{"role":"user","content":"hi"}]}`)
+	out, _ := ConcealFingerprintTools(body)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) != 4 {
+		t.Fatalf("want 4 tools, got %v", tools)
+	}
+	for _, tool := range tools {
+		tm, ok := tool.(map[string]any)
+		if !ok {
+			t.Fatalf("expected map tool, got %v", tool)
+		}
+		fn, ok := tm["function"].(map[string]any)
+		if !ok {
+			t.Fatalf("chat shape must nest name inside 'function', got %v", tm)
+		}
+		if fn["name"] == "" {
+			t.Errorf("expected tool name in function object")
+		}
+	}
+	if m["tool_choice"] != "none" {
+		t.Errorf("expected tool_choice 'none' for tool-less chat request, got %v", m["tool_choice"])
+	}
+}
