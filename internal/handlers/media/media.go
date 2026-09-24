@@ -1,6 +1,16 @@
 package media
 
 import (
+	"9router/proxy/internal/constants"
+	"9router/proxy/internal/db"
+	"9router/proxy/internal/handlers/chat"
+	"9router/proxy/internal/handlers/shared"
+	"9router/proxy/internal/handlerutil"
+	"9router/proxy/internal/log"
+	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
+	"9router/proxy/internal/proxy/executor"
+	"9router/proxy/internal/usagetracker"
 	"bytes"
 	"encoding/base64"
 	json "encoding/json/v2"
@@ -12,16 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"9router/proxy/internal/constants"
-	"9router/proxy/internal/db"
-	"9router/proxy/internal/handlers/chat"
-	"9router/proxy/internal/handlers/shared"
-	"9router/proxy/internal/handlerutil"
-	"9router/proxy/internal/log"
-	"9router/proxy/internal/providers"
-	"9router/proxy/internal/proxy"
-	"9router/proxy/internal/proxy/executor"
-	"9router/proxy/internal/usagetracker"
 )
 
 // MediaHandler handles embeddings, responses, audio, video, image, and web tool endpoints.
@@ -827,7 +827,7 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			if err := json.Unmarshal(body, &checkStream); err == nil {
 				isStream = checkStream.Stream
 			}
-			fwdErr = exec(w, &executor.Request{
+			mediaReq := &executor.Request{
 				Ctx:           r.Context(),
 				Client:        client,
 				Config:        providerCfg,
@@ -839,7 +839,13 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 				ConnectionID:  connID,
 				SessionID:     handlerutil.ExtractSessionID(r),
 				StartTime:     time.Now(),
-			})
+			}
+			// Same client_id cloaking as chat fallback: pass the connection's
+			// providerSpecificData so cloaking executors keep a stable id.
+			if connData != nil && len(connData.ProviderSpecificData) > 0 {
+				mediaReq.ConnData = connData.ProviderSpecificData
+			}
+			fwdErr = exec(w, mediaReq)
 			if fwdErr != nil {
 				log.Error("media", "executor request failed", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "error", fwdErr)
 				handlerutil.WriteJSONError(w, http.StatusBadGateway, fwdErr.Error())
