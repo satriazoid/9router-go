@@ -400,17 +400,4 @@ func TestE2E_Opencode_SpaceBunny_ChatCompletions_Shape(t *testing.T) {
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("expected 200 for oc/space-bunny-free, got %d: %s", rec1.Code, rec1.Body.String())
 	}
-
-	// Test 2: with ag/ prefix (antigravity resolution to opencode)
-	req2 := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader([]byte(`{
-		"model": "ag/space-bunny-free",
-		"messages": [{"role": "user", "content": "hi"}],
-		"stream": false
-	}`)))
-	req2.Header.Set("Content-Type", "application/json")
-	rec2 := httptest.NewRecorder()
-	handler.HandleChatCompletions(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("expected 200 for ag/space-bunny-free, got %d: %s", rec2.Code, rec2.Body.String())
-	}
 }

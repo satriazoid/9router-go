@@ -193,6 +193,15 @@ func TestForwardFreebuff_FullCycle(t *testing.T) {
 				if meta["freebuff_instance_id"] != "fb-inst-999" {
 					t.Errorf("expected freebuff_instance_id fb-inst-999, got %v", meta["freebuff_instance_id"])
 				}
+				// client_id cloaking: bare "9router-" branding must never leak
+				// upstream; default requests carry an unbranded random id.
+				clientID, _ := meta["client_id"].(string)
+				if clientID == "" {
+					t.Errorf("expected non-empty client_id")
+				}
+				if strings.HasPrefix(clientID, "9router-") {
+					t.Errorf("client_id must not carry router branding, got %v", clientID)
+				}
 			}
 
 			// Assert system prompt
@@ -255,7 +264,7 @@ func TestForwardFreebuff_FullCycle(t *testing.T) {
 		t.Errorf("expected 1 session call, got %d", sessionCalls)
 	}
 	if atomic.LoadInt64(&startRunCalls) != 1 {
-		t.Errorf("expected 1 startRun call, got %d", startRunCalls)
+		t.Errorf("expected 1 startRun calls total, got %d", startRunCalls)
 	}
 	if atomic.LoadInt64(&chatCalls) != 1 {
 		t.Errorf("expected 1 chat call, got %d", chatCalls)
@@ -272,6 +281,43 @@ func TestForwardFreebuff_FullCycle(t *testing.T) {
 	}
 	if atomic.LoadInt64(&startRunCalls) != 2 {
 		t.Errorf("expected 2 startRun calls total, got %d", startRunCalls)
+	}
+
+	// Third call: a stored per-account fingerprintId must be reused verbatim
+	// as client_id (CLI-shaped), not replaced by a random id.
+	var cloakedClientID string
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == freebuffSessionPath:
+			_, _ = w.Write([]byte(`{"status":"active","instanceId":"fb-inst-999","expiresAt":"2030-01-01T00:00:00Z"}`))
+		case r.URL.Path == freebuffRunPath:
+			var req map[string]any
+			_ = stdjson.NewDecoder(r.Body).Decode(&req)
+			if action, _ := req["action"].(string); action == "START" {
+				_, _ = w.Write([]byte(`{"runId":"run-xyz-123"}`))
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			bodyBytes, _ := io.ReadAll(r.Body)
+			var body map[string]any
+			_ = stdjson.Unmarshal(bodyBytes, &body)
+			meta, _ := body["codebuff_metadata"].(map[string]any)
+			cloakedClientID, _ = meta["client_id"].(string)
+			_, _ = w.Write([]byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	clearFreebuffSession("test-fb-token", "deepseek/deepseek-v4-flash")
+	req.ConnData = map[string]any{"fingerprintId": "fp-account-123"}
+	recorder3 := httptest.NewRecorder()
+	if err := ForwardFreebuff(recorder3, req); err != nil {
+		t.Fatalf("third ForwardFreebuff failed: %v", err)
+	}
+	if cloakedClientID != "fp-account-123" {
+		t.Errorf("expected client_id 'fp-account-123', got %q", cloakedClientID)
 	}
 }
 

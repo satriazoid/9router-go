@@ -26,7 +26,6 @@ import (
 var freebuffAuthBaseURL = "https://freebuff.com"
 var freebuffPendingSessions sync.Map
 
-
 // shortHash returns a 12-character hex SHA-256 hash of the input.
 func shortHash(s string) string {
 	h := sha256.Sum256([]byte(s))
@@ -360,6 +359,15 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 			"apiKey":      authToken,
 			"accessToken": authToken,
 		}
+		// client_id cloaking (upstream parity with the dashboard fork): the
+		// fingerprintId minted at initiate() is the account's device identity.
+		// Persist it under providerSpecificData.fingerprintId so the Freebuff
+		// executor can reuse it as codebuff_metadata.client_id. fpID passed the
+		// non-empty gate at function entry, so no extra guard is needed.
+		dataMap["providerSpecificData"] = map[string]any{
+			"authMethod":    "device_code",
+			"fingerprintId": fpID,
+		}
 		if email != "" {
 			dataMap["email"] = email
 		}
@@ -369,7 +377,6 @@ func (h *OAuthHandler) HandleFreebuffPoll(w http.ResponseWriter, r *http.Request
 		if userId != "" {
 			dataMap["userId"] = userId
 		}
-
 		dataBytes, err := json.Marshal(dataMap)
 		if err != nil {
 			handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to marshal connection data")

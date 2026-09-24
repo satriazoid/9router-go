@@ -328,7 +328,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	sessionID := handlerutil.GetSessionID(ctx)
 
 	if exec := executor.Get(provider); exec != nil {
-		fwdErr = exec(w, &executor.Request{
+		execReq := &executor.Request{
 			Ctx:            ctx,
 			Client:         httpClient,
 			Config:         providerCfg,
@@ -343,7 +343,13 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			ResponseBuf:    &metrics.ResponseBuf,
 			StartTime:      start,
 			TTFT:           &metrics.TTFT,
-		})
+		}
+		// client_id cloaking: hand the connection's providerSpecificData
+		// (fingerprintId) to executors that mimic an official client.
+		if connData != nil && len(connData.ProviderSpecificData) > 0 {
+			execReq.ConnData = connData.ProviderSpecificData
+		}
+		fwdErr = exec(w, execReq)
 	} else if providerCfg.IsGeminiNative() {
 		fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics)
 	} else {

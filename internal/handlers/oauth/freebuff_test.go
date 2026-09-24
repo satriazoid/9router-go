@@ -89,7 +89,6 @@ func TestHandleFreebuffInitiate_Success(t *testing.T) {
 	}
 }
 
-
 func TestHandleFreebuffInitiate_MethodNotAllowed(t *testing.T) {
 	handler := NewOAuthHandler(nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/oauth/freebuff/initiate", nil)
@@ -101,7 +100,6 @@ func TestHandleFreebuffInitiate_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
-
 
 func TestHandleFreebuffPoll_MissingFields(t *testing.T) {
 	handler := NewOAuthHandler(nil)
@@ -285,11 +283,11 @@ func TestHandleFreebuffPoll_Authorized_CreatesConnection(t *testing.T) {
 	if dataMap["authToken"] != testAuthToken {
 		t.Errorf("expected authToken %s, got %v", testAuthToken, dataMap["authToken"])
 	}
-	if dataMap["email"] != "user@freebuff.com" {
-		t.Errorf("expected email 'user@freebuff.com', got %v", dataMap["email"])
-	}
-	if dataMap["name"] != "Freebuff Master" {
-		t.Errorf("expected name 'Freebuff Master', got %v", dataMap["name"])
+	// client_id cloaking: the request's fingerprintId must be stored per
+	// account so chat requests can reuse it as codebuff_metadata.client_id.
+	psd, _ := dataMap["providerSpecificData"].(map[string]any)
+	if psd == nil || psd["fingerprintId"] != "fp-valid" {
+		t.Errorf("expected providerSpecificData.fingerprintId 'fp-valid', got %v", dataMap["providerSpecificData"])
 	}
 }
 

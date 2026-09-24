@@ -594,30 +594,12 @@
       settings = settingsData
       proxyPools = poolsData
 
-      // Suggested free models from the provider's public catalog (if configured).
+      // Suggested free models from the provider's public catalog (if configured in upstream registry).
       const fetcher = selectedCatalogItem?.modelsFetcher
       if (fetcher?.url && fetcher?.type) {
         fetchSuggestedModels(fetcher).then((list) => {
           suggestedModels = list
         })
-      } else if (providerId === 'antigravity' || providerId === 'gemini-cli' || providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') {
-        const activeConn = providerConnections.find((c) => c.isActive !== 0)
-        if (activeConn) {
-          api.getConnectionModels(activeConn.id).then((res) => {
-            if (Array.isArray(res?.models) && res.models.length > 0) {
-              const liveList: SuggestedModel[] = []
-              for (const m of res.models) {
-                const mid = typeof m === 'string' ? m : (m.id || m.name || m.model || '')
-                if (!mid) continue
-                const mname = typeof m === 'string' ? m : (m.name || mid)
-                liveList.push({ id: mid, name: mname })
-              }
-              suggestedModels = liveList
-            }
-          }).catch(() => {})
-        } else {
-          suggestedModels = []
-        }
       } else {
         suggestedModels = []
       }
@@ -3061,9 +3043,7 @@
     <!-- Suggested models from provider API — show only models not yet added -->
     {#if suggestedNotAdded.length > 0}
       <div class="w-full mt-2">
-        <p class="text-xs text-text-muted mb-2">
-          {providerId === 'antigravity' ? 'Suggested models from Google:' : 'Suggested free models (≥200k context):'}
-        </p>
+        <p class="text-xs text-text-muted mb-2">Suggested free models (≥200k context):</p>
         <div class="flex flex-wrap gap-2">
           {#each suggestedNotAdded as m (m.id)}
             <button

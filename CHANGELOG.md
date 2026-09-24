@@ -1,9 +1,15 @@
 # Changelog
 
 
-## [v1.9.0] — 2026-09-24
+## [Unreleased]
 
-### 🔒 Security Hardening
+### 🛡️ Freebuff client_id Cloaking (Anti-Ban Parity)
+
+**CLI-shaped `codebuff_metadata.client_id`:**
+- `internal/handlers/oauth/freebuff.go`: `HandleFreebuffPoll` now persists the device-flow `fingerprintId` under `providerSpecificData.fingerprintId` (`authMethod: device_code`) on every saved `freebuff` connection — same contract as the `mhiqrambg/9router-mibp-version` dashboard fork. Verified against the official Codebuff SDK (`sdk/src/impl/llm.ts` + `sdk/src/run.ts`): real CLI traffic sends `client_id = clientSessionId`, a short random per-prompt id (`Math.random().toString(36).substring(2, 15)`), never a client brand.
+- `internal/handlers/chat/fallback.go` + `internal/proxy/executor/executor.go`: new `Request.ConnData` field carries the connection's `providerSpecificData` into executors.
+- `internal/proxy/executor/freebuff.go`: `ForwardFreebuff` reuses the account's stored `fingerprintId` verbatim as `codebuff_metadata.client_id`, falling back to a fresh unbranded UUID only for connections saved before this change. Previously every chat request sent `client_id: "9router-<uuid>"`, which brands the traffic as non-CLI at the application layer — the most likely reason accounts got `banned` even though headers/User-Agent already matched the CLI. Note: cloaking only removes the self-identifying fingerprint; it cannot protect accounts banned for quota abuse, multi-account farming on one IP/fingerprint, or region violations.
+
 
 **Production Internet Hardening & Cloudflare Integration:**
 - **Protect `/debug/pprof/*` endpoints**: Disabled Go runtime profiling endpoints (`/debug/pprof/*`) by default in production to prevent Denial of Service (DoS) and potential memory/key disclosures. Can be explicitly enabled via `PPROF_ENABLED=true`.
@@ -107,11 +113,11 @@
 
 ### 🐛 Bug Fixes
 
-**OpenCode Chat Completions Tool Fingerprint & Model Prefix Fix (`space-bunny-free`):**
+**OpenCode Chat Completions Tool Fingerprint & Model Purity (`space-bunny-free`):**
 - `internal/translator/fingerprint.go`: Fixed `ConcealFingerprintTools` to preserve standard Chat Completions tool shape (`{"type":"function","function":{"name":...}}`) with `"tool_choice":"none"` when client tools are absent, instead of falling back to flat Responses format (`{"type":"function","name":...}`) which caused upstream `[invalid_request_error] invalid request` on OpenCode Chat Completions models like `space-bunny-free`.
-- `internal/proxy/executor/providers.go`: Stripped provider prefixes (`oc/`, `ag/`, `antigravity/`, `opencode/`) from `model` in `ForwardOpencode` and `ForwardOpencodeGo` before forwarding upstream.
-- `internal/handlers/chat/resolution.go`: Route OpenCode models (`space-bunny-free`, `bunny`, `big-pickle`, `muse-spark`, `*-free`) to `opencode` even when requested with `ag/` or `antigravity/` prefix or bare without a prefix.
-- `web/src/components/connections/ProviderDetailView.svelte`: Reset `suggestedModels` at the beginning of `loadData()` to prevent suggested models from lingering across provider detail views.
+- `internal/proxy/executor/providers.go`: Stripped provider prefixes (`oc/`, `opencode/`) from `model` in `ForwardOpencode` and `ForwardOpencodeGo` before forwarding upstream.
+- `internal/handlers/chat/resolution.go`: Removed hardcoded model rewrites (`strings.Contains(model, "muse-spark")`, etc.) from Antigravity resolution; all `ag/` and `antigravity/` models resolve cleanly to `antigravity` without special-case overrides.
+- `web/src/components/connections/ProviderDetailView.svelte`: Restricted `suggestedModels` strictly to providers that declare a public `modelsFetcher` (upstream Next.js parity). Removed artificial suggested models injection under Antigravity so OpenCode models no longer leak into Antigravity's view.
 
 **Antigravity Google OAuth Callback percent-encoding unescape:**
 - `internal/handlers/oauth/antigravity.go`: Added `cleanAuthCode` to unescape double-encoded slashes (`4/0A...` vs `4%252F...`) and strip raw URL parameter prefixes before submitting `application/x-www-form-urlencoded` token exchange requests to Google.

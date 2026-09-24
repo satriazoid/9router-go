@@ -21,6 +21,7 @@ type Request struct {
 	TranslateResp  bool
 	ConnectionID   string            // for OAuth refresh by fallback
 	SessionID      string            // client session / conversation id
+	ConnData       map[string]any    // connection providerSpecificData (e.g. fingerprintId for client cloaking)
 	ProjectID      string            // for gemini-native (antigravity)
 	ModelName      string            // extracted model name
 	Endpoint       string            // custom URL override (azure)

@@ -41,7 +41,6 @@ var freebuffRootOpenings = []string{
 	"You are Buffy, a strategic assistant that orchestrates complex coding tasks through specialized sub-agents.",
 }
 
-
 func rootAgentIdForModel(model string) string {
 	if root, ok := freebuffRootAgentByModel[model]; ok {
 		return root
@@ -115,7 +114,6 @@ func ensureFreebuffEndTurnTool(body map[string]any) {
 	}
 	body["tools"] = append(rawTools, endTurnTool)
 }
-
 
 func startFreebuffRun(ctx context.Context, client *http.Client, baseURL, token, model string) (string, error) {
 	origin := freebuffOrigin(baseURL)
@@ -259,8 +257,20 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 		"allow_fallbacks": false,
 	}
 
+	// client_id cloaking (CLI-shaped fingerprint): the backend logs and
+	// rate-limits per client_id, so a per-request "9router-<uuid>" brands
+	// every call as non-CLI traffic. Reuse the account's login fingerprintId
+	// (handed down via req.ConnData), exactly like the dashboard fork; only
+	// mint a fresh random id for connections that predate the stored field.
+	clientID := ""
+	if req.ConnData != nil {
+		clientID, _ = req.ConnData["fingerprintId"].(string)
+	}
+	if clientID == "" {
+		clientID = uuid.New().String()
+	}
 	codebuffMeta := map[string]any{
-		"client_id":        "9router-" + uuid.New().String(),
+		"client_id":        clientID,
 		"cost_mode":        "free",
 		"run_id":           runID,
 		"trace_session_id": uuid.New().String(),

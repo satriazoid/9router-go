@@ -478,36 +478,36 @@ func TestResolveModel_BareCodexAutoReview(t *testing.T) {
 	}
 }
 
-func TestResolveModel_SpaceBunny(t *testing.T) {
+func TestResolveModel_StandardPrefixes(t *testing.T) {
 	database, cleanup := setupChatTestDB(t)
 	defer cleanup()
 	repo := db.NewRepo(database)
 	h := NewChatHandler(repo)
 
-	// Case 1: bare model
-	info1, err := h.resolveModel("space-bunny-free")
+	// oc/ prefix resolves to opencode
+	info1, err := h.resolveModel("oc/space-bunny-free")
 	if err != nil {
-		t.Fatalf("expected space-bunny-free to resolve, got error: %v", err)
+		t.Fatalf("expected oc/space-bunny-free to resolve, got error: %v", err)
 	}
 	if info1.Provider != "opencode" || info1.Model != "space-bunny-free" {
 		t.Errorf("expected Provider=opencode, Model=space-bunny-free, got %+v", info1)
 	}
 
-	// Case 2: prefixed with ag/
-	info2, err := h.resolveModel("ag/space-bunny-free")
+	// ag/ prefix resolves to antigravity
+	info2, err := h.resolveModel("ag/gemini-3.8-flash-high")
 	if err != nil {
-		t.Fatalf("expected ag/space-bunny-free to resolve, got error: %v", err)
+		t.Fatalf("expected ag/gemini-3.8-flash-high to resolve, got error: %v", err)
 	}
-	if info2.Provider != "opencode" || info2.Model != "space-bunny-free" {
-		t.Errorf("expected Provider=opencode, Model=space-bunny-free, got %+v", info2)
+	if info2.Provider != "antigravity" || info2.Model != "gemini-3.8-flash-high" {
+		t.Errorf("expected Provider=antigravity, Model=gemini-3.8-flash-high, got %+v", info2)
 	}
 
-	// Case 3: prefixed with antigravity/
-	info3, err := h.resolveModel("antigravity/space-bunny-free")
+	// antigravity/ prefix resolves to antigravity
+	info3, err := h.resolveModel("antigravity/gemini-3.8-flash")
 	if err != nil {
-		t.Fatalf("expected antigravity/space-bunny-free to resolve, got error: %v", err)
+		t.Fatalf("expected antigravity/gemini-3.8-flash to resolve, got error: %v", err)
 	}
-	if info3.Provider != "opencode" || info3.Model != "space-bunny-free" {
-		t.Errorf("expected Provider=opencode, Model=space-bunny-free, got %+v", info3)
+	if info3.Provider != "antigravity" || info3.Model != "gemini-3.8-flash" {
+		t.Errorf("expected Provider=antigravity, Model=gemini-3.8-flash, got %+v", info3)
 	}
 }
