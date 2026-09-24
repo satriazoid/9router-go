@@ -68,7 +68,7 @@ func ProvideServer(p ServerParams) *http.Server {
 			catalogPath := filepath.Join(filepath.Dir(p.Config.DatabasePath), "model-catalog.json")
 			providers.StartBackgroundCatalogSync(context.Background(), nil, catalogPath)
 
-			log.Printf("9Router Go Proxy (%s) starting on port %d", updater.CurrentVersion, p.Config.Port)
+			log.Printf("9router-go Proxy (%s) starting on port %d", updater.CurrentVersion, p.Config.Port)
 
 			go func() {
 				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -76,7 +76,7 @@ func ProvideServer(p ServerParams) *http.Server {
 				}
 			}()
 
-			fmt.Fprintf(os.Stdout, "\n  🚀 9Router Go Proxy (%s) on %s\n\n", updater.CurrentVersion, addr)
+			fmt.Fprintf(os.Stdout, "\n  🚀 9router-go Proxy (%s) on %s\n\n", updater.CurrentVersion, addr)
 			log.Printf("Server is ready to handle requests at %s", addr)
 			return nil
 		},

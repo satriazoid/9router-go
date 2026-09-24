@@ -86,7 +86,7 @@
         `Add to your shell profile (~/.zshrc or ~/.bashrc):`,
         `export ANTHROPIC_BASE_URL="${localOrigin}"`,
         `export ANTHROPIC_API_KEY="<your-api-key>"`,
-        `Run 'claude' in any directory to start coding with 9Router routing.`,
+        `Run 'claude' in any directory to start coding with 9router-go routing.`,
       ],
     },
     {
@@ -99,7 +99,7 @@
       configType: 'settings',
       instructions: [
         'Open Cursor Settings > Models.',
-        `Under OpenAI API Key: enter your 9Router API Key.`,
+        `Under OpenAI API Key: enter your 9router-go API Key.`,
         `Click Override OpenAI Base URL and enter: ${localOrigin}/v1`,
         'Enable your favorite models in the Cursor model list.',
       ],
@@ -116,7 +116,7 @@
         'Open Cline extension settings in VS Code.',
         'Select API Provider: "OpenAI Compatible".',
         `Set Base URL: ${localOrigin}/v1`,
-        'Set API Key: enter your 9Router API Key.',
+        'Set API Key: enter your 9router-go API Key.',
         'Set Model ID: choose any configured model or combo.',
       ],
     },
@@ -130,7 +130,7 @@
       configType: 'mitm',
       instructions: [
         'Antigravity MITM intercepts Google Cloud Code PA traffic transparently.',
-        `Point HTTP_PROXY or system proxy to 9Router on port 20130.`,
+        `Point HTTP_PROXY or system proxy to 9router-go on port 20130.`,
         'All tools with _ide suffixes will be seamlessly uncloaked and routed to configured connections.',
       ],
     },
@@ -144,7 +144,7 @@
       configType: 'mitm',
       instructions: [
         'Kiro MITM captures telemetry and auth token exchanges.',
-        `Ensure Kiro network routing directs through 9Router gateway.`,
+        `Ensure Kiro network routing directs through 9router-go gateway.`,
       ],
     },
     {
@@ -289,7 +289,7 @@
       color: '#D97757',
       configType: 'settings',
       instructions: [
-        'Add 9Router MCP servers to your claude_desktop_config.json.',
+        'Add 9router-go MCP servers to your claude_desktop_config.json.',
         `Point MCP endpoints to ${localOrigin}/v1.`,
       ],
     },
@@ -304,7 +304,7 @@
       instructions: [
         'In Roo Code provider settings, select OpenAI Compatible.',
         `Base URL: ${localOrigin}/v1`,
-        'API Key: enter your 9Router key.',
+        'API Key: enter your 9router-go key.',
       ],
     },
     {
@@ -327,7 +327,7 @@
       category: 'cli',
       image: '/providers/amp.png',
       color: '#F97316',
-      description: 'Sourcegraph Amp coding assistant CLI with 9Router model aliases',
+      description: 'Sourcegraph Amp coding assistant CLI with 9router-go model aliases',
       configType: 'guide',
       instructions: [
         `export OPENAI_BASE_URL="${localOrigin}/v1"`,
@@ -385,7 +385,7 @@
       instructions: [
         `/plugin marketplace add manalkaff/opendesign`,
         `/plugin install opendesign@opendesign`,
-        `Inherits host agent's model config via 9Router.`,
+        `Inherits host agent's model config via 9router-go.`,
       ],
     },
   ])
@@ -438,7 +438,7 @@
             CLI & IDE Tools
           </h1>
           <p class="font-body text-xs sm:text-sm text-text-muted">
-            Configure Cursor, Claude Code, Cline, and terminal agents to connect to 9Router
+            Configure Cursor, Claude Code, Cline, and terminal agents to connect to 9router-go
           </p>
         </div>
       </div>

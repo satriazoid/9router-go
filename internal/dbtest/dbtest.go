@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// SchemaStatements returns all CREATE TABLE statements used by 9Router tests.
+// SchemaStatements returns all CREATE TABLE statements used by 9router-go tests.
 // Matches the canonical schema shared with the Next.js dashboard.
 func SchemaStatements() []string {
 	return []string{

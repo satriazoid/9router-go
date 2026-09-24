@@ -42,8 +42,50 @@ Whenever you implement features, fix bugs, add providers, update routing logic, 
 
 ---
 
-## 3. Golang Engineering & Optimization Principles
+## 3. Provider Independence & Anti-Hardcoding Principles (STRICTLY MANDATORY)
 
+Every upstream provider in this repository (`antigravity`, `opencode`, `claude`, `codex`, `cline`, `freebuff`, `xai`, `gemini-cli`, `qoder`, etc.) is **strictly distinct, independent, and isolated**. You **MUST NEVER** merge, conflate, cross-alias, or hijack one provider into another.
+
+### A. Strict Provider Isolation (No Cross-Hijacking)
+1. **Never Confuse or Conflate Providers**:
+   - `antigravity` is **NOT** `opencode`. They have completely separate upstream APIs, different authentication mechanisms (Google Cloud Code OAuth tokens vs OpenCode public tokens), and separate model catalogs.
+   - A request targeted at `ag/<model>` or `antigravity/<model>` must **always and only** be routed to the Antigravity executor.
+   - An OpenCode model (e.g. `space-bunny-free`, `muse-spark-*`, `big-pickle`, `*-free`) belongs exclusively to `opencode` (`oc/`). It must **never** be injected into, aliased to, or redirected from Antigravity.
+2. **Zero Cross-Provider Aliasing**:
+   - `ResolveProviderProxyPoolID` and connection lookups must only check genuine aliases (e.g. `ag` ↔ `antigravity`, `oc` ↔ `opencode`, `cline` ↔ `clinepass`). Never fall through from `antigravity` to `opencode` or vice versa.
+
+### B. Ban on Hardcoded Model Rewrites
+- **No Substring-Based Provider Switching**:
+  - ❌ `if (provider == "antigravity" || provider == "ag") && strings.Contains(model, "muse-spark") { provider = "opencode" }` (Strictly forbidden).
+  - ❌ `if isOpenCodeModel(model) { provider = "opencode" }` (Strictly forbidden).
+- **Uniform Provider Handling**:
+  - Every provider must handle all of its models uniformly ("seluruh provider disamakan").
+  - Routing decisions must be driven by explicit catalog registration, model aliases in the database, custom provider node prefixes, or standard `provider/model` wire syntax—**never by ad-hoc string inspections**.
+
+### C. General vs Custom Abstractions
+- **Shared / General Abstractions**:
+  - If a mechanism is general across providers (e.g. streaming SSE adapters, HTTP retry with direct fallback on proxy errors, token estimation, client session resolution), encapsulate it into an agnostic, generally named package or helper:
+    - ✅ `proxy.NewFallbackTransport(...)`
+    - ✅ `proxy.ForwardOpenAI(...)`
+    - ✅ `handlerutil.ExtractSessionID(r)`
+    - ✅ `translator.ConcealFingerprintTools(...)`
+- **Provider-Specific Custom Logic**:
+  - If a provider has unique protocol requirements, custom headers, or quirky payload envelopes, build a dedicated, self-contained executor or handler file:
+    - ✅ `internal/translator/antigravity.go` (Google Cloud Code assist envelope)
+    - ✅ `internal/proxy/executor/freebuff.go` (Freebuff multi-session & client_id cloaking)
+    - ✅ `internal/proxy/executor/opencode.go` (OpenCode fingerprinting & Responses API transformation)
+    - ✅ `internal/handlers/media/antigravity_image.go` (Antigravity image generation)
+  - **Rule**: Provider-specific custom logic must stay strictly within that provider's execution path. It must **never** leak into generic routing, sibling provider paths, or universal middleware.
+
+### D. Dashboard & UI Parity Discipline
+- **Respect Registry Flags (`modelsFetcher`)**:
+  - The "Suggested free models" UI section must strictly depend on the provider's `modelsFetcher` declared in the catalog.
+  - Never add artificial `else if (providerId === '...')` blocks in `ProviderDetailView.svelte` to inject models from one provider into another.
+  - Buttons like `Import from /models` must only appear for providers that genuinely support dynamic catalog discovery upstream (`cline`, `clinepass`, `qoder`, `qoder-cn`).
+
+---
+
+## 4. Golang Engineering & Optimization Principles
 > **CORE MANDATE: Do NOT blindly transliterate JavaScript / TypeScript into Go!**  
 > While the observable external behavior and API contract must match upstream 100%, the internal Go implementation must leverage Go's performance, strong typing, low memory footprint, and idiomatic concurrency.
 
@@ -90,7 +132,7 @@ Whenever you implement features, fix bugs, add providers, update routing logic, 
 
 ---
 
-## 4. Idiomatic Go Unit Testing Convention (`testing.T`)
+## 5. Idiomatic Go Unit Testing Convention (`testing.T`)
 
 All unit tests in this repository **MUST** use Go's standard library `testing` package (`testing.T`). Do **NOT** introduce heavy external BDD test frameworks (such as Ginkgo/Gomega or testify suite) to keep `go.mod` clean, compilation fast, and the test suite unified across all packages.
 
@@ -157,7 +199,7 @@ Use `net/http/httptest` (`httptest.NewRecorder()`, `httptest.NewRequest()`, and 
    - Tests must clean up temporary database files or use in-memory SQLite (`:memory:`) where applicable.
 ---
 
-## 5. Frontend Engineering & Svelte 5 Standards (`web/`)
+## 6. Frontend Engineering & Svelte 5 Standards (`web/`)
 
 The dashboard UI in `web/` is built with **Svelte 5 + Vite 8 + TypeScript + Tailwind CSS**, compiled to `web/dist`, and embedded directly into the Go binary via `embed.go` (`//go:embed all:dist`).
 
@@ -267,7 +309,7 @@ Always use the established design tokens defined in `web/src/index.css` for cons
 
 ---
 
-## 6. Upstream Sync Workflow (Step-by-Step)
+## 7. Upstream Sync Workflow (Step-by-Step)
 
 When tasked with syncing a feature, bugfix, or provider from upstream:
 
@@ -297,7 +339,7 @@ When tasked with syncing a feature, bugfix, or provider from upstream:
 
 ---
 
-## 7. Daily Commands Cheat-Sheet
+## 8. Daily Commands Cheat-Sheet
 
 ```bash
 # Run unit tests

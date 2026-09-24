@@ -151,7 +151,7 @@
     },
     skills: {
       title: 'Agent Skills',
-      description: 'Copy a link and paste to your AI to use 9Router — no install needed',
+      description: 'Copy a link and paste to your AI to use 9router-go — no install needed',
       icon: 'extension',
     },
     'console-log': {
@@ -376,7 +376,7 @@
       <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
         <h2 class="text-lg font-semibold text-text-main flex items-center gap-2">
           <span class="material-symbols-outlined text-pink-500">volunteer_activism</span>
-          Support 9Router
+          Support 9router-go
         </h2>
         <button
           type="button"

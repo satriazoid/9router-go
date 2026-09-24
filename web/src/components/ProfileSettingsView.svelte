@@ -360,7 +360,7 @@
             <option value="de">Deutsch</option>
           </select>
           <p class="text-[11px] text-text-subtle">
-            Select the primary interface language for the 9Router web dashboard.
+            Select the primary interface language for the 9router-go web dashboard.
           </p>
         </div>
       </div>

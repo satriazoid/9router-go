@@ -15,7 +15,7 @@ import (
 )
 
 // resetHint mirrors upstream RESET_HINT in src/app/api/auth/login/route.js.
-const resetHint = "Forgot password? Reset to default via 9Router CLI → Settings → Reset Password to Default."
+const resetHint = "Forgot password? Reset to default via 9router-go CLI → Settings → Reset Password to Default."
 
 // HandleAuthLogin handles POST /api/auth/login: verify the dashboard password
 // and issue the session cookie. Mirrors upstream
