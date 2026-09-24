@@ -591,6 +591,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "cc": [
     {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5"
+    },
+    {
       "id": "claude-opus-5",
       "name": "Claude Opus 5"
     },
@@ -2354,6 +2358,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "kr": [
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5"
+    },
     {
       "id": "claude-opus-5",
       "name": "Claude Opus 5"

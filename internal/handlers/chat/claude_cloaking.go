@@ -17,7 +17,7 @@ import (
 // block as system[0] and a metadata.user_id. Without them the API returns
 // 429 rate_limit_error ("Error") even though auth and the body are valid.
 
-const claudeCLIVersion = "2.1.258"
+const claudeCLIVersion = "2.1.280"
 
 // deriveUuid mirrors the JS deriveUuid: deterministic UUID-v4-shaped string
 // from a seed (stable per account).
