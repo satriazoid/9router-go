@@ -845,6 +845,9 @@ func (h *MediaHandler) forwardMediaRequest(w http.ResponseWriter, r *http.Reques
 			if connData != nil && len(connData.ProviderSpecificData) > 0 {
 				mediaReq.ConnData = connData.ProviderSpecificData
 			}
+			if h.ChatH != nil && h.ChatH.Repo != nil {
+				mediaReq.Leases = h.ChatH.Repo
+			}
 			fwdErr = exec(w, mediaReq)
 			if fwdErr != nil {
 				log.Error("media", "executor request failed", "endpoint", endpoint, "provider", modelInfo.Provider, "model", modelInfo.Model, "error", fwdErr)

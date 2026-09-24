@@ -349,6 +349,11 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		if connData != nil && len(connData.ProviderSpecificData) > 0 {
 			execReq.ConnData = connData.ProviderSpecificData
 		}
+		// Cross-process session coordination (e.g. Freebuff leases): nil
+		// when no repo (tests), so executors fall back to memory only.
+		if h.Repo != nil {
+			execReq.Leases = h.Repo
+		}
 		fwdErr = exec(w, execReq)
 	} else if providerCfg.IsGeminiNative() {
 		fwdErr = h.forwardGeminiNativeRequest(ctx, w, provider, providerCfg, apiKey, connectionID, pipedBody, isStream, translateResponse, metrics)
@@ -384,6 +389,9 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 				// re-brand the request mid-conversation.
 				if connData != nil && len(connData.ProviderSpecificData) > 0 {
 					retryReq.ConnData = connData.ProviderSpecificData
+				}
+				if h.Repo != nil {
+					retryReq.Leases = h.Repo
 				}
 				fwdErr = exec(w, retryReq)
 			} else if providerCfg.IsGeminiNative() {

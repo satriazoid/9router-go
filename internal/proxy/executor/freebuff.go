@@ -217,11 +217,13 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 		model = "deepseek/deepseek-v4-flash"
 	}
 
-	// 1. Session acquisition (cached or requested)
-	sess, ok := getFreebuffSession(token, model)
+	// 1. Session acquisition: memory L1, cross-process lease L2, coordinated
+	// admission (exactly one claimer per token+model across processes).
+	store := req.Leases
+	sess, ok := getFreebuffSessionWithStore(store, token, model)
 	if !ok {
 		var err error
-		sess, err = requestFreebuffSession(ctx, client, req.Config.BaseURL, token, model)
+		sess, err = requestFreebuffSessionWithStore(ctx, store, client, req.Config.BaseURL, token, model)
 		if err != nil {
 			log.Warn("freebuff", "session request failed", "model", model, "error", err)
 			var ue *proxy.UpstreamError
@@ -339,9 +341,14 @@ func ForwardFreebuff(w http.ResponseWriter, req *Request) error {
 			return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: respBytes}
 		}
 
-		// Otherwise force re-claim session once and retry
+		// Otherwise force re-claim session once and retry. Drop the lease
+		// only when it still holds OUR instance id: a sibling's fresh row
+		// must survive (compare-and-delete), or the hijack war restarts.
+		if sess != nil {
+			dropFreebuffLease(store, token, model, sess.InstanceID)
+		}
 		clearFreebuffSession(token, model)
-		newSess, sessErr := requestFreebuffSession(ctx, client, req.Config.BaseURL, token, model)
+		newSess, sessErr := requestFreebuffSessionWithStore(ctx, store, client, req.Config.BaseURL, token, model)
 		if sessErr == nil && newSess != nil {
 			sess = newSess
 			codebuffMeta["freebuff_instance_id"] = sess.InstanceID

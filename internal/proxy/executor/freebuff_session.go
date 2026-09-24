@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/proxy"
 )
 
@@ -33,7 +35,36 @@ type freebuffSession struct {
 var (
 	freebuffSessionMu    sync.RWMutex
 	freebuffSessionCache = make(map[string]*freebuffSession) // key: token::model
+
+	// freebuffClaimMu serializes admissions inside one process; the lease
+	// table serializes across processes. Both are needed: the mutex stops
+	// N goroutines from POSTing at once, the lease stops N processes.
+	freebuffClaimMu sync.Mutex
 )
+
+// freebuffLeaseScope namespaces Freebuff session leases, aliased from db
+// (no cycle: db imports only models). One source of truth, no drift.
+const freebuffLeaseScope = db.LeaseScopeFreebuffSession
+
+// freebuffLeaseKey hashes the token into a non-sensitive lookup key.
+// The raw token never touches the leases table.
+func freebuffLeaseKey(token, model string) string {
+	sum := sha256.Sum256([]byte(token + "::" + model))
+	return fmt.Sprintf("%x", sum)
+}
+
+// leaseTTLFor returns the lease TTL from a session expiry: upstream TTL
+// minus a skew margin so followers re-read before the seat actually dies.
+func leaseTTLFor(expiresAt time.Time) time.Duration {
+	ttl := time.Until(expiresAt) - freebuffLeaseSkew
+	if ttl < time.Minute {
+		ttl = time.Minute
+	}
+	return ttl
+}
+
+const freebuffLeaseSkew = 60 * time.Second
+
 var directFreebuffClient = &http.Client{
 	Transport: &http.Transport{
 		Proxy: nil, // direct connection to bypass proxy allowlist (e.g. sandbox proxy)
@@ -75,16 +106,30 @@ func DoFreebuffHTTP(ctx context.Context, client *http.Client, req *http.Request)
 	return resp, err
 }
 func getFreebuffSession(token, model string) (*freebuffSession, bool) {
+	return getFreebuffSessionWithStore(nil, token, model)
+}
+
+// getFreebuffSessionWithStore resolves a session from memory (L1), then the
+// cross-process lease table (L2) when a store is wired. A lease hit is
+// copied into memory so the next lookup stays local. Expired entries on
+// either layer read as absent.
+func getFreebuffSessionWithStore(store LeaseStore, token, model string) (*freebuffSession, bool) {
 	key := token + "::" + model
 	freebuffSessionMu.RLock()
-	defer freebuffSessionMu.RUnlock()
 	sess, ok := freebuffSessionCache[key]
-	if !ok {
+	freebuffSessionMu.RUnlock()
+	if ok && time.Now().Before(sess.ExpiresAt) {
+		return sess, true
+	}
+	if store == nil {
 		return nil, false
 	}
-	if time.Now().After(sess.ExpiresAt) {
+	lease, err := store.ReadLease(freebuffLeaseScope, freebuffLeaseKey(token, model))
+	if err != nil || lease == nil {
 		return nil, false
 	}
+	sess = &freebuffSession{InstanceID: lease.Value, ExpiresAt: lease.ExpiresAt}
+	setFreebuffSession(token, model, sess)
 	return sess, true
 }
 
@@ -114,6 +159,16 @@ func clearFreebuffSessionsForToken(token string) {
 			delete(freebuffSessionCache, key)
 		}
 	}
+}
+
+// dropFreebuffLease releases one lease row, but only when the stored value is
+// still ours (compare-and-delete). A re-claim by another process meanwhile
+// must survive: deleting its fresh row would resurrect the hijack war.
+func dropFreebuffLease(store LeaseStore, token, model, instanceID string) {
+	if store == nil || instanceID == "" {
+		return
+	}
+	_ = store.ReleaseLease(freebuffLeaseScope, freebuffLeaseKey(token, model), instanceID)
 }
 
 // releaseFreebuffSession ends the session bound to instanceID and returns the
@@ -182,6 +237,14 @@ type FreebuffModelSwitch struct {
 // it to expire. Callers must only invoke this for a deliberate user action:
 // the CLI reverts background requests instead of releasing the slot.
 func SwitchFreebuffModel(ctx context.Context, client *http.Client, baseURL, token, instanceID, newModel string) (*FreebuffModelSwitch, error) {
+	return SwitchFreebuffModelWithStore(ctx, nil, client, baseURL, token, instanceID, newModel)
+}
+
+// SwitchFreebuffModelWithStore is the coordinated variant: after releasing,
+// the old rows are dropped from memory AND the lease table (compare-and-
+// delete per row is impossible without values, so memory is cleared by
+// token while leases expire naturally or are overwritten on re-admit).
+func SwitchFreebuffModelWithStore(ctx context.Context, store LeaseStore, client *http.Client, baseURL, token, instanceID, newModel string) (*FreebuffModelSwitch, error) {
 	if newModel == "" {
 		return nil, errors.New("freebuff model switch requires a model")
 	}
@@ -193,10 +256,13 @@ func SwitchFreebuffModel(ctx context.Context, client *http.Client, baseURL, toke
 			return nil, err
 		}
 		refund = r
+		// NOTE: the lease row for the old model cannot be addressed here
+		// (model unknown); it expires naturally within its TTL and is
+		// overwritten on next admit. Memory is cleared explicitly below.
 	}
 	clearFreebuffSessionsForToken(token)
 
-	sess, err := requestFreebuffSession(ctx, client, baseURL, token, newModel)
+	sess, err := requestFreebuffSessionWithStore(ctx, store, client, baseURL, token, newModel)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +349,46 @@ func newCountryBlockedError(w http.ResponseWriter, countryCode, reason string) *
 }
 
 func requestFreebuffSession(ctx context.Context, client *http.Client, baseURL, token, model string) (*freebuffSession, error) {
+	return requestFreebuffSessionWithStore(ctx, nil, client, baseURL, token, model)
+}
+
+// requestFreebuffSessionWithStore admits exactly one session per token+model
+// across all processes sharing the lease store:
+//
+//  1. Re-read the lease inside the claim mutex: a sibling process may have
+//     admitted while we waited — then follow its instanceId, POST nothing.
+//  2. Otherwise POST one admission, then Acquire the lease. Losing the
+//     acquire race means a sibling won concurrently: drop our admission?
+//     No — the server keeps the LAST admitted instance, so the loser must
+//     re-read and follow the winner instead of using its own instanceId.
+//  3. With a nil store the lease steps are skipped (single-process mode).
+func requestFreebuffSessionWithStore(ctx context.Context, store LeaseStore, client *http.Client, baseURL, token, model string) (*freebuffSession, error) {
+	if store != nil {
+		freebuffClaimMu.Lock()
+		defer freebuffClaimMu.Unlock()
+		if sess, ok := getFreebuffSessionWithStore(store, token, model); ok {
+			return sess, nil
+		}
+	}
+	sess, err := postFreebuffSession(ctx, client, baseURL, token, model)
+	if err != nil {
+		return nil, err
+	}
+	setFreebuffSession(token, model, sess)
+	if store != nil {
+		held, aerr := store.AcquireLease(freebuffLeaseScope, freebuffLeaseKey(token, model), sess.InstanceID, leaseTTLFor(sess.ExpiresAt))
+		if aerr == nil && !held {
+			// Lost the race: a sibling admitted concurrently and the
+			// server honors the latest admission. Follow the winner.
+			if winner, ok := getFreebuffSessionWithStore(store, token, model); ok {
+				return winner, nil
+			}
+		}
+	}
+	return sess, nil
+}
+
+func postFreebuffSession(ctx context.Context, client *http.Client, baseURL, token, model string) (*freebuffSession, error) {
 	origin := freebuffOrigin(baseURL)
 	reqURL := origin + freebuffSessionPath
 
@@ -335,12 +441,10 @@ func requestFreebuffSession(ctx context.Context, client *http.Client, baseURL, t
 					expiresAt = t
 				}
 			}
-			sess := &freebuffSession{
+			return &freebuffSession{
 				InstanceID: data.InstanceID,
 				ExpiresAt:  expiresAt,
-			}
-			setFreebuffSession(token, model, sess)
-			return sess, nil
+			}, nil
 		}
 
 		return nil, newModelLockedError(nil, currentModel, model)
@@ -369,10 +473,8 @@ func requestFreebuffSession(ctx context.Context, client *http.Client, baseURL, t
 		}
 	}
 
-	sess := &freebuffSession{
+	return &freebuffSession{
 		InstanceID: data.InstanceID,
 		ExpiresAt:  expiresAt,
-	}
-	setFreebuffSession(token, model, sess)
-	return sess, nil
+	}, nil
 }

@@ -7,8 +7,18 @@ import (
 	"sync"
 	"time"
 
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/providers"
 )
+
+// LeaseStore is the cross-process session coordination backend,
+// implemented by *db.Repo over upstream_leases. A nil store means
+// single-process mode: memory cache only, exactly like before.
+type LeaseStore interface {
+	ReadLease(scope, key string) (*db.Lease, error)
+	AcquireLease(scope, key, value string, ttl time.Duration) (bool, error)
+	ReleaseLease(scope, key, value string) error
+}
 
 // Request holds all inputs for an executor.
 type Request struct {
@@ -22,6 +32,7 @@ type Request struct {
 	ConnectionID   string            // for OAuth refresh by fallback
 	SessionID      string            // client session / conversation id
 	ConnData       map[string]any    // connection providerSpecificData (e.g. fingerprintId for client cloaking)
+	Leases         LeaseStore        // cross-process lease backend (nil = memory only)
 	ProjectID      string            // for gemini-native (antigravity)
 	ModelName      string            // extracted model name
 	Endpoint       string            // custom URL override (azure)
