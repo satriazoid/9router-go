@@ -6,18 +6,22 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"9router/proxy/internal/db"
 )
 
 func TestE2E_EdgeTTS_LiveEndpoint(t *testing.T) {
+	if os.Getenv("ROUTER_LIVE_E2E") == "" {
+		t.Skip("skipping live Edge TTS network test (set ROUTER_LIVE_E2E=1 to run)")
+	}
+
 	database, cleanup := setupMultimodalTestDB(t)
 	defer cleanup()
 
 	repo := db.NewRepo(database)
 	handler := newTestMediaHandler(repo)
-
 	// Test 1: JSON response format
 	body := []byte(`{"model":"edge-tts/en-US-AriaNeural","input":"Testing 9router speech synthesis"}`)
 	req := httptest.NewRequest("POST", "/v1/audio/speech?response_format=json", bytes.NewReader(body))
@@ -49,12 +53,15 @@ func TestE2E_EdgeTTS_LiveEndpoint(t *testing.T) {
 }
 
 func TestE2E_AudioVoices_EdgeTTS(t *testing.T) {
+	if os.Getenv("ROUTER_LIVE_E2E") == "" {
+		t.Skip("skipping live Edge TTS network test (set ROUTER_LIVE_E2E=1 to run)")
+	}
+
 	database, cleanup := setupMultimodalTestDB(t)
 	defer cleanup()
 
 	repo := db.NewRepo(database)
 	handler := newTestMediaHandler(repo)
-
 	req := httptest.NewRequest("GET", "/api/media-providers/tts/voices?provider=edge-tts", nil)
 	rec := httptest.NewRecorder()
 
