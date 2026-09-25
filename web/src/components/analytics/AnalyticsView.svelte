@@ -10,7 +10,8 @@
     type Period,
     type StatsData,
     type RequestDetailItem,
-    type ActiveRequestItem
+    type ActiveRequestItem,
+    type RecentRequestItem
   } from './types'
   import SummaryKpiCards from './SummaryKpiCards.svelte'
   import UsageBreakdownTable from './UsageBreakdownTable.svelte'
@@ -40,6 +41,24 @@
     pulseTimer = setTimeout(() => {
       pulseProvider = ''
     }, 3000)
+  }
+  // mergeRecent unions an incoming SSE list with what is on screen. The SSE
+  // stream carries only this process's in-memory ring, so a plain replace
+  // collapses the DB-backed list (20 rows after a REST load) down to the few
+  // rows seen since the last restart — the list visibly blinks and rows below
+  // vanish. Union + dedupe + newest-first keeps rows the stream has not seen.
+  function mergeRecent(
+    prev: RecentRequestItem[] | undefined,
+    next: RecentRequestItem[] | undefined,
+  ): RecentRequestItem[] {
+    const byKey = new Map<string, RecentRequestItem>()
+    const keyOf = (r: RecentRequestItem) =>
+      `${r.model}|${r.provider}|${r.promptTokens}|${r.completionTokens}|${(r.timestamp || '').slice(0, 16)}`
+    for (const r of prev || []) byKey.set(keyOf(r), r)
+    for (const r of next || []) byKey.set(keyOf(r), r)
+    return [...byKey.values()]
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
+      .slice(0, 20)
   }
   // Request details tab state
   let details = $state<RequestDetailItem[]>([])
@@ -152,7 +171,7 @@
                   lastProvider = newTop.provider
                 }
                 streamInitialized = true
-                stats = { ...stats, recentRequests: data.recentRequests }
+                stats = { ...stats, recentRequests: mergeRecent(stats.recentRequests, data.recentRequests) }
               }
               if (Array.isArray(data.activeRequests)) {
                 activeRequests = data.activeRequests

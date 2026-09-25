@@ -55,6 +55,7 @@ type Tracker struct {
 	lastErrorProvider string
 	lastErrorTs       int64
 	recentRing        []RecentRequest
+	ringInitialized   bool
 	subscribers       map[chan []byte]struct{}
 	broadcastDebounce *time.Timer
 }
@@ -155,6 +156,26 @@ func (t *Tracker) GetActiveState(repo *db.Repo) StreamPayload {
 }
 
 func (t *Tracker) buildPayloadLocked(repo *db.Repo) StreamPayload {
+	// Seed the in-memory ring from DB history once (upstream ensureRingInitialized).
+	// Without it a fresh process streams a ring holding only post-restart rows,
+	// so the first request after restart shrinks the dashboard list from the
+	// DB-backed 20 rows to 1 until the ring refills.
+	if !t.ringInitialized && repo != nil {
+		t.ringInitialized = true
+		if rows, err := repo.GetRecentUsageHistory(ringCap); err == nil {
+			seeded := make([]RecentRequest, 0, len(rows))
+			for _, rh := range rows {
+				seeded = append(seeded, recentFromHistoryRow(rh))
+			}
+			// Keep any rows pushed while the query was in flight ahead of the
+			// seed; the ring is newest-first, DB rows are already newest-first.
+			t.recentRing = append(t.recentRing, seeded...)
+			if len(t.recentRing) > ringCap {
+				t.recentRing = t.recentRing[:ringCap]
+			}
+		}
+	}
+
 	// Build connection name map
 	connMap := make(map[string]string)
 	if repo != nil {
@@ -170,7 +191,6 @@ func (t *Tracker) buildPayloadLocked(repo *db.Repo) StreamPayload {
 			}
 		}
 	}
-
 	var active []ActiveRequest
 	for connID, models := range t.byAccount {
 		accName := connMap[connID]
@@ -256,6 +276,38 @@ func (t *Tracker) buildPayloadLocked(repo *db.Repo) StreamPayload {
 			ByModel:   byModelCopy,
 			ByAccount: byAccountCopy,
 		},
+	}
+}
+
+// recentFromHistoryRow maps a persisted usageHistory row onto the stream shape
+// so ring seeding and live pushes render identically.
+func recentFromHistoryRow(rh db.UsageHistoryRow) RecentRequest {
+	var cached int
+	if rh.Tokens != "" {
+		var tokensMap map[string]any
+		if err := json.Unmarshal([]byte(rh.Tokens), &tokensMap); err == nil {
+			switch v := tokensMap["cached_tokens"].(type) {
+			case float64:
+				cached = int(v)
+			case int64:
+				cached = int(v)
+			}
+		}
+	}
+
+	status := "ok"
+	if rh.Status != "" && rh.Status != "success" && rh.Status != "ok" {
+		status = rh.Status
+	}
+
+	return RecentRequest{
+		Timestamp:        rh.Timestamp,
+		Model:            rh.Model,
+		Provider:         rh.Provider,
+		PromptTokens:     rh.PromptTokens,
+		CompletionTokens: rh.CompletionTokens,
+		CachedTokens:     cached,
+		Status:           status,
 	}
 }
 
