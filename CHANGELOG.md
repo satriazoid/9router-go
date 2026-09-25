@@ -3,6 +3,11 @@
 
 ## [Unreleased]
 
+### 🔀 Routing: antigravity-prefixed muse-spark Reaches the Owning Executor
+
+- `internal/handlers/chat/resolution.go`: `routeModelToOwningProvider` — a request like `ag/muse-spark-1.3-contributor-free` (prefix copied from a dashboard combo) now resolves to the provider that actually serves the model (opencode family) instead of antigravity, which answered upstream 404 `Requested entity was not found`. Native antigravity models are untouched. Ported from `fix/10` (`ad4b355b`), which never reached main. Tests: `TestRouteModelToOwningProvider`, `TestResolveModel_AntigravityMuseSparkRoutesToOpencode`.
+
+
 ### 🐛 Dashboard: Recent Requests List No Longer Blinks/Shrinks on First Request
 
 - `internal/usagetracker/tracker.go`: seed the in-memory `recentRing` from `usageHistory` once per process (upstream `ensureRingInitialized` parity) + `recentFromHistoryRow` mapper. Previously a fresh process streamed a ring holding only post-restart rows, so the first completed request replaced the dashboard's DB-backed 20-row list with 1 row (list blinked, rows below vanished). Regression test `TestTracker_RingSeededFromHistoryOnce`.
