@@ -3,6 +3,20 @@
 
 ## [Unreleased]
 
+## [v1.9.1] - 2026-09-25
+
+### 🐛 Dashboard: Custom Models Parity — Combo Picker Unwraps `{models}` Envelope
+
+- `web/src/lib/customModels.ts` (new): shared `parseCustomModelsResponse` (`{models:[...]}` upstream shape, tolerates bare-array/record-map), `parseDisabledModelsMap` (`{disabled:{...}}` upstream + bare map go-port), `notifyCustomModelsChanged` / `subscribeCustomModelsChanged` (`customModelChanged` + `focus` reload, ported from upstream `SttExampleCard.js` / `ModelsCard.js` / `useModelCaps.js`).
+- `web/src/components/combos/ModelPickerModal.svelte`: `normalizeCustoms`/`normalizeDisabled` now use the shared parser. Root cause of the reported bug: `GET /api/models/custom` returns `{models:[...]}` but the modal expected a bare array/record, so `fetchedCustoms` stayed `[]` and `oc/space-bunny-free` (custom-only, not in builtin `oc` catalog) never appeared in "tambah combo" — while the provider page (which already unwrapped `{models}`) showed it.
+- `web/src/api/client.ts`: `getCustomModels`/`getDisabledModels` typed honestly (`{models:[...]}` / map) so future consumers stop guessing the envelope.
+- `web/src/components/connections/types.ts`: `fetchProviderModelsData` uses the shared parser (same result as before, single code path).
+- `web/src/components/media/MediaProviderDetail.svelte`: models card merges builtin + custom per kind (upstream `ModelsCard kindFilter` parity, builtin dedupe). Previously custom media models (`tts`/`stt`/`image`/`embedding`/`video`) never appeared.
+- `web/src/components/media/SttExampleCard.svelte`: custom STT filter matches `storageAlias || providerId` (upstream uses `getProviderAlias`), reloads on `focus` + `customModelChanged` like upstream `loadCustom`.
+- `web/src/components/connections/ProviderDetailView.svelte`: dispatches `customModelChanged` after every add/delete/import of a custom model (upstream `ModelsCard`/`page.js` parity), so pickers and STT cards refresh without full reload.
+- Unchanged (already parity): `TtsExampleCard` stays builtin-only like upstream; backend `GET /models/disabled` bare-map shape kept, parser handles both.
+
+
 ## [v1.9.0] - 2026-09-25
 
 ### 🔀 Routing: antigravity-prefixed muse-spark Reaches the Owning Executor

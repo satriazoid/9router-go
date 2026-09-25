@@ -185,7 +185,7 @@
           9router-go
         </h1>
         <span class="text-xs text-text-muted leading-tight">
-          {version ? `v${version}` : 'v1.9.0'}
+          {version ? `v${version}` : 'v1.9.1'}
         </span>
       </div>
     </a>
@@ -377,7 +377,7 @@
               Update 9router-go{updateInfo?.latestVersion ? ` to v${updateInfo.latestVersion}` : ''}
             </h2>
             <p class="text-xs text-text-muted">
-              Current version: v{version || '1.9.0'}
+              Current version: v{version || '1.9.1'}
             </p>
           </div>
         </div>

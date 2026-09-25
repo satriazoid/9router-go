@@ -496,9 +496,10 @@ export const api = {
       method: 'PUT',
     }),
 
-  // Models
-  getCustomModels: () => request<Record<string, string>>('/api/models/custom'),
-  getDisabledModels: () => request<Record<string, string>>('/api/models/disabled'),
+  // Models — upstream parity: GET /api/models/custom -> { models: [...] },
+  // GET /api/models/disabled -> { disabled: {...} } (full map) or { ids: [...] } (per-provider).
+  getCustomModels: () => request<{ models: Array<{ id: string; name?: string; providerAlias?: string; type?: string; kind?: string }> }>('/api/models/custom'),
+  getDisabledModels: () => request<Record<string, unknown>>('/api/models/disabled'),
   saveCustomModel: (key: string, value: unknown) =>
     request<{ success: boolean }>('/api/models/custom', {
       method: 'POST',

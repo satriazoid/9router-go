@@ -1,4 +1,5 @@
 import { api, getAuthHeaders, type ProviderConnection } from '../../api/client'
+import { parseCustomModelsResponse, parseDisabledModelsMap } from '../../lib/customModels'
 import { getModelCaps, getModelKind } from '../../lib/models'
 import { PROVIDER_CATALOG, PROVIDER_CATALOG_MAP } from '../../lib/providers'
 
@@ -109,23 +110,11 @@ export async function fetchProviderModelsData(
       api.getCustomModels().catch(() => ({})),
       api.getDisabledModels().catch(() => ({})),
     ])
-    let customModels: CustomModelData[] = []
-    if (Array.isArray(customs)) {
-      customModels = customs
-    } else if (customs && typeof customs === 'object' && 'models' in customs && Array.isArray(customs.models)) {
-      customModels = customs.models as CustomModelData[]
-    } else if (customs && typeof customs === 'object') {
-      const rec = customs as Record<string, unknown>
-      customModels = Object.entries(rec).map(([k, v]) => {
-        if (v && typeof v === 'object') {
-          const item = v as Record<string, unknown>
-          return { id: k, ...item }
-        }
-        return { id: k, name: String(v) }
-      })
-    }
-    const disRec = disabled && typeof disabled === 'object' ? (disabled as Record<string, unknown>) : null
-    const disArr = (disRec && disRec[storageAlias]) || (disRec && disRec[providerId]) || []
+    // Upstream parity: GET /api/models/custom -> { models: [...] }.
+    const customModels = parseCustomModelsResponse(customs) as CustomModelData[]
+    // Upstream parity: disabled keyed by storage alias OR providerId.
+    const disMap = parseDisabledModelsMap(disabled)
+    const disArr = disMap[storageAlias] || disMap[providerId] || []
     return {
       customModels,
       disabledModelIds: Array.isArray(disArr) ? disArr : [],

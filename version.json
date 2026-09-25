@@ -1,5 +1,1 @@
-{
-  "latestVersion": "1.9.0",
-  "downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest",
-  "releaseNotes": "v1.9.0: Vision & Audio Adapter full parity and E2E auto-switching; Token Saver parity with Headroom proxy and setup modal; Quota Tracker offline material symbols and reachability testing; full upstream Next.js sync."
-}
+{"downloadUrl": "https://github.com/luqman-v1/9router-go/releases/latest", "latestVersion": "1.9.1", "releaseNotes": "v1.9.1: Custom-models parity fix — combo picker unwraps {models} envelope (oc/space-bunny-free visible again); shared parser + typed client; STT/media custom merge + customModelChanged reload."}

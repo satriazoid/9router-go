@@ -23,6 +23,7 @@
     savePending,
   } from '../../lib/oauth-handoff'
   import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
+  import { notifyCustomModelsChanged } from '../../lib/customModels'
   import {
     buildAvailableModels,
     fetchProviderModelsData,
@@ -1740,7 +1741,6 @@
   }
 
   // Custom Model & Node handlers
-  // Upstream parity: POST { providerAlias, id, type, caps } — no display name.
   async function submitAddCustomModel(modelId: string, caps?: { vision?: boolean; reasoning?: boolean }) {
     try {
       await api.saveCustomModel(`${storageAlias}|${modelId}|llm`, {
@@ -1752,6 +1752,7 @@
       showAddCustomModelModal = false
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
       customModels = modelsData.customModels
+      notifyCustomModelsChanged()
     } catch (err) {
       alert(`Failed to add custom model: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -1840,6 +1841,7 @@
       })
       newCompatibleModel = ''
       await refreshCompatibleModels()
+      notifyCustomModelsChanged()
     } catch (err) {
       console.error('Error adding model:', err)
     } finally {
@@ -1855,6 +1857,7 @@
         await api.deleteModelAlias(row.alias)
       }
       await refreshCompatibleModels()
+      notifyCustomModelsChanged()
     } catch (err) {
       console.error('Error deleting model:', err)
     }
@@ -1915,7 +1918,7 @@
         imported += 1
       }
       await refreshCompatibleModels()
-      if (imported === 0) alert('No new models were added.')
+      if (imported > 0) notifyCustomModelsChanged()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to import models')
     } finally {
@@ -1963,11 +1966,7 @@
       }
       const modelsData = await fetchProviderModelsData(providerId, storageAlias)
       customModels = modelsData.customModels
-      if (imported === 0) {
-        alert('All models already exist, no new models added.')
-      } else {
-        alert(`Successfully added ${imported} models.`)
-      }
+      if (imported > 0) notifyCustomModelsChanged()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to import models')
     } finally {

@@ -5,7 +5,7 @@
 
 All-in-one AI gateway in Go: high-throughput LLM proxy **plus built-in dashboard** — no Next.js needed. Open `http://localhost:20130` after starting the binary.
 
-> **Sync:** `v1.9.0` ↔ `decolua/9router v0.5.85` — see `CHANGELOG.md` & `ARCHITECTURE.md` for details.
+> **Sync:** `v1.9.1` ↔ `decolua/9router v0.5.85` — see `CHANGELOG.md` & `ARCHITECTURE.md` for details.
 
 - **Dashboard** (`/`): providers, OAuth logins, combos, proxy pools, usage, settings — Svelte 5 SPA embedded in the binary (`web/dist`).
 - **Proxy** (`/v1/*`): OpenAI / Claude / Gemini formats, SSE streaming, combos, token savers.

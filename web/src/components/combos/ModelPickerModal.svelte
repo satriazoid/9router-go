@@ -8,6 +8,7 @@
     resolveFilteredGroups,
     resolveModelPickerGroups,
   } from './pickerData'
+  import { parseCustomModelsResponse, parseDisabledModelsMap } from '../../lib/customModels'
 
   interface Props {
     isOpen: boolean
@@ -58,45 +59,13 @@
   })
 
   function normalizeCustoms(res: unknown) {
-    const list: Array<{ providerAlias?: string; id: string; name?: string; type?: string }> = []
-    if (Array.isArray(res)) {
-      for (const m of res) {
-        if (m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string') {
-          list.push(m as { providerAlias?: string; id: string; name?: string; type?: string })
-        }
-      }
-    } else if (res && typeof res === 'object') {
-      for (const [k, v] of Object.entries(res as Record<string, unknown>)) {
-        if (v && typeof v === 'object') {
-          const obj = v as { providerAlias?: string; id?: unknown; name?: unknown; type?: unknown }
-          list.push({
-            providerAlias: obj.providerAlias,
-            id: typeof obj.id === 'string' ? obj.id : k,
-            name: typeof obj.name === 'string' ? obj.name : undefined,
-            type: typeof obj.type === 'string' ? obj.type : undefined,
-          })
-        }
-      }
-    }
-    fetchedCustoms = list
+    // Upstream parity: GET /api/models/custom -> { models: [...] }.
+    fetchedCustoms = parseCustomModelsResponse(res)
   }
 
   function normalizeDisabled(res: unknown) {
-    if (res && typeof res === 'object' && !Array.isArray(res)) {
-      const out: Record<string, string[]> = {}
-      for (const [k, v] of Object.entries(res as Record<string, unknown>)) {
-        const inner = (v as { disabled?: unknown; ids?: unknown }) || {}
-        const arr = Array.isArray(v) ? v : Array.isArray(inner.disabled) ? inner.disabled : Array.isArray(inner.ids) ? inner.ids : []
-        out[k] = (arr as unknown[]).filter((x): x is string => typeof x === 'string')
-      }
-      const disabled = (res as { disabled?: unknown }).disabled
-      if (disabled && typeof disabled === 'object' && !Array.isArray(disabled)) {
-        for (const [k, v] of Object.entries(disabled as Record<string, unknown>)) {
-          if (Array.isArray(v)) out[k] = (v as unknown[]).filter((x): x is string => typeof x === 'string')
-        }
-      }
-      fetchedDisabled = out
-    }
+    // Upstream parity: full-map { disabled: {...} } (ModelSelectModal) / bare map (go port).
+    fetchedDisabled = parseDisabledModelsMap(res)
   }
 
   let groups = $derived(

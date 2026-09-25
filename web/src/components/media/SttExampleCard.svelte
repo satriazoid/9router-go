@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, type APIKey, type ProviderConnection } from '../../api/client'
-  import { getModelKind, getModelsByProviderId } from '../../lib/models'
+  import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
+  import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
   import Card from '../../lib/ui/Card.svelte'
 
   interface Props {
@@ -53,10 +54,19 @@
       if (pub) tunnelEndpoint = pub
     }).catch(() => {})
 
-    api.getCustomModels?.().then((d: any) => {
-      const list = (d?.models || []).filter((m: any) => getModelKind(m) === 'stt' && m.providerAlias === providerId)
-      customSttModels = list
-    }).catch(() => {})
+    // Upstream parity: (d.models || []) filtered by kind + providerAlias,
+    // reload on focus + customModelChanged (upstream SttExampleCard loadCustom).
+    const storageAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId
+    const loadCustom = () => {
+      api.getCustomModels?.().then((d: any) => {
+        const list = parseCustomModelsResponse(d).filter(
+          (m: any) => getModelKind(m) === 'stt' && (m.providerAlias === storageAlias || m.providerAlias === providerId)
+        )
+        customSttModels = list
+      }).catch(() => {})
+    }
+    loadCustom()
+    return subscribeCustomModelsChanged(loadCustom)
   })
 
   let effectiveEndpoint = $derived(useTunnel && tunnelEndpoint ? tunnelEndpoint : localEndpoint)

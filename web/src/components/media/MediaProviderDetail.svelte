@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, type APIKey, type ProviderConnection, type Settings } from '../../api/client'
-  import { getModelKind, getModelsByProviderId } from '../../lib/models'
+  import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
+  import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
   import type { ProviderCatalogItem } from '../../lib/providers'
   import Badge from '../../lib/ui/Badge.svelte'
   import { getIconPath } from '../connections/types'
@@ -198,10 +199,35 @@
     }
   }
 
-  // Models state
+  // Models state — upstream parity (ModelsCard kindFilter): builtin filtered by
+  // kind + custom models for this provider+kind (providerAlias match, builtin dedupe).
+  let customKindModels = $state<Array<{ id: string; name?: string }>>([])
   let rawModels = $derived(getModelsByProviderId(provider.id))
-  let mediaModels = $derived(rawModels.filter((m) => getModelKind(m) === kind))
+  let mediaModels = $derived.by(() => {
+    const builtin = rawModels.filter((m) => getModelKind(m) === kind)
+    const seen = new Set(builtin.map((m) => m.id))
+    return [...builtin, ...customKindModels.filter((m) => m.id && !seen.has(m.id))]
+  })
   let selectedModelId = $state('')
+
+  // Custom media models — upstream SttExampleCard parity: (d.models || [])
+  // filtered by kind + providerAlias (alias or id), reload on focus/changed.
+  // $effect tracks provider.id/kind so navigation between providers reloads.
+  $effect(() => {
+    const pid = provider.id
+    const k = kind
+    const storageAlias = provider.alias || PROVIDER_ID_TO_ALIAS[pid] || pid
+    const loadCustom = () => {
+      api.getCustomModels?.().then((d: any) => {
+        customKindModels = parseCustomModelsResponse(d).filter(
+          (m: any) => getModelKind(m) === k && (m.providerAlias === storageAlias || m.providerAlias === pid)
+        )
+      }).catch(() => {})
+    }
+    loadCustom()
+    const unsub = subscribeCustomModelsChanged(loadCustom)
+    return unsub
+  })
   let selectedVoice = $state('alloy')
   let ttsResponseFormat = $state('json')
   let sttResponseFormat = $state('json')
