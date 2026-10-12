@@ -2459,6 +2459,7 @@
   // providers). Kept in sync so the button only renders where it can work.
   const ModelsListURLs = new Set([
     'tokenharbor',
+    'sumopod',
     'dahl',
     'atria',
     'agnes',
