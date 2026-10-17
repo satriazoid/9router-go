@@ -1615,6 +1615,9 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		if cleanModel != "" {
 			reqGoMap["model"] = cleanModel
 		}
+		if strings.HasPrefix(strings.ToLower(cleanModel), "deepseek") {
+			delete(reqGoMap, "response_format")
+		}
 		// Deterministic marshaling keeps the serialized request prefix
 		// stable across turns, which DeepSeek's prefix prompt cache
 		// requires; json/v2 randomizes map member order by default.
