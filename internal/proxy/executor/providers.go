@@ -628,7 +628,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
+		resp, err := forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (muse-spark responses): %w", err)
 		}
@@ -677,7 +677,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, apiKey, body, true)
+	resp, err := forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, body, true)
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
