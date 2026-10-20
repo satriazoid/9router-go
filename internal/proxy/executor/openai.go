@@ -214,7 +214,7 @@ func sseStream(o sseStreamOpts) error {
 		})
 	}
 
-	sessionKey := fmt.Sprintf("stream-%d", time.Now().UnixNano())
+	sessionKey := translator.NewSessionKey("stream")
 	defer translator.ClearStreamState(sessionKey)
 	finished := false
 	err := proxy.ScanStream(upstream, func(chunk []byte) {
