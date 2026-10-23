@@ -2661,6 +2661,11 @@
     'agnes',
     'bai',
     'muse',
+    // Command Code's Provider API publishes its whole catalogue — free tiers
+    // included — on the standard OpenAI /v1/models shape. Its registry
+    // catalog is a 22-model snapshot, so this is the only path that surfaces
+    // models added after it (reflection/beam:free, minimax/minimax-m3.1-flash).
+    'commandcode',
   ])
 
   // canListLiveModels mirrors the backend's list of providers with a live
@@ -4111,7 +4116,7 @@
         Add Model
       </button>
 
-      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn') && providerConnections.some((c) => c.isActive !== 0)}
+      {#if (providerId === 'cline' || providerId === 'clinepass' || providerId === 'qoder' || providerId === 'qoder-cn' || providerId === 'commandcode') && providerConnections.some((c) => c.isActive !== 0)}
         <button
           type="button"
           onclick={handleImportLiveCatalogModels}
