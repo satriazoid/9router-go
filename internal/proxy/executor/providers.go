@@ -624,7 +624,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
 			cfg.BaseURL = opencodeInferenceBase(baseURL) + "/responses"
 		}
-		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, req.IsStream)
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), req.IsStream)
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
@@ -674,7 +674,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 
 	cfg := *req.Config
 	cfg.BaseURL = opencodeChatURL(cfg.BaseURL)
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
 
 	ctx := req.Ctx
 	if ctx == nil {
@@ -1507,14 +1507,14 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	} else {
 		cfg.BaseURL = opencodeGoInferenceBase(cfg.BaseURL) + "/chat/completions"
 	}
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
-		return proxy.ForwardOpenAI(ctx, req.Client, &cfg, "public", body, true)
+		return forwardOpencodeRequest(ctx, req.Client, &cfg, "public", body, true)
 	})
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
