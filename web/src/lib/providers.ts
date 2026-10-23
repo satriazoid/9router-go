@@ -281,6 +281,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "gitlab",
+    "hidden": true,
     "name": "GitLab Duo",
     "category": "oauth",
     "alias": "gitlab",
@@ -309,6 +310,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "iflow",
+    "hidden": true,
     "name": "iFlow AI",
     "category": "oauth",
     "alias": "if",
@@ -512,6 +514,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "mimo-free",
+    "hidden": true,
     "name": "MiMo Code Free",
     "category": "free",
     "alias": "mmf",
@@ -1025,6 +1028,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "bluesminds",
+    "hidden": true,
     "name": "BluesMinds",
     "category": "apikey",
     "alias": "bm",
@@ -1801,6 +1805,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "sambanova",
+    "hidden": true,
     "name": "SambaNova",
     "category": "apikey",
     "alias": "samba",
