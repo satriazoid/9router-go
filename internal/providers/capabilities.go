@@ -103,6 +103,70 @@ func ClearCustomModelCaps() {
 	InvalidateCapabilitiesCache()
 }
 
+// jailbreakNameMarkers are the tokens a model id carries when the model is
+// sold as uncensored. They are matched as a hyphen/underscore-delimited
+// segment, not a substring: "unrestricted" inside "unrestrictedly-fast" is a
+// false positive, and a bare "jail" is not a marker at all.
+var jailbreakNameMarkers = []string{
+	"uncensored",
+	"unrestricted",
+	"unfiltered",
+	"jailbreak",
+	"jailbroken",
+	"nsfw",
+	"nofilter",
+}
+
+// jailbreakNamePairs are two-token markers: the id spells them as two
+// hyphen-delimited segments ("no-filter"), so a single-segment comparison
+// never sees them. Both segments must be adjacent and in order.
+var jailbreakNamePairs = [][2]string{
+	{"no", "filter"},
+	{"no", "moderation"},
+	{"no", "limits"},
+}
+
+// IsJailbreakModel reports whether a model id names itself uncensored.
+//
+// This is the fallback half of the Jailbreak capability: an operator who never
+// opened the Add Custom Model dialog still gets the chip lit on a model whose
+// id already says what it is. The explicit flag wins either way — the caller
+// ORs the two — so a model marked by hand is never un-marked by a name that
+// happens to contain none of these tokens.
+//
+// A thinking suffix ("(high)") is stripped first, because a level marker is
+// not a name segment and "claude-x(high)" must not be read as a match.
+func IsJailbreakModel(model string) bool {
+	clean := model
+	if paren := strings.IndexByte(clean, '('); paren != -1 {
+		clean = strings.TrimSpace(clean[:paren])
+	}
+	// The bare id is what a marker would be attached to: "vendor/model-jailbreak"
+	// carries it after the slash, and the vendor half is not part of the name.
+	if _, after, ok := strings.CutLast(clean, "/"); ok {
+		clean = after
+	}
+	lower := strings.ToLower(clean)
+	segments := strings.FieldsFunc(lower, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	})
+	for _, seg := range segments {
+		for _, marker := range jailbreakNameMarkers {
+			if seg == marker {
+				return true
+			}
+		}
+	}
+	for _, pair := range jailbreakNamePairs {
+		for i := 0; i+1 < len(segments); i++ {
+			if segments[i] == pair[0] && segments[i+1] == pair[1] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Capabilities represents what a model can do beyond plain text, plus the shape
 // of its thinking control on the wire. The thinking fields are only meaningful
 // when Reasoning is true; an empty ThinkingFormat means "derive from transport".
@@ -116,6 +180,14 @@ type Capabilities struct {
 	Search      bool
 	Tools       bool
 	Reasoning   bool
+	// Jailbreak reports that the model is uncensored / unrestricted — it
+	// accepts prompts a policy-filtered model refuses. It is not a modality
+	// and not a wire feature: nothing in the request path reads it, and no
+	// upstream table declares it. It exists so an operator can mark the
+	// models they know behave this way and filter the dashboard list on it,
+	// instead of recognising them by name. The name heuristic below is the
+	// fallback for a model whose id already says so.
+	Jailbreak bool
 	// ThinkingFormat is the wire shape of the thinking control
 	// (openai, claude-adaptive, claude-budget, gemini-level, gemini-budget,
 	// zai, qwen, kimi, deepseek, commandcode, minimax, hunyuan, step).
@@ -1136,6 +1208,7 @@ type CapabilitiesDetail struct {
 	Search                  bool    `json:"search"`
 	Tools                   bool    `json:"tools"`
 	Reasoning               bool    `json:"reasoning"`
+	Jailbreak               bool    `json:"jailbreak"`
 	ThinkingFormat          *string `json:"thinkingFormat"`
 	ThinkingCanDisable      bool    `json:"thinkingCanDisable"`
 	ThinkingRange           any     `json:"thinkingRange"`
@@ -1286,6 +1359,7 @@ func GetCapabilitiesDetailForModel(provider, model string) CapabilitiesDetail {
 		Search:                  caps.Search,
 		Tools:                   caps.Tools,
 		Reasoning:               caps.Reasoning,
+		Jailbreak:               caps.Jailbreak || IsJailbreakModel(model),
 		ThinkingFormat:          thinkingFormat,
 		ThinkingCanDisable:      canDisableThinking(caps),
 		ThinkingRange:           thinkingRange,
@@ -1339,6 +1413,9 @@ func applyCustomCaps(dst *Capabilities, custom Capabilities) {
 	}
 	if custom.Reasoning {
 		dst.Reasoning = true
+	}
+	if custom.Jailbreak {
+		dst.Jailbreak = true
 	}
 	if custom.ContextWindow != 0 {
 		dst.ContextWindow = custom.ContextWindow
