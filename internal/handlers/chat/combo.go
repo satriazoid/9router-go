@@ -525,6 +525,7 @@ func upstreamErrorBody(message string) []byte {
 // their history is trimmed to their context window before forwarding.
 func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWriter, body []byte, comboModels []string, strategy string, isStream bool, translateResponse bool, comboName string, stickyLimit int, adapterModels ...string) {
 	cw := newCommittedResponseWriter(w)
+	cw.stream = isStream
 	var lastErr *upstreamError
 	var retry passRetry
 	// Connections that failed with a retryable status this request; remaining
@@ -832,6 +833,7 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 // their history is trimmed to their context window before forwarding.
 func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.ResponseWriter, translatedReq map[string]any, comboModels []string, strategy string, isStream bool, comboName string, stickyLimit int, adapterModels ...string) {
 	cw := newCommittedResponseWriter(w)
+	cw.stream = isStream
 	var lastErr *upstreamError
 	var retry passRetry
 

@@ -107,6 +107,24 @@ func (p *passRetry) wait() time.Duration { return comboPassRetryWait(p.earliest,
 // reset instant would send clients into a retry loop against a quota with no
 // known end.
 func (p *passRetry) writeError(cw *committedResponseWriter, lastErr *upstreamError) {
+	// A client that asked for a stream must be answered with one. The body is
+	// the same JSON either way; what changes is the envelope. Writing the bare
+	// document under a text/event-stream Content-Type leaves the client with no
+	// frame separator it can split on, and a strict SSE reader reports the
+	// first backslash it meets as `Unrecognized token '\'` — the status, type
+	// and code never reach it.
+	if cw.stream {
+		cw.Header().Set(constants.HeaderContentType, constants.ContentTypeEventStream)
+		cw.WriteHeader(lastErr.StatusCode)
+		frame := append([]byte("data: "), lastErr.Body...)
+		frame = append(frame, '\n', '\n')
+		_, _ = cw.Write(frame)
+		_, _ = cw.Write([]byte("data: [DONE]\n\n"))
+		if f, ok := cw.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
+		return
+	}
 	// Set before any branch so the pass-through path below is a JSON body
 	// too. The upstream content type is not trusted here: a 429 served as
 	// text/html is what makes an SDK report a parse crash instead of a quota.
