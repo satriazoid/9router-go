@@ -62,6 +62,15 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Trigger live activity update so the desktop widget shows "running"
+	// instead of "idle" while chat requests are being served.
+	if h.liveActivity != nil {
+		h.liveActivity(1, reqBody.Model)
+		// Reset to idle when the request finishes (success or error), so the
+		// widget doesn't stay "running" forever after testing/usage.
+		defer h.liveActivity(0, "")
+	}
+
 	// A "(level)" suffix is a request override, not part of the model id: it
 	// comes off the name before the name is resolved against the aliases and
 	// the combos, and the intent it carries travels on the context.
