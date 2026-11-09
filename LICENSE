@@ -2,6 +2,7 @@ MIT License
 
 Copyright (c) 2024-2026 decolua and contributors
 Copyright (c) 2026 Luqmanul Hakim
+Copyright (c) 2026 Satriazoid
 
 9router-go is a Go + Svelte port of 9router (https://github.com/decolua/9router),
 which is MIT licensed. Its notice is retained above as required.
