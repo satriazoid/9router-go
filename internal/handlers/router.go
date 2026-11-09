@@ -498,6 +498,11 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) *chat.
 	r.Get("/api/version", versionH.HandleVersion)
 	r.Get("/api/version/status", versionH.HandleVersionStatus)
 	r.Get("/api/version/check", versionH.HandleCheckUpdate)
+	// Live activity feed for the desktop widget (mirror of jrouters'
+	// /api/live). Serves a small JSON snapshot of in-flight gateway work.
+	// Public (unauthenticated) so the tray widget can read it without a
+	// dashboard session, matching how the tray today polls /health.
+	r.Get("/api/live", HandleLiveActivity)
 	// Embedded Native Dashboard SPA
 	webH := web.Handler()
 	oauthH := oauth.NewOAuthHandler(repo)
