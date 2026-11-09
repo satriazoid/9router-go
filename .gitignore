@@ -78,3 +78,9 @@ stitch-screenshots/
 .omo/run-continuation/
 .omo/omo.jsonc
 .omp/settings.json
+
+# Personal session memory
+MEMORY.md
+
+# User profile config
+USER.md
