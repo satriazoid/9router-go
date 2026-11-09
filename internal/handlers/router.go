@@ -665,6 +665,48 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) *chat.
 	// the field by hand, so only a booted router can tell the difference.
 	engineChatH.SetRateLimiter(rateLimiter)
 
+	// Wire live activity callback so chat requests update the widget snapshot.
+	// The chat package cannot import handlers (cycle), so the bridge lives
+	// here where both packages are visible.
+	if engineChatH != nil {
+		engineChatH.SetLiveActivity(func(active int, model string) {
+				// Saat active==0, tulis snapshot kosong (idle) supaya widget tidak
+				// "terkunci" di running setelah testing/usage selesai.
+				if active <= 0 {
+					UpdateLiveSnapshot(LiveSnapshot{
+						GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+						Active:      0,
+					})
+					return
+				}
+				UpdateLiveSnapshot(LiveSnapshot{
+					GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+					Rps:        1,
+					Tps:        1,
+					Active:      active,
+					Waiting:     0,
+					Inflight:    0,
+					Streams:     0,
+					Errors:      0,
+					Retries:     0,
+					OldestAgeSec: 0,
+					Count:       1,
+					Sessions: []struct {
+						Model    string `json:"model"`
+						Combo    string `json:"combo"`
+						Provider string `json:"provider"`
+						Step     string `json:"step"`
+						Status   string `json:"status"`
+						Finished bool   `json:"finished"`
+						TtfbMs   int64  `json:"ttfbMs"`
+						Elapsed  int64  `json:"elapsedMs"`
+					}{
+						{Model: model, Combo: "", Provider: "", Step: "running", Status: "running", Finished: false},
+					},
+				})
+			})
+	}
+
 	// Dashboard management API: login-gated when requireLogin is on, but still
 	// reachable with a valid API key or the local CLI token (upstream parity).
 	// It reads the cache through the engine's chat handler: versionH was built
