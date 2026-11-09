@@ -10,19 +10,20 @@
  */
 
 @theme inline {
-  /* Brand scale (terracotta) */
-  --color-brand-50: #fdf1ed;
-  --color-brand-100: #fadccf;
-  --color-brand-200: #f4b59c;
-  --color-brand-300: #ee8d6a;
-  --color-brand-400: #ea7855;
-  --color-brand-500: #e56a4a;
-  --color-brand-600: #cc5236;
-  --color-brand-700: #a64027;
-  --color-brand-800: #7a2f1d;
-  --color-brand-900: #4d1e12;
-  --color-primary: #e56a4a;
-  --color-primary-hover: #cc5236;
+  /* Brand scale — resolved per theme: terracotta for light (default),
+     dark green (#008000) for dark. See :root / .dark below. */
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: #008000;
+  --color-brand-600: #009900;
+  --color-brand-700: #00a600;
+  --color-brand-800: #00c800;
+  --color-brand-900: #00e500;
+  --color-primary: #008000;
+  --color-primary-hover: #009900;
   --color-vibrancy: var(--app-sidebar);
 
   /* Semantic surfaces */
@@ -84,17 +85,18 @@
 /* Dark theme */
 .dark {
   color-scheme: dark;
-  --app-bg: #1a1a1a;
-  --app-bg-alt: #1f1f1e;
-  --app-surface: #262626;
-  --app-surface-2: #303030;
+  --app-bg: #202020;
+  --app-bg-alt: #2a2a2a;
+  --app-surface: #202020;
+  --app-surface-2: #2a2a2a;
   --app-surface-3: #3a3a3a;
-  --app-sidebar: rgba(30, 30, 30, 0.85);
-  --app-border: #333333;
-  --app-border-subtle: #2a2a2a;
-  --app-text-main: #ededed;
-  --app-text-muted: #9ca3af;
-  --app-text-subtle: #6b7280;
+  --app-sidebar: rgba(32, 32, 32, 0.85);
+  --app-border: #3a3a3a;
+  --app-border-subtle: #4a4a4a;
+  --app-text-main: #fafafa;
+  --app-text-muted: #b8b8b8;
+  --app-text-subtle: #7a7a7a;
+  --app-text: #008000;
 }
 
 body {
