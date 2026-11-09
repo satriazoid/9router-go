@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -163,6 +165,65 @@ func main() {
 				Action: logsDetached,
 			},
 			{
+				Name:  "widget",
+				Usage: "Mini live-activity window (always on top) — polls /api/live every 1.2s",
+				Subcommands: []*cli.Command{
+					{
+							Name:  "start",
+							Usage: "Start the widget desktop window",
+							Action: func(cCtx *cli.Context) error {
+								// Only spawn if widget not already running (survives across calls)
+								childCmd := exec.Command("pgrep", "-f", "JR_WIDGET_CHILD=1")
+								output, err := childCmd.Output()
+								if err == nil && strings.TrimSpace(string(output)) != "" {
+									fmt.Println("Widget already running")
+									return nil
+								}
+								// Spawn widget as detached process
+								cmd := exec.Command(os.Args[0], "widget", "start")
+								cmd.Env = append(os.Environ(), "JR_WIDGET_CHILD=1")
+								cmd.SysProcAttr = detachedSysProcAttr()
+								cmd.Stdout = os.Stdout
+								cmd.Stderr = os.Stderr
+								if err := cmd.Start(); err != nil {
+									return cli.NewExitError(fmt.Sprintf("Failed to start widget: %v", err), 1)
+								}
+								fmt.Println("Widget started (PID " + fmt.Sprintf("%d", cmd.Process.Pid) + ")")
+								return nil
+							},
+						},
+					{
+						Name:  "stop",
+						Usage: "Stop the widget desktop window",
+						Action: func(cCtx *cli.Context) error {
+							// Find and kill widget processes
+							childCmd := exec.Command("pgrep", "-f", "JR_WIDGET_CHILD=1")
+							output, err := childCmd.Output()
+							if err != nil {
+								return cli.NewExitError("Widget not running", 0)
+							}
+							pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+							for _, pidStr := range pids {
+								pidStr = strings.TrimSpace(pidStr)
+								if pidStr == "" {
+									continue
+								}
+								pid, err := strconv.Atoi(pidStr)
+								if err != nil {
+									continue
+								}
+								pcmd := exec.Command("kill", "-9", strconv.Itoa(pid))
+								if err := pcmd.Run(); err != nil {
+									return cli.NewExitError(fmt.Sprintf("Failed to kill widget PID %d: %v", pid, err), 1)
+								}
+							}
+							fmt.Println("Widget stopped")
+							return nil
+						},
+					},
+				},
+			},
+			{
 				Name:  "service",
 				Usage: "Manage the gateway service: boot autostart plus start/stop/restart",
 				Subcommands: []*cli.Command{
@@ -229,6 +290,15 @@ func foregroundOrBackground(cCtx *cli.Context) error {
 	// (service unit, container, pipe) it boots the server as before.
 	if stdinIsTerminal() {
 		return runMenu(cCtx)
+	}
+	// Auto-spawn widget child if not already marked (survives terminal close)
+	if os.Getenv("JR_WIDGET_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "start")
+		cmd.Env = append(os.Environ(), "JR_WIDGET_CHILD=1")
+		cmd.SysProcAttr = detachedSysProcAttr()
+		cmd.Start()
+		// Brief pause so child has time to start its own widget loop
+		time.Sleep(200 * time.Millisecond)
 	}
 	return runServer(cCtx)
 }
