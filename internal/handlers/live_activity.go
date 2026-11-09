@@ -18,18 +18,30 @@ import (
 
 // LiveSnapshot adalah struktur data live activity yang dikirim ke klien.
 // Disesuaikan dengan antarmuka Svelte LiveActivityWidget.
+// Field ini sesuai dengan payload JSON dari server 9router-go (/api/live).
 type LiveSnapshot struct {
-	GeneratedAt string `json:"generatedAt"`
+	GeneratedAt string  `json:"generatedAt"`
 	Rps         float64 `json:"rps"`
 	Tps         float64 `json:"tps"`
-	Active      int    `json:"active"`
-	Waiting     int    `json:"waiting"`
-	Inflight    int    `json:"inflight"`
-	Streams     int    `json:"streams"`
-	Errors      int    `json:"errors"`
-	Retries     int    `json:"retries"`
-	OldestAgeSec int   `json:"oldestAgeSec"`
-	Count       int    `json:"count"`
+	Active      int     `json:"active"`
+	Waiting     int     `json:"waiting"`
+	Inflight    int     `json:"inflight"`
+	Streams     int     `json:"streams"`
+	Errors      int     `json:"errors"`
+	Retries     int     `json:"retries"`
+	OldestAgeSec int    `json:"oldestAgeSec"`
+	Count       int     `json:"count"`
+	// Fields for sessions list (widget hanya menampilkan beberapa)
+	Sessions []struct {
+		Model    string `json:"model"`
+		Combo    string `json:"combo"`
+		Provider string `json:"provider"`
+		Step     string `json:"step"`
+		Status   string `json:"status"`
+		Finished bool   `json:"finished"`
+		TtfbMs   int64  `json:"ttfbMs"`
+		Elapsed  int64  `json:"elapsedMs"`
+	} `json:"sessions"`
 }
 
 // liveActivityState menyimpan state live activity di memory.
@@ -63,8 +75,9 @@ func getLiveSnapshot() LiveSnapshot {
 	return liveState.snapshot
 }
 
-// updateLiveSnapshot memperbarui state live activity (dipanggil dari daemon).
-func updateLiveSnapshot(s LiveSnapshot) {
+// UpdateLiveSnapshot memperbarui state live activity (dipanggil dari daemon).
+// Terexport agar bisa dipanggil dari handler chat (internal/handlers/chat).
+func UpdateLiveSnapshot(s LiveSnapshot) {
 	liveState.mu.Lock()
 	defer liveState.mu.Unlock()
 	liveState.snapshot = s
