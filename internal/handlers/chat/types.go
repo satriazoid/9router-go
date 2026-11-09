@@ -30,6 +30,13 @@ type smartStickyEntry struct {
 	LastUsed time.Time
 }
 
+// LiveActivityCallback is invoked when a chat request arrives so the desktop
+// widget's /api/live snapshot can be updated. It uses plain values to avoid
+// an import cycle with the handlers package (handlers imports chat, so chat
+// cannot import handlers). The wiring point in handlers/router.go bridges it
+// to UpdateLiveSnapshot.
+type LiveActivityCallback func(active int, model string)
+
 // ChatHandler handles /v1/chat/completions (OpenAI) and /v1/messages (Claude) endpoints.
 type ChatHandler struct {
 	Repo       *db.Repo
@@ -41,8 +48,11 @@ type ChatHandler struct {
 	// pre-dispatch, but only the response knows what the turn actually cost.
 	RateLimiter   *middleware.RateLimiter
 	SemanticCache *semanticcache.Cache
-	stickyMu      sync.Mutex
-	stickyState   map[string]*comboStickyState
+	// liveActivity, when set, is called when a chat request is being served
+	// so the live activity snapshot (and the desktop widget) reflects it.
+	liveActivity LiveActivityCallback
+	stickyMu     sync.Mutex
+	stickyState  map[string]*comboStickyState
 	// oauthRefreshFlight collapses concurrent OAuth token refreshes for the
 	// same connection, so an expired token triggers one upstream round-trip
 	// instead of one per in-flight request.
@@ -56,6 +66,15 @@ type ChatHandler struct {
 	// so later turns reuse the provider holding the warm prompt cache.
 	smartStickyMu sync.Mutex
 	smartSticky   map[string]smartStickyEntry
+}
+
+// SetLiveActivity registers the callback used to update the live activity
+// snapshot when chat requests arrive. The router (handlers package) bridges
+// it to the widget's /api/live state.
+func (h *ChatHandler) SetLiveActivity(cb LiveActivityCallback) {
+	if h != nil {
+		h.liveActivity = cb
+	}
 }
 
 // Type aliases for shared types
