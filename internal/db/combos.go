@@ -17,6 +17,13 @@ const (
 	ComboStrategyRoundRobin = "round-robin"
 	ComboStrategyFallback   = "fallback"
 	ComboStrategyFusion     = "fusion"
+
+	// ComboStrategyJarvis is a supervised fallback: it walks every member,
+	// abandons slow replies mid-attempt, and demotes models that error or
+	// time out. It reuses the fallback engine with the combo's per-attempt
+	// timeout, max fallbacks and retry-on statuses, so slow/erroring models
+	// are skipped instead of hand-tuned per provider.
+	ComboStrategyJarvis = "jarvis"
 )
 
 // defaultComboStrategy is what a combo gets when neither a per-combo override
@@ -36,6 +43,8 @@ func NormalizeComboStrategy(s string) string {
 		return ComboStrategyFallback
 	case ComboStrategyFusion, "ensemble":
 		return ComboStrategyFusion
+	case ComboStrategyJarvis:
+		return ComboStrategyJarvis
 	default:
 		return ComboStrategyRoundRobin
 	}

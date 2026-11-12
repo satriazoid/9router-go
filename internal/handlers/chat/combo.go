@@ -521,11 +521,53 @@ func (h *ChatHandler) applyComboStrategy(strategy string, models []string, combo
 
 		return rotated
 	case "capacity":
-		fallthrough
-	default:
+		// Capacity combos keep the operator's stored order; the adapter
+		// layer handles pool sizing, not rotation.
 		out := make([]string, len(models))
 		copy(out, models)
 		return out
+	case "jarvis":
+			// Jarvis uses the same stored order as fallback but applies
+			// per-attempt first-token timeout + health demotion downstream.
+			// It rotates like round-robin, but models that error or time out
+			// receive a penalty that pushes them behind healthy models on later
+			// requests, so they are naturally avoided without operator action.
+			h.jarvisMu.Lock()
+			defer h.jarvisMu.Unlock()
+			if h.jarvisState == nil {
+				h.jarvisState = make(map[string]*jarvisStickyState)
+			}
+			key := comboName
+			if key == "" {
+				key = "__default__"
+			}
+			state, exists := h.jarvisState[key]
+			if !exists {
+				state = &jarvisStickyState{Index: 0}
+				h.jarvisState[key] = state
+			}
+			// Rotate index at turn boundary (newTurn=true), but always advance
+			// one step so no model is permanently stuck — unlike plain fallback
+			// which can get stuck on a single failing model.
+			if newTurn {
+				state.Index = (state.Index + 1) % len(models)
+				state.ServingIndex = state.Index
+				state.ConsecutiveUseCount++
+			} else {
+				state.Index = state.ServingIndex
+			}
+			rotated := make([]string, len(models))
+			for i := 0; i < len(models); i++ {
+				rotated[i] = models[(state.Index+i)%len(models)]
+			}
+			// Now re-rank by observed responsiveness so fastest healthy model
+			// is at position 0 of the rotated array.
+			ranked := h.jarvisRankModels(rotated)
+			return ranked
+		default:
+			out := make([]string, len(models))
+			copy(out, models)
+			return out
 	}
 }
 
@@ -588,6 +630,17 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 	var models []string
 	if strategy == "smart" {
 		ctx, models = h.applySmartRouting(ctx, body, comboModels, comboName)
+	} else if jarvisIntent(strategy) {
+		// Jarvis is a supervised round-robin hybrid: every new turn the
+		// rotation pointer advances, then the members are re-ranked by
+		// observed responsiveness so the fastest healthy model leads. The
+		// same state machine serves the stream and messages loops, so all
+		// three endpoints behave identically (applyComboStrategy case
+		// "jarvis"). Routing through it here is what actually rotates the
+		// combo; the previous branch called jarvisPrepare, which only
+		// ranked and never advanced the pointer, pinning the first model
+		// forever.
+		models = h.applyComboStrategy(strategy, comboModels, comboName, stickyLimit, detectNewTurn(body))
 	} else if h.comboRespectsStoredOrder(comboName) {
 		models = slices.Clone(comboModels)
 	} else {
@@ -714,10 +767,21 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 				var cancelTimeout context.CancelFunc
 				if !isStream {
 					fwdCtx = internalproxy.WithZeroContentProbe(ctx, !isLastModel)
+					// Jarvis bounds every non-final attempt so a hung model
+					// is abandoned instead of consuming the caller's budget.
+					if !isLastModel && jarvisIntent(strategy) {
+						var attemptCancel context.CancelFunc
+						fwdCtx, attemptCancel = context.WithTimeout(ctx, h.jarvisAttemptTimeout(comboName))
+						cancelTimeout = attemptCancel
+					}
 				} else if !isLastModel {
 					streamPeeker = internalproxy.NewStreamContentPeeker(cw)
 					targetWriter = streamPeeker
-					if timeoutMs := h.comboFirstTokenTimeoutMs(comboName); timeoutMs > 0 {
+					timeoutMs := h.comboFirstTokenTimeoutMs(comboName)
+					if jarvisIntent(strategy) && timeoutMs <= 0 {
+						timeoutMs = int(h.jarvisAttemptTimeout(comboName) / time.Millisecond)
+					}
+					if timeoutMs > 0 {
 						var attemptCancel context.CancelFunc
 						fwdCtx, attemptCancel = context.WithCancel(ctx)
 						cancelTimeout = attemptCancel
@@ -1036,10 +1100,21 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 				var cancelTimeout context.CancelFunc
 				if !isStream {
 					fwdCtx = internalproxy.WithZeroContentProbe(ctx, !isLastModel)
+					// Jarvis bounds every non-final attempt so a hung model
+					// is abandoned instead of consuming the caller's budget.
+					if !isLastModel && jarvisIntent(strategy) {
+						var attemptCancel context.CancelFunc
+						fwdCtx, attemptCancel = context.WithTimeout(ctx, h.jarvisAttemptTimeout(comboName))
+						cancelTimeout = attemptCancel
+					}
 				} else if !isLastModel {
 					streamPeeker = internalproxy.NewStreamContentPeeker(cw)
 					targetWriter = streamPeeker
-					if timeoutMs := h.comboFirstTokenTimeoutMs(comboName); timeoutMs > 0 {
+					timeoutMs := h.comboFirstTokenTimeoutMs(comboName)
+					if jarvisIntent(strategy) && timeoutMs <= 0 {
+						timeoutMs = int(h.jarvisAttemptTimeout(comboName) / time.Millisecond)
+					}
+					if timeoutMs > 0 {
 						var attemptCancel context.CancelFunc
 						fwdCtx, attemptCancel = context.WithCancel(ctx)
 						cancelTimeout = attemptCancel

@@ -24,6 +24,19 @@ type comboStickyState struct {
 	ServingIndex int
 }
 
+// jarvisStickyState mirrors comboStickyState but adds a penalty count
+// that tracks how many times this model has errored or timed out out of
+// recent attempts. A higher penalty pushes the model behind healthy ones
+// on later rotations, achieving the same effect as health demotion
+// without requiring a separate middleware.
+type jarvisStickyState struct {
+	Index              int
+	ConsecutiveUseCount int
+	PenaltyCount       int
+	// ServingIndex is the model index currently owning the turn.
+	ServingIndex int
+}
+
 // smartStickyEntry is one session's pinned model in the smart strategy.
 type smartStickyEntry struct {
 	Model    string
@@ -53,6 +66,11 @@ type ChatHandler struct {
 	liveActivity LiveActivityCallback
 	stickyMu     sync.Mutex
 	stickyState  map[string]*comboStickyState
+	// Jarvis state mirrors sticky but with health-aware penalties:
+	// models that error or time out are rotated out and receive a
+	// penalty so they fall behind healthy models on later requests.
+	jarvisMu     sync.Mutex
+	jarvisState  map[string]*jarvisStickyState
 	// oauthRefreshFlight collapses concurrent OAuth token refreshes for the
 	// same connection, so an expired token triggers one upstream round-trip
 	// instead of one per in-flight request.
