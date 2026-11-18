@@ -33,10 +33,8 @@ export const COMBO_STRATEGIES = [
   { value: 'inherit', label: 'Inherit global strategy' },
   { value: 'fallback', label: 'Fallback — try in order' },
   { value: 'round-robin', label: 'Round Robin — rotate' },
-  { value: 'sticky', label: 'Sticky — stay until the limit' },
-  { value: 'capacity', label: 'Capacity — prefer free tiers' },
-  { value: 'smart', label: 'Smart Router — System One' },
-  { value: 'fusion', label: 'Fusion — panel + judge' }
+  { value: 'fusion', label: 'Fusion — panel + judge' },
+  { value: 'jarvis', label: 'Jarvis — supervised, skips slow and failing models' }
 ] as const
 
 /**

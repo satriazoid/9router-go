@@ -31,6 +31,7 @@ import (
 	"time"
 	"unsafe"
 
+	"9router/proxy/web"
 	"golang.org/x/sys/windows"
 )
 
@@ -199,6 +200,25 @@ func paintOrbit(mem windows.Handle, cx, cy int32, frame int) {
 		_, _, _ = pSelectObject.Call(uintptr(mem), prev)
 		_, _, _ = pDeleteObject.Call(b)
 	}
+}
+
+// widgetEmbeddedIconPath extracts the icon bundled in the binary to a temp
+// file. The installed binary sits alone in %LOCALAPPDATA%, so looking for an
+// icon next to the exe always fell back to the blank Windows default.
+func widgetEmbeddedIconPath() string {
+	data, err := web.DistFS.ReadFile("dist/icons/icon-192.png")
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	tmp := os.Getenv("TEMP")
+	if tmp == "" {
+		tmp = os.TempDir()
+	}
+	path := filepath.Join(tmp, "9router-widget-icon.png")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return ""
+	}
+	return path
 }
 
 // loadIconFromImage loads an icon from a JPEG/PNG file using GDI+.
@@ -1344,12 +1364,7 @@ func runWidget(args []string) {
 	if imgPath := widgetFlag(args, "icon", ""); imgPath != "" {
 		trayIconPath = imgPath
 	} else if trayIconPath == "" {
-		// Default to the 9router-go icon next to the exe
-		if exe, err := os.Executable(); err == nil {
-			trayIconPath = filepath.Join(filepath.Dir(exe), "web", "public", "icons", "icon-192.png")
-		} else {
-			trayIconPath = filepath.Join(os.Getenv("USERPROFILE"), "Downloads", "panda.jpg")
-		}
+		trayIconPath = widgetEmbeddedIconPath()
 	}
 	op, _ := strconv.Atoi(widgetFlag(args, "opacity", "235"))
 	if op < 40 {
