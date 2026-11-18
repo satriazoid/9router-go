@@ -282,6 +282,17 @@ DB_PATH=/srv/9router/data.sqlite ./9router-go   # explicit SQLite file
 HOST=127.0.0.1 ./9router-go                     # localhost only, behind a reverse proxy
 ```
 
+### Desktop widget
+
+The server spawns an always-on-top widget that polls `/api/live` every second and draws live request and token activity with GDI, no browser needed.
+
+```bash
+9router-go widget start                        # hidden window + tray icon
+9router-go widget start --port 20130 --opacity 235
+```
+
+Double-click the pill to switch between the compact row (status + req/s) and the big dashboard (REQUEST/TOKEN meters, live/used/off state). Right-click for the size and visibility menu, or click the window to hide it and use the tray icon to bring it back.
+
 ### Dashboard Login & Fresh Install
 
 - **Localhost (`localhost` / `127.0.0.1`)**: First login uses the default compatibility password `123456`. Once logged in, change your password in **Settings → Profile**.

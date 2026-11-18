@@ -127,20 +127,12 @@ type bitmapDimensions struct {
 	bmBits       uintptr
 }
 
-// GdiplusStartupInput is the GDI+ startup parameter block (version must be 1).
-type GdiplusStartupInput struct {
-	GdiplusVersion          uint32
-	DebugEventCallback      uintptr
-	SuppressBackgroundThread int32
-	SuppressExternalCodecs  int32
-}
-
 // gdiplusInit initializes GDI+ for loading JPEG icons.
 func gdiplusInit() (uintptr, bool) {
-	var input GdiplusStartupInput
-	input.GdiplusVersion = 1
 	var token uintptr
-	ret, _, _ := pGdiplusStartup.Call(uintptr(unsafe.Pointer(&token)), uintptr(unsafe.Pointer(&input)), 0)
+	// GdiplusStartup input: 0x1 = gdiplusStartupInput
+	// GdiplusStartup output: token
+	ret, _, _ := pGdiplusStartup.Call(0x1, 0, uintptr(unsafe.Pointer(&token)))
 	if ret != 0 {
 		return 0, false
 	}
@@ -462,9 +454,12 @@ type notifyIconData struct {
 // Dimensions: slim pill (default) and compact meter card with segmented bars.
 const (
 	smallW, smallH = 220, 48
+	bigW, bigH     = 260, 210
 )
 
 var taskbarCreatedMsg uint32
+
+var widgetBig atomic.Bool
 
 // widgetPos tracks the current bottom-right anchor so a size toggle keeps the
 // widget glued to the right edge and a small margin above the taskbar instead
@@ -575,6 +570,9 @@ func widgetFetch() {
 	}
 	live := make([]widgetSession, 0, 4)
 	maxSess := 4
+	if widgetBig.Load() {
+		maxSess = 2
+	}
 	for _, s := range data.Sessions {
 		if s.Finished || len(live) >= maxSess {
 			continue
@@ -636,7 +634,38 @@ func widgetApplyRound(hwnd windows.HWND, w, h, r int) {
 	}
 }
 
-// widgetMenu shows the right-click menu: show/hide, close.
+func widgetToggleSize(hwnd windows.HWND) {
+	grow := !widgetBig.Load()
+	widgetBig.Store(grow)
+	w, h, r := int32(smallW), int32(smallH), smallH/2
+	if grow {
+		w, h, r = bigW, bigH, 16
+	}
+	var rc [4]int32
+	posX, posY := int32(0), int32(0)
+	if ret, _, _ := pGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc))); ret != 0 {
+		posX = rc[0]
+		posY = rc[1] + (rc[3] - rc[1]) - h
+		if posX < 0 {
+			posX = 0
+		}
+		if posY < 0 {
+			posY = 0
+		}
+	} else {
+		widgetPos.mu.Lock()
+		posX, posY = widgetPos.x, widgetPos.y
+		widgetPos.mu.Unlock()
+	}
+	widgetApplyRound(hwnd, int(w), int(h), r)
+	widgetPos.mu.Lock()
+	widgetPos.x, widgetPos.y = posX, posY
+	widgetPos.mu.Unlock()
+	_, _, _ = pSetWindowPos.Call(uintptr(hwnd), 0, uintptr(posX), uintptr(posY), uintptr(w), uintptr(h), swpNoZOrder)
+	_, _, _ = pInvalidateRect.Call(uintptr(hwnd), 0, 0)
+}
+
+// widgetMenu shows the right-click menu: show/hide, small/big, close.
 func widgetMenu(hwnd windows.HWND, x, y int32) {
 	menu, _, _ := pCreatePopupMenu.Call()
 	if menu == 0 {
@@ -656,6 +685,11 @@ func widgetMenu(hwnd windows.HWND, x, y int32) {
 	} else {
 		addItem(cmdShow, "Tampilkan")
 	}
+	if widgetBig.Load() {
+		addItem(cmdSize, "Ukuran kecil")
+	} else {
+		addItem(cmdSize, "Perbesar")
+	}
 	addItem(cmdClose, "Tutup widget")
 	_, _, _ = pSetForegroundWindow.Call(uintptr(hwnd))
 	cmd, _, _ := pTrackPopupMenu.Call(menu, tpmRightButton|tpmReturnCmd, uintptr(x), uintptr(y), 0, uintptr(hwnd), 0)
@@ -667,6 +701,8 @@ func widgetRunCommand(hwnd windows.HWND, cmd int) {
 	switch cmd {
 	case cmdClose:
 		_, _, _ = pPostMessageW.Call(uintptr(hwnd), wmDestroy, 0, 0)
+	case cmdSize:
+		widgetToggleSize(hwnd)
 	case cmdShow:
 		widgetSetVisible(hwnd, !widgetVisible(hwnd))
 	}
@@ -753,7 +789,9 @@ func widgetWndProc(hwndRaw, msgRaw, wParam, lParam uintptr) uintptr {
 		_, _, _ = pSendMessageW.Call(uintptr(hwnd), wmNCLButtonDwn, htCaption, 0)
 		return 0
 	case wmLButtonDbl:
-		// Double-click tidak melakukan apa-apa (hanya compact mode).
+		// Double-click toggles compact/expanded. Hover and clicks never
+		// touch the data: polling runs on its own timer.
+		widgetToggleSize(hwnd)
 		return 0
 	case wmRButtonUp:
 		var pt wPoint
@@ -893,6 +931,10 @@ func widgetPaint(hwnd windows.HWND) {
 	defer pEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
 	w, h := smallW, smallH
+	big := widgetBig.Load()
+	if big {
+		w, h = bigW, bigH
+	}
 
 	// Double buffer: draw to a memory DC, blit once — no flicker on hover,
 	// click, or timer repaints.
@@ -935,22 +977,162 @@ func widgetPaint(hwnd windows.HWND) {
 	_, _, _ = pFillRect.Call(memRaw, uintptr(unsafe.Pointer(&rc)), brush)
 
 	wstate.mu.Lock()
-		online := wstate.online
-		active := wstate.active
-		streams, retries, waiting := wstate.streams, wstate.retries, wstate.waiting
-		rps := wstate.rps
-		note := wstate.note
-		wstate.mu.Unlock()
+	online := wstate.online
+	active := wstate.active
+	streams, retries, waiting := wstate.streams, wstate.retries, wstate.waiting
+	errors := wstate.errors
+	tps, rps := wstate.tps, wstate.rps
+	sess := append([]widgetSession(nil), wstate.sessions...)
+	note := wstate.note
+	wstate.mu.Unlock()
 
-		// Header: Claude icon + name + LIVE state
-		running := online && active > 0
+	// Header: Claude icon + name + LIVE state
+	running := online && active > 0
 
+	if !big {
 		paintCompact(mem, font, running, note,
 			active, streams, retries, waiting, rps)
 		_, _, _ = pBitBlt.Call(uintptr(hdc), 0, 0, uintptr(w), uintptr(h), memRaw, 0, 0, srccopy)
 		_, _, _ = pSelectObject.Call(memRaw, oldFont)
-			return
+		return
+	}
 
+	// Big mode: full live activity dashboard — tema 9router (hijau/hitam).
+	// Header: ikon claude + nama + status live + badge.
+	dotC := uint32(colorMuted)
+	if running {
+		dotC = colorGreen
+	} else if !online {
+		dotC = uint32(0x00EF4444)
+	}
+	dotBrush, _, _ := pCreateSolidBrush.Call(uintptr(dotC))
+	defer pDeleteObject.Call(dotBrush)
+	prevBrush, _, _ := pSelectObject.Call(memRaw, dotBrush)
+	_, _, _ = pEllipse.Call(memRaw, 12, 12, 20, 20)
+	_, _, _ = pSelectObject.Call(memRaw, prevBrush)
+	widgetText(mem, font, 26, 8, "LIVE", dotC)
+
+	// Ikon claude hijau di header: idle diam, running loncat.
+	paintClaudeIcon(mem, 58, 6, 16, running)
+	widgetText(mem, font, 82, 8, "9ROUTER", colorGreen)
+
+	badge := "IDLE"
+	badgeFg := uint32(colorGreenDim)
+	badgeBg := uint32(0x00101010)
+	if running {
+		badge = "USED"
+		badgeFg = 0x000A0A0A
+		badgeBg = colorGreen
+	} else if !online {
+		badge = "OFF"
+		badgeFg = 0x00EF4444
+		badgeBg = uint32(0x00101010)
+	}
+	bw := int32(len(badge)*7 + 14)
+	bx := int32(w) - bw - 12
+	bbrush, _, _ := pCreateSolidBrush.Call(uintptr(badgeBg))
+	defer pDeleteObject.Call(bbrush)
+	// Badge rounded (pill): select brush, RoundRect dengan radius penuh.
+	prevBadgeBrush, _, _ := pSelectObject.Call(memRaw, bbrush)
+	var brc [4]int32
+	brc[0], brc[1], brc[2], brc[3] = bx, 6, bx+bw, 22
+	_, _, _ = pRoundRect.Call(memRaw, uintptr(brc[0]), uintptr(brc[1]), uintptr(brc[2]), uintptr(brc[3]), 16, 16)
+	_, _, _ = pSelectObject.Call(memRaw, prevBadgeBrush)
+	widgetText(mem, font, bx+7, 8, badge, badgeFg)
+
+	// Divider under the header
+	divBrush, _, _ := pCreateSolidBrush.Call(uintptr(0x001C1C1E))
+	defer pDeleteObject.Call(divBrush)
+	var drc [4]int32
+	drc[0], drc[1], drc[2], drc[3] = 12, 30, int32(w)-12, 31
+	_, _, _ = pFillRect.Call(memRaw, uintptr(unsafe.Pointer(&drc)), divBrush)
+
+	y := int32(40)
+
+	// One clean meta line — plain text, no triangle glyphs.
+	meta := fmt.Sprintf("%d aktif  %.1f req/s  %d stream  %s", active, rps, streams, fmtTokMin(tps))
+	if retries > 0 {
+		meta += fmt.Sprintf("  %d retry", retries)
+	}
+	if errors > 0 {
+		meta += fmt.Sprintf("  %d err", errors)
+	}
+	if waiting > 0 {
+		meta += fmt.Sprintf("  %d waiting", waiting)
+	}
+	widgetText(mem, font, 12, y, meta, colorMuted)
+	y += 20
+
+	// Dua meter request & token flow — keduanya hijau brand sesuai tema.
+	flowFrac := rps / 4
+	if float64(active)/6 > flowFrac {
+		flowFrac = float64(active) / 6
+	}
+	if running && flowFrac < 0.28 {
+		flowFrac = 0.28
+	}
+	if flowFrac > 1 {
+		flowFrac = 1
+	}
+	tokFrac := tps / 400
+	if streams > 0 && tokFrac < 0.5 {
+		tokFrac = 0.5
+	}
+	if running && tokFrac < 0.34 {
+		tokFrac = 0.34
+	}
+	if tokFrac > 1 {
+		tokFrac = 1
+	}
+
+	// Request flow bar (hijau)
+	greenBrush, _, _ := pCreateSolidBrush.Call(uintptr(colorGreen))
+	defer pDeleteObject.Call(greenBrush)
+	y = widgetBar(mem, font, 12, y, int32(w)-24, "REQUEST", flowFrac, greenBrush, trackBrush, colorGreen)
+	y += 6
+
+	// Token flow bar (hijau redup)
+	y = widgetBar(mem, font, 12, y, int32(w)-24, "TOKEN", tokFrac, greenBrush, trackBrush, colorGreenDim)
+	y += 8
+
+	// Live sessions with details
+	maxSess := 2
+	if len(sess) > maxSess {
+		sess = sess[:maxSess]
+	}
+	for _, s := range sess {
+		status := s.status
+		if status == "" {
+			status = "idle"
+		}
+		color := uint32(colorMuted)
+		if status == "running" || status == "waiting" {
+			color = colorGreen
+		} else if status == "error" {
+			color = uint32(0x00EF4444)
+		}
+		// Show: name + step + provider (if available)
+		line := s.name
+		if s.provider != "" && len(s.provider) < 15 {
+			line += " (" + s.provider + ")"
+		}
+		line += " • " + s.step
+		if s.ttfbMs > 0 {
+			line += fmt.Sprintf(" ttfb=%dms", s.ttfbMs)
+		}
+		widgetText(mem, font, 12, y, line, color)
+		y += 14
+	}
+
+	// Footer
+	if len(sess) > 0 {
+		oldest := sess[0].ageSec
+		footer := fmt.Sprintf("terlama: %ds", oldest)
+		widgetText(mem, font, 12, int32(h)-22, footer, colorMuted)
+	}
+
+	_, _, _ = pBitBlt.Call(uintptr(hdc), 0, 0, uintptr(w), uintptr(h), memRaw, 0, 0, srccopy)
+	_, _, _ = pSelectObject.Call(memRaw, oldFont)
 }
 
 // paintDots draws the cute typing-indicator wave (three hopping dots) used
@@ -1162,7 +1344,7 @@ func runWidget(args []string) {
 	if imgPath := widgetFlag(args, "icon", ""); imgPath != "" {
 		trayIconPath = imgPath
 	} else if trayIconPath == "" {
-		// Default to the 9router-go icon (icon-192.png) next to the exe
+		// Default to the 9router-go icon next to the exe
 		if exe, err := os.Executable(); err == nil {
 			trayIconPath = filepath.Join(filepath.Dir(exe), "web", "public", "icons", "icon-192.png")
 		} else {
