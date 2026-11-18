@@ -62,3 +62,24 @@ func NewRepo(db *sql.DB) *Repo {
 func (r *Repo) RawDB() *sql.DB {
 	return r.db
 }
+
+// GetLastUsageByProvider returns the most recent usageHistory row for a given
+// provider, ordered by timestamp DESC. The returned row includes the status
+// column so callers can distinguish successful readings from errored ones.
+func (r *Repo) GetLastUsageByProvider(provider string) (string, error) {
+	var status sql.NullString
+	row := r.db.QueryRow(
+		`SELECT status FROM usageHistory WHERE provider = ? ORDER BY timestamp DESC LIMIT 1`,
+		provider,
+	)
+	if err := row.Scan(&status); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	if !status.Valid {
+		return "", nil
+	}
+	return status.String, nil
+}

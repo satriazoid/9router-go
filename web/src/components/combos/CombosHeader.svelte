@@ -31,11 +31,11 @@
   <!-- Upstream parity: the header carries one control. Bulk actions live in the
        selection bar next to the combos, so a destructive button never sits
        permanently beside Create. -->
-  <div
-    class="flex flex-wrap items-center gap-2 border-t border-border pt-4"
-    role="group"
-    aria-label="Combo actions"
-  >
+    <div
+      class="flex flex-wrap items-center gap-2 border-t border-gray-300 pt-4 text-sm text-gray-600"
+      role="group"
+      aria-label="Combo actions"
+    >
     <Button icon="add" size="sm" onclick={onCreateClick} class="whitespace-nowrap">
       Create Combo
     </Button>

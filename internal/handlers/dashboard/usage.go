@@ -180,6 +180,11 @@ func (h *DashboardHandler) HandleGetUsageProviders(w http.ResponseWriter, r *htt
 	type ProviderItem struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		// LastError is the most recent status from usageHistory for this
+		// provider. When non-empty it means the latest traffic errored
+		// (rate limit, auth failure, provider unavailable, ...). An empty
+		// string means the most recent reading was successful.
+		LastError string `json:"lastError,omitempty"`
 	}
 	var list []ProviderItem
 	for _, c := range conns {
@@ -189,9 +194,16 @@ func (h *DashboardHandler) HandleGetUsageProviders(w http.ResponseWriter, r *htt
 				continue
 			}
 			seen[c.Provider] = true
+			// Fetch the most recent usage row (ordered by timestamp DESC) so
+			// the dashboard can show both successful quotas and the last error.
+			lastUsage, _ := h.Repo.GetLastUsageByProvider(canonical)
 			list = append(list, ProviderItem{
-				ID:   c.Provider,
-				Name: c.Provider,
+				ID:   canonical,
+				Name: canonical,
+				// Attach the latest error string so the UI can surface it
+				// alongside successful readings.  A nil/empty error means the
+				// most recent read was successful.
+				LastError: lastUsage,
 			})
 		}
 	}

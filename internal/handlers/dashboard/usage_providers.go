@@ -36,6 +36,11 @@ type usageResult struct {
 	// bare mirrors upstream handlers (e.g. qoder) that return {message}
 	// with NO quotas key on error. Most handlers include quotas:{}.
 	bare bool
+	// error contains the last error encountered for this provider, if any.
+	// When non-empty, the dashboard usage page will surface this alongside
+	// successful quota rows so operators can see which models/connections
+	// are currently impaired without losing the successful readings.
+	err string
 }
 
 func (r usageResult) toResponse() map[string]any {

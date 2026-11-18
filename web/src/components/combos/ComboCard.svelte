@@ -88,7 +88,7 @@
   let strategyOptions = $derived(comboStrategyOptions(globalStrategy))
 </script>
 
-<Card padding="sm" class="group">
+<Card padding="sm" class="group bg-black/50 dark:bg-white/5 border border-gray-300/30 rounded-lg transition-colors hover:bg-black/40 dark:hover:bg-white/40">
   <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     <!-- Left: Icon, Name, Model Badges & Fusion Judge -->
     <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">

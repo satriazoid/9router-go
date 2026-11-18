@@ -102,8 +102,7 @@
 
 {#if isOpen}
   <div class="fixed inset-0 z-[70] flex items-center justify-center p-4">
-    <!-- Overlay -->
-    <div class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in" onclick={onClose} aria-hidden="true"></div>
+    <div class="absolute inset-0 bg-black/5 fade-in" onclick={onClose} aria-hidden="true">
 
     <div
       class="relative w-full max-w-md bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in overflow-hidden flex flex-col max-h-[85vh] z-10 p-4!"
