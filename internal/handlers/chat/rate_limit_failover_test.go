@@ -206,7 +206,9 @@ func TestComboRateLimitFailover(t *testing.T) {
 		},
 		{
 			// One account in the pool, so a second upstream request can only
-			// come from the bounded second pass. Nothing else here changes:
+			// come from the bounded second pass. A 429 is account-scoped, so
+			// the connection is dropped for the rest of this pass and the
+			// bounded pass is what re-allows it: nothing else here changes —
 			// a Retry-After inside the tolerance still buys that pass, and the
 			// lock it takes is short enough for the pass to find the account.
 			name:     "429 with a brief retry-after still gets the bounded second pass",

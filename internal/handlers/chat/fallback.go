@@ -1731,3 +1731,21 @@ func isModelScopedError(statusCode int, errorText string, model string, bodies .
 
 	return false
 }
+
+// isAccountScopedFailure reports whether a retryable upstream failure is a
+// verdict on the credential or account rather than on the model or the node
+// serving it. A combo may only park the whole account (an account-wide
+// cooldown) and drop the connection from the rest of the pass on an
+// account-scoped failure. A bare 401, a 402/insufficient-funds, or a 5xx says
+// nothing about the other models behind the same key, so treating it as
+// account-scoped starves every later member of a single-connection combo.
+//
+// 429 is account-scoped: the quota belongs to the account. An auth-failure
+// body naming the credential (invalid api key, expired token, ...) is too.
+// Everything else is not — see isAccountAuthFailure for the credential wording.
+func isAccountScopedFailure(statusCode int, errorText string) bool {
+	if statusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return isAccountAuthFailure(strings.ToLower(errorText))
+}

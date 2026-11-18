@@ -43,7 +43,13 @@
   the client and the second member never served). With the fix each
   failing member is attempted exactly once and the second member answers
   200.
+- New test `TestComboCreditsErrorCoolsModelAndAdvances`: a 400 insufficient
+  credits (and the 402 payment-required case in the table above) advances to
+  the next member after one attempt, and a second sequential request does not
+  re-hit the cooled model (failHits stays 1) — the auto-advance plus cooldown
+  behavior for paid/balance faults.
 - `go test ./internal/handlers/chat/ ./internal/providers/ ./internal/db/`
-  — all pass.
+  — all pass, including `TestComboFailoverSharedAccount/*` (501/500/401/402/
+  400) and `TestApplyComboStrategy_unknownFoldsToRoundRobin`.
 - Binary rebuilt (`1.9.14-exp.4`, `-s -w`) and smoke-tested on port
   20199: `/health` ok, `/api/version` reports the build.

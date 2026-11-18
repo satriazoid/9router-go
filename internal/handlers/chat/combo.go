@@ -472,61 +472,63 @@ func (h *ChatHandler) applyComboStrategy(strategy string, models []string, combo
 		return models
 	}
 
-	switch strategy {
-	case "round-robin", "roundrobin":
-		if stickyLimit <= 0 {
-			stickyLimit = 1
-		}
-		fallthrough
-	case "sticky":
-		if stickyLimit <= 0 {
-			stickyLimit = 1
-		}
-		h.stickyMu.Lock()
-		defer h.stickyMu.Unlock()
-		if h.stickyState == nil {
-			h.stickyState = make(map[string]*comboStickyState)
-		}
-
-		key := comboName
-		if key == "" {
-			key = "__default__"
-		}
-		state, exists := h.stickyState[key]
-		if !exists {
-			state = &comboStickyState{Index: 0, ConsecutiveUseCount: 0}
-			h.stickyState[key] = state
-		}
-
-		// The model owning this turn. A new turn starts from the rotation
-		// pointer; a mid-turn request reuses the model serving the turn even
-		// after the pointer has advanced for the next turn.
-		servingIndex := state.Index % len(models)
-		if newTurn {
-			// Advance the rotation pointer at the turn boundary.
-			state.ConsecutiveUseCount++
-			if state.ConsecutiveUseCount >= stickyLimit {
-				state.Index = (servingIndex + 1) % len(models)
-				state.ConsecutiveUseCount = 0
-			}
-			state.ServingIndex = servingIndex
-		} else {
-			servingIndex = state.ServingIndex
-		}
-
-		rotated := make([]string, len(models))
-		for i := 0; i < len(models); i++ {
-			rotated[i] = models[(servingIndex+i)%len(models)]
-		}
-
-		return rotated
-	case "capacity":
-		fallthrough
-	default:
+	// Only the ordered strategies keep the stored order: fallback walks the
+	// chain, capacity walks its adapter-ordered list, fusion keeps its panel.
+	// Their legacy spellings fold in the same way NormalizeComboStrategy does.
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "fallback", "failover", "first-model", "capacity", "fusion", "ensemble":
 		out := make([]string, len(models))
 		copy(out, models)
 		return out
 	}
+
+	// Everything else rotates: round-robin, sticky (the same rotation with a
+	// dwell window), and any unrecognised value. An unknown strategy folds to
+	// round-robin rather than silently pinning every request to the first
+	// member — a combo stored with a custom label like "jarvis" would
+	// otherwise never rotate. "smart" never reaches here: the combo loops
+	// route it to applySmartRouting before calling this function.
+	if stickyLimit <= 0 {
+		stickyLimit = 1
+	}
+	h.stickyMu.Lock()
+	defer h.stickyMu.Unlock()
+	if h.stickyState == nil {
+		h.stickyState = make(map[string]*comboStickyState)
+	}
+
+	key := comboName
+	if key == "" {
+		key = "__default__"
+	}
+	state, exists := h.stickyState[key]
+	if !exists {
+		state = &comboStickyState{Index: 0, ConsecutiveUseCount: 0}
+		h.stickyState[key] = state
+	}
+
+	// The model owning this turn. A new turn starts from the rotation
+	// pointer; a mid-turn request reuses the model serving the turn even
+	// after the pointer has advanced for the next turn.
+	servingIndex := state.Index % len(models)
+	if newTurn {
+		// Advance the rotation pointer at the turn boundary.
+		state.ConsecutiveUseCount++
+		if state.ConsecutiveUseCount >= stickyLimit {
+			state.Index = (servingIndex + 1) % len(models)
+			state.ConsecutiveUseCount = 0
+		}
+		state.ServingIndex = servingIndex
+	} else {
+		servingIndex = state.ServingIndex
+	}
+
+	rotated := make([]string, len(models))
+	for i := 0; i < len(models); i++ {
+		rotated[i] = models[(servingIndex+i)%len(models)]
+	}
+
+	return rotated
 }
 
 // keysString returns a comma-separated list of map keys.
@@ -642,6 +644,11 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 			}
 
 			var entrySuccess bool
+			// triedConns bounds each member to one attempt per connection: a
+			// status that neither advances the pass nor writes a model lock
+			// (a bare 400 or 403, say) must not re-dial the same connection
+			// ten times for the same member.
+			triedConns := make(map[string]bool, 4)
 			// Try up to 10 connections for this model entry
 			for connAttempt := 0; connAttempt < 10; connAttempt++ {
 				var connID string
@@ -677,6 +684,16 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 					}
 					connID = picked.ID
 					connData = cData
+				}
+				if connID != "" {
+					if triedConns[connID] {
+						// Already tried this connection for this member;
+						// advance to the next member rather than re-dialing it.
+						log.Info("combo", "connection already tried for member, next member",
+							"provider", modelInfo.Provider, "model", modelInfo.Model, "conn", connID)
+						break
+					}
+					triedConns[connID] = true
 				}
 				// Skip a connection that is already locked for this model
 				if connID != "" {
@@ -838,13 +855,20 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 							lastErr = ue
 							break
 						}
-						if providers.RetryableStatusCodes[ue.StatusCode] {
-							h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
+						if providers.IsMemberFailoverStatus(ue.StatusCode) && !providers.RetryableStatusCodes[ue.StatusCode] {
+							log.Info("combo", "member-side error, advancing to next member",
+								"status", ue.StatusCode, "provider", modelInfo.Provider, "model", modelInfo.Model, "conn", connID)
+							retry.note(ue)
+							lastErr = ue
+							break
 						}
-						if ue.StatusCode == http.StatusServiceUnavailable || ue.StatusCode == http.StatusBadGateway || ue.StatusCode == http.StatusGatewayTimeout {
-							// In combo loops, fail over immediately to the next connection/model without blocking the client turn
-							log.Info("combo", "transient failover skip", "status", ue.StatusCode, "provider", modelInfo.Provider, "conn", connID)
-						}
+						// Everything else is classified so a coolable fault — a
+						// retryable status, or a text-matched credit/quota fault
+						// that arrives as a 400 ("insufficient credits", "credit
+						// balance is too low") — records a cooldown and is skipped
+						// on later turns. A generic request-scoped 4xx returns from
+						// the helper without a lock.
+						h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
 						retry.note(ue)
 						lastErr = ue
 						if isKnownNoAuth {
@@ -973,6 +997,11 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 			}
 
 			var entrySuccess bool
+			// triedConns bounds each member to one attempt per connection: a
+			// status that neither advances the pass nor writes a model lock
+			// (a bare 400 or 403, say) must not re-dial the same connection
+			// ten times for the same member.
+			triedConns := make(map[string]bool, 4)
 			// Try up to 10 connections for this model entry
 			for connAttempt := 0; connAttempt < 10; connAttempt++ {
 				var connID string
@@ -1003,6 +1032,16 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 					}
 					connID = picked.ID
 					connData = cData
+				}
+				if connID != "" {
+					if triedConns[connID] {
+						// Already tried this connection for this member;
+						// advance to the next member rather than re-dialing it.
+						log.Info("combo", "connection already tried for member, next member",
+							"provider", modelInfo.Provider, "model", modelInfo.Model, "conn", connID)
+						break
+					}
+					triedConns[connID] = true
 				}
 				if connID != "" {
 					lockKey := canonicalLockModel(modelInfo.Provider, modelInfo.Model)
@@ -1145,13 +1184,20 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 							lastErr = ue
 							break
 						}
-						if providers.RetryableStatusCodes[ue.StatusCode] {
-							h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
+						if providers.IsMemberFailoverStatus(ue.StatusCode) && !providers.RetryableStatusCodes[ue.StatusCode] {
+							log.Info("combo", "member-side error, advancing to next member",
+								"status", ue.StatusCode, "provider", modelInfo.Provider, "model", modelInfo.Model, "conn", connID)
+							retry.note(ue)
+							lastErr = ue
+							break
 						}
-						if ue.StatusCode == http.StatusServiceUnavailable || ue.StatusCode == http.StatusBadGateway || ue.StatusCode == http.StatusGatewayTimeout {
-							// In combo loops, fail over immediately to the next connection/model without blocking the client turn
-							log.Info("combo", "transient failover skip", "status", ue.StatusCode, "provider", modelInfo.Provider, "conn", connID)
-						}
+						// Everything else is classified so a coolable fault — a
+						// retryable status, or a text-matched credit/quota fault
+						// that arrives as a 400 ("insufficient credits", "credit
+						// balance is too low") — records a cooldown and is skipped
+						// on later turns. A generic request-scoped 4xx returns from
+						// the helper without a lock.
+						h.comboLockRetryable(ctx, &excludeIDs, connID, modelInfo.Provider, modelInfo.Model, ue)
 						retry.note(ue)
 						lastErr = ue
 						if isKnownNoAuth {
@@ -1252,20 +1298,28 @@ func (h *ChatHandler) comboLockRetryable(ctx context.Context, excludeIDs *[]stri
 	}
 	// Account-scoped cooldown alongside the per-model locks, so the selector
 	// can skip this account before spending a request (upstream applyErrorState).
-	// Only lock if error is account-scoped, not model-scoped (e.g. 401 auth issues),
-	// so unrelated models stay available.
-	if isModelScopedError(ue.StatusCode, extractErrorText(ue.Body), model, ue.Body) {
-		if recErr := h.Repo.RecordConnectionScopedError(connID, model, "chat", ue.StatusCode, extractErrorText(ue.Body), cls.NewBackoffLevel); recErr != nil {
+	// Only an account-scoped failure (429, or an auth failure naming the
+	// credential) may park the whole account and drop the connection from the
+	// rest of the pass; a model- or node-scoped error (a bare 401, a
+	// 402/insufficient-funds, a 5xx) is recorded against the tried model only,
+	// so the remaining combo members keep their one attempt each on a shared
+	// account (upstream #407).
+	errorText := extractErrorText(ue.Body)
+	accountScoped := isAccountScopedFailure(ue.StatusCode, errorText)
+	if !accountScoped || isModelScopedError(ue.StatusCode, errorText, model, ue.Body) {
+		if recErr := h.Repo.RecordConnectionScopedError(connID, model, "chat", ue.StatusCode, errorText, cls.NewBackoffLevel); recErr != nil {
 			log.Warn("combo", "record connection error failed", "conn", connID, "error", recErr)
 		}
 	} else {
 		until := time.Now().UTC().Add(time.Duration(cooldownSec) * time.Second)
-		if err := h.Repo.LockConnectionRateLimit(connID, until, cls.NewBackoffLevel, ue.StatusCode, extractErrorText(ue.Body)); err != nil {
+		if err := h.Repo.LockConnectionRateLimit(connID, until, cls.NewBackoffLevel, ue.StatusCode, errorText); err != nil {
 			log.Warn("combo", "rate limit lock failed", "conn", connID, "error", err)
 		}
 	}
-	*excludeIDs = append(*excludeIDs, connID)
-	log.Warn("combo", "locked on retryable error", "provider", provider, "model", model, "lockKey", lockKey, "conn", connID, "status", ue.StatusCode, "cooldown_s", cooldownSec)
+	if accountScoped {
+		*excludeIDs = append(*excludeIDs, connID)
+	}
+	log.Warn("combo", "locked on retryable error", "provider", provider, "model", model, "lockKey", lockKey, "conn", connID, "status", ue.StatusCode, "cooldown_s", cooldownSec, "account_scoped", accountScoped)
 }
 
 // ---- Fusion (parallel fan-out + judge synthesis) ----

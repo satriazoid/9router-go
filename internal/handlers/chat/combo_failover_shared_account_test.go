@@ -4,6 +4,7 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,12 @@ import (
 // (one API key, many models behind it) where a per-model failure must not
 // take the remaining models out of the rotation.
 func setupSharedAccountCombo(t *testing.T, failStatus int, failBody string) (*ChatHandler, *atomic.Int32, func()) {
+	return setupSharedAccountComboStrategy(t, failStatus, failBody, "round-robin")
+}
+
+// setupSharedAccountComboStrategy is setupSharedAccountCombo with an explicit
+// combo strategy, so a test can pin the strategy the stored combo actually uses.
+func setupSharedAccountComboStrategy(t *testing.T, failStatus int, failBody, strategy string) (*ChatHandler, *atomic.Int32, func()) {
 	t.Helper()
 	database, cleanupDB := setupChatTestDB(t)
 
@@ -60,7 +67,7 @@ func setupSharedAccountCombo(t *testing.T, failStatus int, failBody string) (*Ch
 		t.Fatalf("insert combo: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
-		`{"comboStrategies":{"combo-failover":{"fallbackStrategy":"round-robin"}}}`); err != nil {
+		`{"comboStrategies":{"combo-failover":{"fallbackStrategy":`+strconv.Quote(strategy)+`}}}`); err != nil {
 		t.Fatalf("seed settings: %v", err)
 	}
 
@@ -97,6 +104,16 @@ func TestComboFailoverSharedAccount(t *testing.T) {
 			failStatus: http.StatusUnauthorized,
 			failBody:   `{"error":{"message":"unauthorized","type":"auth_error","code":401}}`,
 		},
+		{
+			name:       "402 payment required advances to the next member after one attempt",
+			failStatus: http.StatusPaymentRequired,
+			failBody:   `{"error":{"message":"insufficient funds for this paid model","type":"payment_error","code":402}}`,
+		},
+		{
+			name:       "400 insufficient credits advances to the next member after one attempt",
+			failStatus: http.StatusBadRequest,
+			failBody:   `{"error":{"message":"Insufficient credits to complete this request","type":"invalid_request_error","code":400}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -119,5 +136,44 @@ func TestComboFailoverSharedAccount(t *testing.T) {
 				t.Errorf("failing member was attempted %d times, want exactly 1 before advancing", got)
 			}
 		})
+	}
+}
+
+// A 400 credit-balance fault is request-scoped (providers says no cooldown
+// applies to it on its own), but within a combo it means this model's balance
+// is spent. The combo must record a cooldown for it so a LATER turn does not
+// re-select the dead member — not just advance past it this turn.
+func TestComboCreditsErrorCoolsModelAndAdvances(t *testing.T) {
+	handler, failHits, cleanup := setupSharedAccountComboStrategy(t,
+		http.StatusBadRequest,
+		`{"error":{"message":"insufficient credit balance","type":"invalid_request_error","code":400}}`,
+		"fallback")
+	defer cleanup()
+
+	// First request: the failing (first) member is attempted once, its 400
+	// credits fault cools the model, and the combo answers from the second.
+	req1 := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"combo-failover","messages":[{"role":"user","content":"hi"}],"stream":false}`))
+	rec1 := httptest.NewRecorder()
+	handler.HandleChatCompletions(rec1, req1)
+	if rec1.Code != http.StatusOK || !strings.Contains(rec1.Body.String(), "hello from reasoner") {
+		t.Fatalf("first request: status = %d body = %s, want 200 from reasoner", rec1.Code, rec1.Body.String())
+	}
+	if got := failHits.Load(); got != 1 {
+		t.Fatalf("first request: failing member attempted %d times, want 1", got)
+	}
+
+	// Second request: "fallback" keeps the stored order, so the failing member
+	// is first again. Its cooldown must skip it before any dial — failHits stays
+	// 1 and the request still answers from the healthy member.
+	req2 := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"combo-failover","messages":[{"role":"user","content":"hi again"}],"stream":false}`))
+	rec2 := httptest.NewRecorder()
+	handler.HandleChatCompletions(rec2, req2)
+	if rec2.Code != http.StatusOK || !strings.Contains(rec2.Body.String(), "hello from reasoner") {
+		t.Fatalf("second request: status = %d body = %s, want 200 from reasoner", rec2.Code, rec2.Body.String())
+	}
+	if got := failHits.Load(); got != 1 {
+		t.Errorf("second request re-hit the cooled model: failHits = %d, want it to stay at 1", got)
 	}
 }
